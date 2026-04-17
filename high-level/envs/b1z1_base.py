@@ -62,11 +62,20 @@ class B1Z1Base(RewardVecTask):
         self.pred_success = pred_success
         self.rand_control = rand_control
         self.arm_delay = arm_delay
-        self.num_gripper_dof = num_gripper_dof
+        self.num_gripper_dof = self.cfg["env"].get("numGripperDof", num_gripper_dof)
         self.rand_cmd_scale = rand_cmd_scale
         self.rand_depth_clip = rand_depth_clip
         self.stop_pick = stop_pick
         self.eval = eval
+
+        self.lin_vel_x_clip = self.cfg["env"].get("lowLevelLinVelClip", LIN_VEL_X_CLIP)
+        self.ang_vel_yaw_clip = self.cfg["env"].get("lowLevelAngVelYawClip", ANG_VEL_YAW_CLIP)
+        self.ang_vel_pitch_clip = self.cfg["env"].get("lowLevelAngVelPitchClip", ANG_VEL_PITCH_CLIP)
+        self.initial_ee_goal_cart_cfg = self.cfg["env"].get("initialEEGoalCart", [0.46, 0.0, 0.55])
+        self.initial_ee_goal_orn_rpy_cfg = self.cfg["env"].get("initialEEGoalOrnRPY", [np.pi / 2, 0.0, 0.0])
+        self.mask_arm_goal_cart_cfg = self.cfg["env"].get("maskArmGoalCart", [0.46, 0.0, 0.31])
+        self.base_height_clip_cfg = self.cfg["env"].get("baseHeightClip", [0.4, 0.55])
+        self.arm_base_offset_cfg = self.cfg["env"].get("armBaseOffset", [0.3, 0.0, 0.09])
         
         self.num_torques = 18
         if sim_device == "cpu":
@@ -114,7 +123,7 @@ class B1Z1Base(RewardVecTask):
         if not self.floating_base:
             self.low_level_policy = self._load_low_level_model()
         else:
-            self.num_gripper_joints = 1
+            self.num_gripper_joints = self.num_gripper_dof
         
         self._prepare_reward_function()
         
@@ -255,15 +264,25 @@ class B1Z1Base(RewardVecTask):
         self._rigid_body_rot = rigid_body_state_reshaped[..., 3:7]
         self._rigid_body_vel = rigid_body_state_reshaped[..., 7:10]
         self._rigid_body_ang_vel = rigid_body_state_reshaped[..., 10:13]
+        self.arm_base_offset = torch.tensor(self.arm_base_offset_cfg, device=self.device, dtype=torch.float)
 
         self.jacobian_whole = gymtorch.wrap_tensor(self._jacobian_tensor)
         self.gripper_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], "ee_gripper_link", gymapi.DOMAIN_ENV)
         self.ee_j_eef = self.jacobian_whole[:, self.gripper_idx, :6, -(6 + self.num_gripper_dof):-self.num_gripper_dof]
         self.ee_pos = rigid_body_state_reshaped[:, self.gripper_idx, 0:3]
         self.ee_orn = rigid_body_state_reshaped[:, self.gripper_idx, 3:7]
-        
-        self.wrist_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], "link06", gymapi.DOMAIN_ENV)
-        self.flange_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], "link05", gymapi.DOMAIN_ENV)
+
+        wrist_body_name = self.cfg["env"].get("wristBodyName", "link06")
+        flange_body_name = self.cfg["env"].get("flangeBodyName", "link05")
+        self.wrist_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], wrist_body_name, gymapi.DOMAIN_ENV)
+        self.flange_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], flange_body_name, gymapi.DOMAIN_ENV)
+
+        finger_body_names = self.cfg["env"].get("fingerBodyNames", [])
+        self.finger_indices = []
+        for body_name in finger_body_names:
+            body_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], body_name, gymapi.DOMAIN_ENV)
+            if body_idx >= 0:
+                self.finger_indices.append(body_idx)
 
         self.gripper_dof_pos = torch.zeros(self.num_envs, self.num_gripper_dof, device=self.device)
         self.gripper_dof_vel = torch.zeros(self.num_envs, self.num_gripper_dof, device=self.device)
@@ -310,7 +329,7 @@ class B1Z1Base(RewardVecTask):
                 ], dim=1)
         
         if not self.floating_base:
-            low_action_scale = [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2 + [2.1, 0.6, 0.6, 0, 0, 0]
+            low_action_scale = self.cfg["env"].get("lowActionScale", [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2 + [2.1, 0.6, 0.6, 0, 0, 0])
             self.low_action_scale = torch.tensor(low_action_scale, device=self.device)
             
             self.p_gains = torch.zeros(self.num_torques, dtype=torch.float, device=self.device, requires_grad=False)
@@ -460,7 +479,8 @@ class B1Z1Base(RewardVecTask):
         return camera_handle
     
     def _create_wrist_cameras(self, env_handle, actor_handle, i):
-        wrist_handle = self.gym.find_actor_rigid_body_handle(env_handle, actor_handle, "link06")
+        wrist_body_name = self.cfg["env"].get("wristBodyName", "link06")
+        wrist_handle = self.gym.find_actor_rigid_body_handle(env_handle, actor_handle, wrist_body_name)
         camera_props = gymapi.CameraProperties()
         camera_props.enable_tensors = True
         camera_props.height = self.cfg["sensor"]["wrist_camera"]["resolution"][1]
@@ -553,7 +573,7 @@ class B1Z1Base(RewardVecTask):
         
         num_per_row = int(np.sqrt(self.num_envs))
         
-        asset_root = self.cfg["env"]["asset"]["assetRoot"]
+        asset_root = self.cfg["env"]["asset"].get("robotAssetRoot", self.cfg["env"]["asset"]["assetRoot"])
         asset_file_robot = self.cfg["env"]["asset"]["assetFileRobot"]
         
         asset_options = gymapi.AssetOptions()
@@ -823,12 +843,12 @@ class B1Z1Base(RewardVecTask):
             self._compute_observations(env_ids)
             
             if self.local_step_counter == 0:
-                self.curr_ee_goal_orn_rpy[:, :] = torch.tensor([np.pi/2, 0., 0.], device=self.device)
-                self.curr_ee_goal_cart[:] = torch.tensor([0.46, 0.0, 0.55], device=self.device).repeat(self.num_envs, 1)
+                self.curr_ee_goal_orn_rpy[:, :] = torch.tensor(self.initial_ee_goal_orn_rpy_cfg, device=self.device)
+                self.curr_ee_goal_cart[:] = torch.tensor(self.initial_ee_goal_cart_cfg, device=self.device).repeat(self.num_envs, 1)
                 self.init_ee_goal_cart = self.curr_ee_goal_cart.clone()
             else:
                 self.curr_ee_goal_cart[env_ids, :] = self.init_ee_goal_cart[env_ids, :]
-                self.curr_ee_goal_orn_rpy[env_ids, :] = torch.tensor([np.pi/2, 0., 0.], device=self.device)
+                self.curr_ee_goal_orn_rpy[env_ids, :] = torch.tensor(self.initial_ee_goal_orn_rpy_cfg, device=self.device)
                  
             # Randomize env
             if self.randomize:
@@ -877,7 +897,7 @@ class B1Z1Base(RewardVecTask):
                                        reindex_feet(self.foot_contacts_from_sensor),
                                        commands[:, :3],
                                     #    self.curr_ee_goal_sphere,
-                                       torch.tensor([0.46, 0.0, 0.31], device=self.device).repeat(self.num_envs, 1),
+                                                    torch.tensor(self.mask_arm_goal_cart_cfg, device=self.device).repeat(self.num_envs, 1),
                                        0*self.curr_ee_goal_cart,
                                        ), dim=-1)
         if self.observe_gait_commands:
@@ -1167,9 +1187,9 @@ class B1Z1Base(RewardVecTask):
     def get_walking_cmd_mask(self, env_ids=None, return_all=False):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
-        walking_mask0 = torch.abs(self.commands[env_ids, 0]) > LIN_VEL_X_CLIP
-        walking_mask1 = torch.abs(self.commands[env_ids, 1]) > ANG_VEL_PITCH_CLIP
-        walking_mask2 = torch.abs(self.commands[env_ids, 2]) > ANG_VEL_YAW_CLIP
+        walking_mask0 = torch.abs(self.commands[env_ids, 0]) > self.lin_vel_x_clip
+        walking_mask1 = torch.abs(self.commands[env_ids, 1]) > self.ang_vel_pitch_clip
+        walking_mask2 = torch.abs(self.commands[env_ids, 2]) > self.ang_vel_yaw_clip
         walking_mask = walking_mask0 | walking_mask1 | walking_mask2
         if return_all:
             return walking_mask0, walking_mask1, walking_mask2, walking_mask
@@ -1242,7 +1262,7 @@ class B1Z1Base(RewardVecTask):
         actor_root_state_copy[self._robot_actor_ids, 7:10] = vel_global.squeeze(-1)
         actor_root_state_copy[self._robot_actor_ids, 9] = self.commands[:, 1]
         actor_root_state_copy[self._robot_actor_ids, 12] = yaw_vel_global[:, -1]
-        actor_root_state_copy[self._robot_actor_ids, 2] = torch.clip(actor_root_state_copy[self._robot_actor_ids, 2], 0.4, 0.55)
+        actor_root_state_copy[self._robot_actor_ids, 2] = torch.clip(actor_root_state_copy[self._robot_actor_ids, 2], self.base_height_clip_cfg[0], self.base_height_clip_cfg[1])
         self.gym.set_actor_root_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(actor_root_state_copy),
                                                         gymtorch.unwrap_tensor(self._robot_actor_ids), self.num_envs)
 
@@ -1421,9 +1441,10 @@ class B1Z1Base(RewardVecTask):
             self.commands[:, 2] = self.actions[:, 8] * 0.6
         else:
             self.commands[:, 2] = torch.clip(self.actions[:, 8], -0.6, 0.6)
+
         # set small commands to zero
         if self.cfg["env"].get("smallValueSetZero", False):
-            self.commands[:, :] *= (torch.logical_or(torch.abs(self.commands[:, 0]) > LIN_VEL_X_CLIP, torch.abs(self.commands[:, 2]) > ANG_VEL_YAW_CLIP)).unsqueeze(1)
+            self.commands[:, :] *= (torch.logical_or(torch.abs(self.commands[:, 0]) > self.lin_vel_x_clip, torch.abs(self.commands[:, 2]) > self.ang_vel_yaw_clip)).unsqueeze(1)
         # -------------------------receive commands----------------------------
         self.clipped_actions[:, :3] = self.delta_goal_cart[:].clone()
         self.clipped_actions[:, 3:6] = self.delta_goal_orn[:].clone()
@@ -1449,8 +1470,8 @@ class B1Z1Base(RewardVecTask):
             self.gripper_dof_pos[:] = torch.where(u_gripper >= 0, self.dof_limits_lower[-1].item(), self.dof_limits_upper[-1].item()) # >= 0 open
         elif self.num_gripper_dof == 2:
             # TODO: May check this; dof limits lower or higher corresponds to gripper open or close
-            self.gripper_dof_pos[:, -2] = torch.where(u_gripper >= 0, self.dof_limits_lower[-2].item(), self.dof_limits_upper[-2].item())
-            self.gripper_dof_pos[:, -1] = torch.where(u_gripper >= 0, self.dof_limits_lower[-1].item(), self.dof_limits_upper[-1].item())
+            self.gripper_dof_pos[:, -2] = torch.where(u_gripper >= 0, self.dof_limits_lower[-2].item(), self.dof_limits_upper[-2].item()).squeeze(-1)
+            self.gripper_dof_pos[:, -1] = torch.where(u_gripper >= 0, self.dof_limits_lower[-1].item(), self.dof_limits_upper[-1].item()).squeeze(-1)
         else:
             raise NotImplementedError
     

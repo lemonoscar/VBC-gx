@@ -60,6 +60,19 @@ def play(args):
     
     if args.flat_terrain:
         env_cfg.terrain.height = [0.0, 0.0]
+        # Deterministic stability check on flat terrain:
+        # remove domain randomization and force standing commands.
+        env_cfg.domain_rand.randomize_friction = False
+        env_cfg.domain_rand.randomize_base_mass = False
+        env_cfg.domain_rand.randomize_base_com = False
+        env_cfg.domain_rand.randomize_motor = False
+        env_cfg.domain_rand.randomize_gripper_mass = False
+        env_cfg.domain_rand.push_robots = False
+        env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
+        env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
+        # Remove observation noise for cleaner stability observation.
+        env_cfg.noise.add_noise = False
+        env_cfg.noise.noise_level = 0.0
 
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)

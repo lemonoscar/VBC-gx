@@ -48,7 +48,13 @@ def test_env(args):
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     for i in range(int(10*env.max_episode_length)):
         actions = 0.*torch.ones(env.num_envs, env.num_actions, device=env.device)
-        obs, _, rew, done, info = env.step(actions)
+        step_out = env.step(actions)
+        if len(step_out) == 5:
+            obs, _, rew, done, info = step_out
+        elif len(step_out) == 6:
+            obs, _, rew, _, done, info = step_out
+        else:
+            raise RuntimeError(f"Unexpected env.step output length: {len(step_out)}")
     print("Done")
 
 if __name__ == '__main__':

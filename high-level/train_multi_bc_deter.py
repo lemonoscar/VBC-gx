@@ -192,7 +192,7 @@ class Policy(DeterministicMixin, Model):
     
     
 def create_env(cfg, args, mode):
-    from envs import B1Z1PickMulti, B1Z1Float
+    from envs import B1Z1PickMulti, B1Z1Float, Go2X5PickMulti, Go2X5Float
     import utils.wrapper as wrapper
 
     cfg["sensor"]["enableCamera"] = True
@@ -204,9 +204,9 @@ def create_env(cfg, args, mode):
         cfg["record_video"] = True
     if args.control_freq is not None:
         cfg["env"]["controlFrequencyLow"] = int(args.control_freq)
-    robot_start_pose = (-2.00, 0, 0.55)
+    robot_start_pose = tuple(cfg["env"].get("robotStartPose", [-2.00, 0, 0.55]))
     if args.eval:
-        robot_start_pose = (-1.5, 0, 0.55)
+        robot_start_pose = tuple(cfg["env"].get("evalRobotStartPose", robot_start_pose))
     _env = eval(args.task)(cfg=cfg, rl_device=args.rl_device, sim_device=args.sim_device, 
                          graphics_device_id=args.graphics_device_id, headless=args.headless, 
                          use_roboinfo=args.roboinfo, observe_gait_commands=args.observe_gait_commands, robot_start_pose=robot_start_pose,
@@ -216,7 +216,7 @@ def create_env(cfg, args, mode):
     return wrapped_env
 
 def get_trainer(is_eval=False):
-    from utils.config import load_cfg, get_params, copy_cfg
+    from utils.config import load_cfg, get_params, copy_cfg, resolve_task_cfg
     
     args = get_params()
     set_seed(args.seed)
@@ -234,8 +234,8 @@ def get_trainer(is_eval=False):
     # assert use_roboinfo, "Are you sure not using roboinfo?" # TODO: temporarily for reminder
     args.wandb = args.wandb and (not args.eval) and (not args.debug)
     
-    cfg_file = "b1z1_" + args.task[4:].lower() + ".yaml"
-    file_path = "data/cfg/" + cfg_file
+    file_path = resolve_task_cfg(args.task, args.config)
+    cfg_file = os.path.basename(file_path)
     
     if args.resume:
         experiment_dir = os.path.join(args.experiment_dir, args.wandb_name)

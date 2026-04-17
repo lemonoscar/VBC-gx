@@ -212,7 +212,111 @@ class ManipLoco_rewards:
         forces = torch.sum((torch.norm(self.env.force_sensor_tensor, dim=-1) - self.env.cfg.rewards.max_contact_force).clip(min=0), dim=-1)
         rew = reset_flag * forces
         return rew, rew
-    
+
+    def _reward_feet_contact_standing(self):
+        # Penalize any foot leaving the ground when standing still (not walking)
+        # This forces the robot to crouch with all 4 feet down instead of lifting a leg to compensate for arm weight
+        feet_off_ground = (~self.env.foot_contacts_from_sensor.bool()).float()
+        rew = feet_off_ground.sum(dim=1)
+        walking_mask = self.env._get_walking_cmd_mask()
+        rew[walking_mask] = 0.  # Only apply when standing
+        return rew, rew
+
+    def _reward_hind_feet_contact_standing(self):
+        # Extra standing constraint for rear support legs (RL, RR)
+        # feet order is [FL, FR, RL, RR]
+        hind_off_ground = (~self.env.foot_contacts_from_sensor[:, 2:4].bool()).float()
+        rew = hind_off_ground.sum(dim=1)
+        walking_mask = self.env._get_walking_cmd_mask()
+        rew[walking_mask] = 0.
+        return rew, rew
+
+    def _reward_low_goal_front_leg_bend(self):
+        # For low EE goals, encourage front legs to crouch instead of solving reach only with body pitch.
+        dof_pos = self.env.dof_pos
+        default = self.env.default_dof_pos.unsqueeze(0)
+
+        fl_thigh_bend = torch.clamp(dof_pos[:, 1] - default[:, 1], min=0.0)
+        fr_thigh_bend = torch.clamp(dof_pos[:, 4] - default[:, 4], min=0.0)
+        fl_calf_bend = torch.clamp(default[:, 2] - dof_pos[:, 2], min=0.0)
+        fr_calf_bend = torch.clamp(default[:, 5] - dof_pos[:, 5], min=0.0)
+        bend = 0.25 * (fl_thigh_bend + fr_thigh_bend + fl_calf_bend + fr_calf_bend)
+
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
+        low_goal_mask = ee_goal_z < low_goal_h
+        walking_mask = self.env._get_walking_cmd_mask()
+
+        bend[~low_goal_mask] = 0.
+        bend[walking_mask] = 0.
+        return bend, bend
+
+    def _reward_low_goal_posture_asymmetry(self):
+        # For low goals, prefer front-leg crouch while rear legs remain relatively supportive.
+        dof_pos = self.env.dof_pos
+        default = self.env.default_dof_pos.unsqueeze(0)
+
+        front_bend = 0.25 * (
+            torch.clamp(dof_pos[:, 1] - default[:, 1], min=0.0) +
+            torch.clamp(dof_pos[:, 4] - default[:, 4], min=0.0) +
+            torch.clamp(default[:, 2] - dof_pos[:, 2], min=0.0) +
+            torch.clamp(default[:, 5] - dof_pos[:, 5], min=0.0)
+        )
+        rear_bend = 0.25 * (
+            torch.clamp(dof_pos[:, 7] - default[:, 7], min=0.0) +
+            torch.clamp(dof_pos[:, 10] - default[:, 10], min=0.0) +
+            torch.clamp(default[:, 8] - dof_pos[:, 8], min=0.0) +
+            torch.clamp(default[:, 11] - dof_pos[:, 11], min=0.0)
+        )
+        asymmetry = torch.clamp(front_bend - rear_bend, min=0.0)
+
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
+        low_goal_mask = ee_goal_z < low_goal_h
+        walking_mask = self.env._get_walking_cmd_mask()
+
+        asymmetry[~low_goal_mask] = 0.
+        asymmetry[walking_mask] = 0.
+        return asymmetry, asymmetry
+
+    def _reward_low_goal_hind_leg_extension(self):
+        # For low goals, encourage rear legs to remain supportive rather than crouching together with the front.
+        dof_pos = self.env.dof_pos
+        default = self.env.default_dof_pos.unsqueeze(0)
+
+        rl_thigh_ext = torch.clamp(default[:, 7] - dof_pos[:, 7], min=0.0)
+        rr_thigh_ext = torch.clamp(default[:, 10] - dof_pos[:, 10], min=0.0)
+        rl_calf_ext = torch.clamp(dof_pos[:, 8] - default[:, 8], min=0.0)
+        rr_calf_ext = torch.clamp(dof_pos[:, 11] - default[:, 11], min=0.0)
+        extension = 0.25 * (rl_thigh_ext + rr_thigh_ext + rl_calf_ext + rr_calf_ext)
+
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
+        low_goal_mask = ee_goal_z < low_goal_h
+        walking_mask = self.env._get_walking_cmd_mask()
+
+        extension[~low_goal_mask] = 0.
+        extension[walking_mask] = 0.
+        return extension, extension
+
+    def _reward_low_goal_hind_support_force(self):
+        # For low goals, rear feet should still carry part of the load to prevent forward falling.
+        foot_forces = torch.norm(self.env.force_sensor_tensor, dim=-1)
+        front_force = foot_forces[:, :2].sum(dim=1)
+        hind_force = foot_forces[:, 2:4].sum(dim=1)
+        hind_ratio = hind_force / (front_force + hind_force + 1e-6)
+        target_ratio = getattr(self.env.cfg.rewards, 'low_goal_hind_force_ratio_target', 0.30)
+        rew = torch.clamp(hind_ratio / target_ratio, max=1.0)
+
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
+        low_goal_mask = ee_goal_z < low_goal_h
+        walking_mask = self.env._get_walking_cmd_mask()
+
+        rew[~low_goal_mask] = 0.
+        rew[walking_mask] = 0.
+        return rew, hind_ratio
+
     def _reward_orientation(self):
         # Penalize non flat base orientation
         error = torch.sum(torch.square(self.env.projected_gravity[:, :2]), dim=1)
@@ -225,19 +329,52 @@ class ManipLoco_rewards:
         return error, error
     
     def _reward_base_height(self):
-        # Penalize base height away from target
-        base_height = torch.mean(self.env.root_states[:, 2].unsqueeze(1), dim=1)
-        return torch.abs(base_height - self.env.cfg.rewards.base_height_target), base_height
+        # Penalize deviation from target base height on both sides for stable standing
+        base_height = self.env.root_states[:, 2]
+        error = torch.abs(base_height - self.env.cfg.rewards.base_height_target)
+        return error, base_height
+
+    def _reward_height_adaptation(self):
+        """Encourage lower body posture when EE goal is near the ground.
+        When EE target z is low (~0.1m), body should crouch (~0.15m).
+        When EE target z is high (~0.45m), body stays at natural height (~0.28m).
+        """
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        base_height = self.env.root_states[:, 2]
+
+        sphere_center_z = self.env.cfg.goal_ee.sphere_center.z_invariant_offset  # 0.45
+        natural_body_h = self.env.cfg.rewards.base_height_target                 # 0.28
+        min_body_h = getattr(self.env.cfg.rewards, 'min_body_height', 0.15)
+
+        # Adaptive target: proportional to EE goal height, clamped to feasible range
+        adaptive_target = natural_body_h * (ee_goal_z / sphere_center_z)
+        adaptive_target = torch.clamp(adaptive_target, min_body_h, natural_body_h)
+
+        error = torch.abs(base_height - adaptive_target)
+
+        # Only apply when standing (not walking)
+        walking_mask = self.env._get_walking_cmd_mask()
+        error[walking_mask] = 0.
+        return error, error
+
+    def _reward_pitch_soft_limit_standing(self):
+        # Allow moderate pitch for bowing/crouching, but penalize excessive pitch to avoid forward fall
+        pitch = self.env._get_body_orientation()[:, 1]
+        pitch_limit = getattr(self.env.cfg.rewards, 'pitch_soft_limit', 0.35)
+        error = torch.clamp(torch.abs(pitch) - pitch_limit, min=0.0)
+        walking_mask = self.env._get_walking_cmd_mask()
+        error[walking_mask] = 0.
+        return error, error
     
     def _reward_orientation_walking(self):
-        reward, metric = self.env._reward_orientation()
+        reward, metric = self._reward_orientation()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[~walking_mask] = 0
         metric[~walking_mask] = 0
         return reward, metric
     
     def _reward_orientation_standing(self):
-        reward, metric = self.env._reward_orientation()
+        reward, metric = self._reward_orientation()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[walking_mask] = 0
         metric[walking_mask] = 0

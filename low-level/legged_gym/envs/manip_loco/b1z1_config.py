@@ -164,6 +164,7 @@ class B1Z1RoughCfg( LeggedRobotCfg ):
 
     class asset( LeggedRobotCfg.asset ):
         file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/b1z1/urdf/b1z1.urdf'
+        # file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/go2x5/urdf/go2_arx_x5.urdf'
         foot_name = "foot"
         gripper_name = "ee_gripper_link" #"gripperMover"
         penalize_contacts_on = ["thigh", "trunk", "calf"]

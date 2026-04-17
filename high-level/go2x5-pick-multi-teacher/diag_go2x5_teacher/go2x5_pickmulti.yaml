@@ -1,0 +1,277 @@
+env:
+  numEnvs: 10240
+  numAgents: 1
+  envSpacing: 5.0
+  enableDebugVis: False
+  isFlagrun: False
+  maxEpisodeLength: 150
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 4
+  controlFrequencyLow: 8
+  imgDelayFrame: 4
+
+  liftedSuccessThreshold: 0.08
+  liftedInitThreshold: 0.05
+  successEeDistThreshold: 0.20
+  baseObjectDisThreshold: 0.6
+  holdSteps: 10
+  lastCommands: False
+
+  numGripperDof: 2
+  low_policy_path: "../low-level/logs/b1z1-low/go2x5_v9/model_45000.pt"
+  lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 2.1, 0.6, 0.6, 0.4, 0.4, 0.4]
+  lowLevelLinVelClip: 0.2
+  lowLevelAngVelYawClip: 0.5
+  lowLevelAngVelPitchClip: 0.35
+  robotStartPose: [-2.0, 0.0, 0.35]
+  evalRobotStartPose: [-1.5, 0.0, 0.35]
+  initialEEGoalCart: [0.35, 0.0, 0.25]
+  initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
+  maskArmGoalCart: [0.35, 0.0, 0.25]
+  armBaseOffset: [0.0, 0.0, 0.08]
+  baseHeightClip: [0.2, 0.42]
+  wristBodyName: "link6"
+  flangeBodyName: "link5"
+
+  asset:
+    assetRoot: "data/asset"
+    robotAssetRoot: "../low-level/resources/robots"
+    objectAssetRoot: "data/asset"
+    assetFileRobot: "go2x5/urdf/go2_arx_x5.urdf"
+    assetFileObj: "obj_set/"
+
+    asset_multi:
+      green_bowl:
+        dict_idx: 0
+        height: 0.026
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      sugar_box:
+        dict_idx: 1
+        height: 0.088
+        orientation: [0.0, 0.707, 0.0, 0.707]
+        scale: 1.0
+      potato_chip_1:
+        dict_idx: 2
+        height: 0.086
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 0.8
+      plastic_peach:
+        dict_idx: 3
+        height: 0.0
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      plastic_banana:
+        dict_idx: 4
+        height: 0.019
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      green_cup:
+        dict_idx: 5
+        height: 0.031
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      magic_clean:
+        dict_idx: 6
+        height: 0.127
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      power_drill:
+        dict_idx: 8
+        height: 0.094
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      soap_dish:
+        dict_idx: 9
+        height: 0.021
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      yellow_bowl:
+        dict_idx: 10
+        height: 0.026
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      pitcher:
+        dict_idx: 11
+        height: 0.120
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      blue_tea_box:
+        dict_idx: 12
+        height: 0.037
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      mug:
+        dict_idx: 13
+        height: 0.042
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      lipton_tea:
+        dict_idx: 14
+        height: 0.043
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      conditioner:
+        dict_idx: 15
+        height: 0.08
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      plastic_lemon:
+        dict_idx: 16
+        height: 0.0
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      shampoo:
+        dict_idx: 17
+        height: 0.082
+        orientation: [-0.707, 0.0, 0.0, 0.707]
+        scale: 1.0
+      plastic_apple:
+        dict_idx: 18
+        height: 0.0
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      plate_holder:
+        dict_idx: 19
+        height: 0.052
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      book_holder_3:
+        dict_idx: 20
+        height: 0.078
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      repellent:
+        dict_idx: 21
+        height: 0.106
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      glue_1:
+        dict_idx: 22
+        height: 0.058
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      blue_moon:
+        dict_idx: 23
+        height: 0.124
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      plastic_orange:
+        dict_idx: 24
+        height: 0.0
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      pink_tea_box:
+        dict_idx: 25
+        height: 0.038
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      bleach_cleanser:
+        dict_idx: 26
+        height: 0.124
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 0.5
+      phillips_screwdriver:
+        dict_idx: 27
+        height: 0.016
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      doraemon_bowl:
+        dict_idx: 28
+        height: 0.027
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      orange_cup:
+        dict_idx: 29
+        height: 0.031
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      blue_cup:
+        dict_idx: 30
+        height: 0.031
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      cleanser:
+        dict_idx: 31
+        height: 0.088
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      bowl:
+        dict_idx: 32
+        height: 0.029
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+      clear_box:
+        dict_idx: 33
+        height: 0.051
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        scale: 1.0
+
+    control:
+      stiffness: {'hip': 80, 'thigh': 80, 'calf': 80, 'x5': 5}
+      damping: {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'x5': 0.5}
+
+  plane:
+    staticFriction: 1.0
+    dynamicFriction: 1.0
+    restitution: 0.0
+
+physics_engine: "physx"
+
+sim:
+  substeps: 1
+  use_gpu_pipeline: True
+  up_axis: "z"
+  gravity: [0.0, 0.0, -9.81]
+  dt: 0.005
+
+  physx:
+    use_gpu: True
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 50.0
+    default_buffer_size_multiplier: 100.0
+    max_gpu_contact_pairs: 1000000
+
+reward:
+  base_height_target: 0.28
+  only_positive_rewards: False
+  scales:
+    approaching: 0.5
+    lifting: 1.0
+    pick_up: 3.5
+    acc_penalty: -0.001
+    command_penalty: -1.0
+    command_reward: 0.25
+    standpick: 0.25
+    action_rate: -0.001
+    ee_orn: 0.01
+    base_dir: 0.25
+    rad_penalty: 0.0
+    base_ang_pen: 0.0
+    base_approaching: 0.01
+    grasp_base_height: 0.5
+    gripper_rate: 0.0
+
+sensor:
+  depth_clip_lower: 0.15
+  depth_clip_rand_range: [0.18, 0.25]
+  enableCamera: False
+  resized_resolution: [96, 54]
+  onboard_camera:
+    horizontal_fov: 69
+    resolution: [96, 54]
+    position: [0.33, 0.0, 0.12]
+    rotation: [0.0, 0.0, 0.0]
+  wrist_camera:
+    horizontal_fov: 69
+    resolution: [96, 54]
+    position: [0.086, 0.0, 0.0]
+    rotation: [-1.57, 0.0, 0.0]
+    rand_position: [0.005, 0.005, 0.005]

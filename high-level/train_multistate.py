@@ -18,7 +18,7 @@ from skrl.utils import set_seed
 
 from envs import *
 
-from utils.config import load_cfg, get_params, copy_cfg
+from utils.config import load_cfg, get_params, copy_cfg, resolve_task_cfg
 import utils.wrapper as wrapper
 
 set_seed(43)
@@ -33,9 +33,9 @@ def create_env(cfg, args):
         cfg["record_video"] = True
     if args.control_freq is not None:
         cfg["env"]["controlFrequencyLow"] = int(args.control_freq)
-    robot_start_pose = (-2.00, 0, 0.55)
+    robot_start_pose = tuple(cfg["env"].get("robotStartPose", [-2.00, 0, 0.55]))
     if args.eval:
-        robot_start_pose = (-0.85, 0, 0.55)
+        robot_start_pose = tuple(cfg["env"].get("evalRobotStartPose", robot_start_pose))
     _env = eval(args.task)(cfg=cfg, rl_device=args.rl_device, sim_device=args.sim_device, 
                          graphics_device_id=args.graphics_device_id, headless=args.headless, 
                          use_roboinfo=args.roboinfo, observe_gait_commands=args.observe_gait_commands, no_feature=args.no_feature, mask_arm=args.mask_arm, pitch_control=args.pitch_control,
@@ -110,8 +110,8 @@ def get_trainer(is_eval=False):
     args = get_params()
     args.eval = is_eval
     args.wandb = args.wandb and (not args.eval) and (not args.debug)
-    cfg_file = "b1z1_" + args.task[4:].lower() + ".yaml"
-    file_path = "data/cfg/" + cfg_file
+    file_path = resolve_task_cfg(args.task, args.config)
+    cfg_file = os.path.basename(file_path)
     
     if args.resume:
         experiment_dir = os.path.join(args.experiment_dir, args.wandb_name)
@@ -139,9 +139,12 @@ def get_trainer(is_eval=False):
     cfg['env']["obj_move_prob"] = args.obj_move_prob
     if args.debug:
         cfg['env']['numEnvs'] = 34
+    if args.num_envs is not None:
+        cfg['env']['numEnvs'] = int(args.num_envs)
         
     if args.eval:
-        cfg['env']['numEnvs'] = 34
+        if args.num_envs is None:
+            cfg['env']['numEnvs'] = 34
         cfg["env"]["maxEpisodeLength"] = 1500
         if args.checkpoint:
             checkpoint_steps = int(args.checkpoint.split("_")[-1].split(".")[0])
@@ -178,9 +181,9 @@ def get_trainer(is_eval=False):
     cfg_ppo["state_preprocessor_kwargs"] = {"size": env.observation_space, "device": device}
     cfg_ppo["value_preprocessor"] = RunningStandardScaler
     cfg_ppo["value_preprocessor_kwargs"] = {"size": 1, "device": device}
-    # logging to TensorBoard and write checkpoints each 120 and 1200 timesteps respectively
+    # logging to TensorBoard and write checkpoints frequently to improve crash recovery
     cfg_ppo["experiment"]["write_interval"] = 24
-    cfg_ppo["experiment"]["checkpoint_interval"] = 500
+    cfg_ppo["experiment"]["checkpoint_interval"] = 100
     cfg_ppo["experiment"]["directory"] = args.experiment_dir
     cfg_ppo["experiment"]["experiment_name"] = args.wandb_name
     cfg_ppo["experiment"]["wandb"] = args.wandb

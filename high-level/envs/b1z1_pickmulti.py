@@ -31,6 +31,7 @@ class B1Z1PickMulti(B1Z1Base):
         
     def _setup_obs_and_action_info(self):
         super()._setup_obs_and_action_info(removed_dim=9, num_action=9, num_obs=38+self.num_features-1)
+
         
     def _extra_env_settings(self):
         self.multi_obj = self.cfg["env"]["asset"]["asset_multi"]
@@ -38,7 +39,8 @@ class B1Z1PickMulti(B1Z1Base):
         self.obj_height = [self.multi_obj[obj]["height"] for obj in self.obj_list]
         self.obj_orn = [self.multi_obj[obj]["orientation"] for obj in self.obj_list]
         self.obj_scale = [self.multi_obj[obj]["scale"] for obj in self.obj_list]
-        obj_dir = os.path.join(self.cfg["env"]["asset"]["assetRoot"], self.cfg["env"]["asset"]["assetFileObj"])
+        obj_asset_root = self.cfg["env"]["asset"].get("objectAssetRoot", self.cfg["env"]["asset"]["assetRoot"])
+        obj_dir = os.path.join(obj_asset_root, self.cfg["env"]["asset"]["assetFileObj"])
         if not self.no_feature:
             features = []
             for obj_name in self.obj_list:
@@ -72,6 +74,7 @@ class B1Z1PickMulti(B1Z1Base):
         self.lifted_success_threshold = self.cfg["env"]["liftedSuccessThreshold"]
         self.lifted_init_threshold = self.cfg["env"]["liftedInitThreshold"]
         self.base_object_distace_threshold = self.cfg["env"]["baseObjectDisThreshold"]
+        self.success_ee_dist_threshold = self.cfg["env"].get("successEeDistThreshold", 0.1)
         self.lifted_object = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         
         self.highest_object = -torch.ones(self.num_envs, device=self.device, dtype=torch.float)
@@ -117,7 +120,7 @@ class B1Z1PickMulti(B1Z1Base):
         self.cube_handles.append(cube_handle)
         
     def _create_envs(self):
-        asset_root = self.cfg["env"]["asset"]["assetRoot"]
+        asset_root = self.cfg["env"]["asset"].get("objectAssetRoot", self.cfg["env"]["asset"]["assetRoot"])
         asset_file_ycb = self.cfg["env"]["asset"]["assetFileObj"]
         
         self.table_heights = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
@@ -170,20 +173,18 @@ class B1Z1PickMulti(B1Z1Base):
             # cup_indices = torch.tensor([5, 28, 29], device=self.device)
             # drill_indices = torch.tensor([7], device=self.device)
             num_group = self.num_envs // 33
-            bowl_indices_np = np.array([[0+i*33, 9+i*33, 27+i*33, 31+i*33] for i in range(num_group)]).reshape(1,-1).squeeze()
-            bowl_indices = torch.from_numpy(bowl_indices_np).to(self.device)
-            ball_indices_np = np.array([[3+i*33, 15+i*33, 17+i*33, 23+i*33] for i in range(num_group)]).reshape(1,-1).squeeze()
-            ball_indices = torch.from_numpy(ball_indices_np).to(self.device)
-            long_box_indices_np = np.array([[1+i*33] for i in range(num_group)]).reshape(1,-1).squeeze()
-            long_box_indices = torch.from_numpy(long_box_indices_np).to(self.device)
-            square_box_indices_np = np.array([[11+i*33, 12+i*33, 24+i*33] for i in range(num_group)]).reshape(1,-1).squeeze()
-            square_box_indices = torch.from_numpy(square_box_indices_np).to(self.device)
-            bottle_indices_np = np.array([[2+i*33, 13+i*33, 16+i*33, 20+i*33] for i in range(num_group)]).reshape(1,-1).squeeze()
-            bottle_indices = torch.from_numpy(bottle_indices_np).to(self.device)
-            cup_indices_np = np.array([[5+i*33, 28+i*33, 29+i*33] for i in range(num_group)]).reshape(1,-1).squeeze()
-            cup_indices = torch.from_numpy(cup_indices_np).to(self.device)
-            drill_indices_np = np.array([[7+i*33] for i in range(num_group)]).reshape(1,-1).squeeze()
-            drill_indices = torch.from_numpy(drill_indices_np).to(self.device)
+
+            def _make_group_indices(offsets):
+                ids = [offset + i * 33 for i in range(num_group) for offset in offsets]
+                return torch.tensor(ids, device=self.device, dtype=torch.long)
+
+            bowl_indices = _make_group_indices([0, 9, 27, 31])
+            ball_indices = _make_group_indices([3, 15, 17, 23])
+            long_box_indices = _make_group_indices([1])
+            square_box_indices = _make_group_indices([11, 12, 24])
+            bottle_indices = _make_group_indices([2, 13, 16, 20])
+            cup_indices = _make_group_indices([5, 28, 29])
+            drill_indices = _make_group_indices([7])
             
             bowl_success_time = self.success_counter[bowl_indices].sum().item(), self.episode_counter[bowl_indices].sum().item()
             ball_success_time = self.success_counter[ball_indices].sum().item(), self.episode_counter[ball_indices].sum().item()
@@ -212,6 +213,51 @@ class B1Z1PickMulti(B1Z1Base):
                     "SuccessRate / Drill": drill_success_rate,
                 }
             }
+            ee_obj_dist = torch.norm(self._cube_root_states[:, :3] - self.ee_pos, dim=-1)
+            lift_margin = self._cube_root_states[:, 2] - self.table_heights - self.init_height
+            dist_pass = ee_obj_dist < self.success_ee_dist_threshold
+            lift_pass = lift_margin > self.lifted_success_threshold
+            success_gate = dist_pass & lift_pass
+
+            cmd_close = self.actions[:, 6] < 0
+            gripper_contact_force = torch.norm(self._contact_forces[:, self.gripper_idx, :], dim=-1)
+            finger_contact_force = torch.zeros_like(gripper_contact_force)
+            if hasattr(self, "finger_indices") and len(self.finger_indices) > 0:
+                finger_contact_force = torch.norm(self._contact_forces[:, self.finger_indices, :], dim=-1).sum(dim=-1)
+            near_upper_rate = 0.0
+            near_lower_rate = 0.0
+            cmd_close_and_near_upper_rate = 0.0
+            cmd_close_and_near_lower_rate = 0.0
+            if self.num_gripper_dof > 0:
+                gpos = self.dof_pos_gripper
+                lower = self.dof_limits_lower[-self.num_gripper_dof:].unsqueeze(0)
+                upper = self.dof_limits_upper[-self.num_gripper_dof:].unsqueeze(0)
+                dof_span = torch.clamp(torch.abs(upper - lower), min=1e-6)
+                near_upper = (torch.abs(gpos - upper) / dof_span).mean(dim=-1) < 0.15
+                near_lower = (torch.abs(gpos - lower) / dof_span).mean(dim=-1) < 0.15
+                near_upper_rate = near_upper.float().mean().item()
+                near_lower_rate = near_lower.float().mean().item()
+                cmd_close_and_near_upper_rate = (cmd_close & near_upper).float().mean().item()
+                cmd_close_and_near_lower_rate = (cmd_close & near_lower).float().mean().item()
+
+            wandb_dict["debug"] = {
+                "Debug / DistPassRate": dist_pass.float().mean().item(),
+                "Debug / LiftPassRate": lift_pass.float().mean().item(),
+                "Debug / SuccessGateRate": success_gate.float().mean().item(),
+                "Debug / LiftedNowRate": self.lifted_now.float().mean().item(),
+                "Debug / LiftedObjectRate": self.lifted_object.float().mean().item(),
+                "Debug / MeanEeObjDist": ee_obj_dist.mean().item(),
+                "Debug / MeanLiftMargin": lift_margin.mean().item(),
+                "Debug / P10EeObjDist": torch.quantile(ee_obj_dist, 0.1).item(),
+                "Debug / P90EeObjDist": torch.quantile(ee_obj_dist, 0.9).item(),
+                "Debug / GripperCmdCloseRate": cmd_close.float().mean().item(),
+                "Debug / GripperNearUpperRate": near_upper_rate,
+                "Debug / GripperNearLowerRate": near_lower_rate,
+                "Debug / CmdCloseAndNearUpperRate": cmd_close_and_near_upper_rate,
+                "Debug / CmdCloseAndNearLowerRate": cmd_close_and_near_lower_rate,
+                "Debug / MeanGripperContactForce": gripper_contact_force.mean().item(),
+                "Debug / MeanFingerContactForce": finger_contact_force.mean().item(),
+            }
             if self.pred_success:
                 predlift_success_rate = 0 if self.global_step_counter==0 else (self.predlift_success_counter / self.local_step_counter).mean().item()
                 wandb_dict["success_rate"]["SuccessRate / PredLifted"] = predlift_success_rate
@@ -225,6 +271,11 @@ class B1Z1PickMulti(B1Z1Base):
                 success_time = self.success_counter.sum().item(), self.episode_counter.sum().item()
                 success_rate = min(success_time[0], success_time[1]) / max(success_time[1], 1)
                 print("Total success rate", success_rate)
+                print("Debug gate -- dist<thr: {:.4f}, lift>thr: {:.4f}, both: {:.4f}".format(
+                    wandb_dict["debug"]["Debug / DistPassRate"],
+                    wandb_dict["debug"]["Debug / LiftPassRate"],
+                    wandb_dict["debug"]["Debug / SuccessGateRate"],
+                ))
                 
     def _reset_objs(self, env_ids):
         if len(env_ids)==0:
@@ -351,7 +402,8 @@ class B1Z1PickMulti(B1Z1Base):
         
         obs = compute_robot_observations(robot_root_state, table_root_state, cube_root_state, body_pos,
                                          body_rot, body_vel, body_ang_vel, dof_pos, dof_vel, base_quat_yaw, spherical_center, commands, self.gripper_idx, table_dim,
-                                         ee_goal_cart, ee_goal_orn_rpy, self.use_roboinfo, self.floating_base)
+                                         ee_goal_cart, ee_goal_orn_rpy, self.use_roboinfo, self.floating_base,
+                                         self.num_gripper_dof, self.arm_base_offset)
         
         return obs
     
@@ -394,9 +446,9 @@ class B1Z1PickMulti(B1Z1Base):
         cube_height = self._cube_root_states[:, 2]
         box_pos = self._cube_root_states[:, :3]
         d1 = torch.norm(box_pos - self.ee_pos, dim=-1)
-        self.lifted_now = torch.logical_and((cube_height - self.table_heights) > (0.03 / 2 + self.lifted_success_threshold), d1 < 0.1)
+        self.lifted_now = torch.logical_and((cube_height - self.table_heights) > (0.03 / 2 + self.lifted_success_threshold), d1 < self.success_ee_dist_threshold)
         self.reset_buf = torch.where(~self.lifted_now & self.lifted_object, torch.ones_like(self.reset_buf), self.reset_buf) # reset the dropped envs
-        self.lifted_object = torch.logical_and((cube_height - self.table_heights - self.init_height) > (self.lifted_success_threshold), d1 < 0.1)
+        self.lifted_object = torch.logical_and((cube_height - self.table_heights - self.init_height) > (self.lifted_success_threshold), d1 < self.success_ee_dist_threshold)
 
         z_cube = self._cube_root_states[:, 2]
         # cube_falls = (z_cube < (self.table_heights + 0.03 / 2 - 0.05))
@@ -473,8 +525,8 @@ class B1Z1PickMulti(B1Z1Base):
 @torch.jit.script
 def compute_robot_observations(robot_root_state, table_root_state, cube_root_state, body_pos, 
                                body_rot, body_vel, body_ang_vel, dof_pos, dof_vel, base_quat_yaw, spherical_center, commands, gripper_idx, table_dim, 
-                               ee_goal_cart, ee_goal_orn_rpy, use_roboinfo, floating_base):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, Tensor, Tensor, Tensor, bool, bool) -> Tensor
+                               ee_goal_cart, ee_goal_orn_rpy, use_roboinfo, floating_base, num_gripper_dof, arm_base_offset):
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, Tensor, Tensor, Tensor, bool, bool, int, Tensor) -> Tensor
     cube_pos = cube_root_state[:, :3]
     cube_orn = cube_root_state[:, 3:7]
     
@@ -486,17 +538,22 @@ def compute_robot_observations(robot_root_state, table_root_state, cube_root_sta
     # dof pos + vel  6+6=12
     # ee state  13
     if use_roboinfo:
-        dof_pos = dof_pos[..., :]
-        dof_vel = dof_vel[..., :-1] * 0.05
+        if num_gripper_dof > 0:
+            dof_pos = dof_pos[..., :-num_gripper_dof]
+            dof_vel = dof_vel[..., :-num_gripper_dof] * 0.05
+        else:
+            dof_pos = dof_pos[..., :]
+            dof_vel = dof_vel[..., :] * 0.05
         if not floating_base:
             dof_pos = reindex_all(dof_pos)
             dof_vel = reindex_all(dof_vel)
     else:
-        dof_pos = dof_pos[..., 12:-1] # arm_dof_pos
-        dof_vel = dof_vel[..., 12:-1] # arm_dof_vel
+        arm_end = dof_pos.shape[-1] - num_gripper_dof
+        dof_pos = dof_pos[..., 12:arm_end] # arm_dof_pos
+        dof_vel = dof_vel[..., 12:arm_end] # arm_dof_vel
     
     base_quat = robot_root_state[:, 3:7]
-    arm_base_local = torch.tensor([0.3, 0.0, 0.09], device=robot_root_state.device).repeat(robot_root_state.shape[0], 1)
+    arm_base_local = arm_base_offset.repeat(robot_root_state.shape[0], 1)
     arm_base = quat_apply(base_quat, arm_base_local) + robot_root_state[:, :3]
     
     # cube_pos_local = quat_rotate_inverse(base_quat, cube_pos - arm_base)

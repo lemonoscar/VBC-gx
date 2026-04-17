@@ -1,6 +1,7 @@
 import os
 import yaml
 import argparse
+import re
 from pathlib import Path
 
 def load_cfg(file_path):
@@ -29,6 +30,7 @@ def get_params():
     parser.add_argument("--wandb_project", type=str, default="isaacgym")
     parser.add_argument("--wandb_name", type=str, default="isaacgym")
     parser.add_argument("--checkpoint", type=str, default="")
+    parser.add_argument("--config", type=str, default="")
     parser.add_argument("--experiment_dir", type=str, default="experiments")
     parser.add_argument("--debugvis", action="store_true")
     parser.add_argument("--save_image", action="store_true")
@@ -63,7 +65,23 @@ def get_params():
     parser.add_argument("--arm_kd", type=float, default=2) # only useful when log data
     parser.add_argument("--table_height", type=float, default=None) # only useful when log data
     parser.add_argument("--seed", type=int, default=43) # only useful when log data
+    parser.add_argument("--num_envs", type=int, default=None)
     
     args = parser.parse_args()
     
     return args
+
+
+def resolve_task_cfg(task, config_override=""):
+    if config_override:
+        return config_override
+
+    task_cfg_map = {
+        "B1Z1PickMulti": "b1z1_pickmulti.yaml",
+        "Go2X5PickMulti": "go2x5_pickmulti.yaml",
+    }
+    if task in task_cfg_map:
+        return os.path.join("data", "cfg", task_cfg_map[task])
+
+    task_snake = re.sub(r"(?<!^)(?=[A-Z])", "_", task).lower()
+    return os.path.join("data", "cfg", f"{task_snake}.yaml")
