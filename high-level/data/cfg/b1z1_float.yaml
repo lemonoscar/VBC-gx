@@ -215,12 +215,12 @@ sim:
     solver_type: 1
     num_position_iterations: 8
     num_velocity_iterations: 0
-    contact_offset: 0.02
+    contact_offset: 0.04
     rest_offset: 0.0
     bounce_threshold_velocity: 0.2
     max_depenetration_velocity: 50.0
     default_buffer_size_multiplier: 100.0
-    max_gpu_contact_pairs: 1000000 #284032
+    max_gpu_contact_pairs: 2000000 #284032
 
 reward:
   base_height_target: 0.55
