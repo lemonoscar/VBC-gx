@@ -1,10 +1,10 @@
 env:
-  numEnvs: 768
+  numEnvs: 256
   numAgents: 1
   envSpacing: 5.0
   enableDebugVis: False
   isFlagrun: False
-  maxEpisodeLength: 220
+  maxEpisodeLength: 150
   globalStepCounter: 50000
   pdControl: True
   powerScale: 1.0
@@ -12,15 +12,15 @@ env:
   controlFrequencyLow: 8
   imgDelayFrame: 4
 
-  liftedSuccessThreshold: 0.05
-  liftedInitThreshold: 0.02
+  liftedSuccessThreshold: 0.35
+  liftedInitThreshold: 0.05
   successEeDistThreshold: 0.30
-  baseObjectDisThreshold: 0.9
-  holdSteps: 6
+  baseObjectDisThreshold: 0.6
+  holdSteps: 25
   lastCommands: False
 
   numGripperDof: 2
-  low_policy_path: "../low-level/logs/b1z1-low/go2x5_v9/model_45000.pt"
+  low_policy_path: "../low-level/logs/go2x5-low/go2x5_b1style_20260418/model_11800.pt"
   lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 2.1, 0.6, 0.6, 0.4, 0.4, 0.4]
   lowLevelLinVelClip: 0.15
   lowLevelAngVelYawClip: 0.35
@@ -234,31 +234,31 @@ sim:
     solver_type: 1
     num_position_iterations: 8
     num_velocity_iterations: 0
-    contact_offset: 0.02
+    contact_offset: 0.04
     rest_offset: 0.0
     bounce_threshold_velocity: 0.2
     max_depenetration_velocity: 50.0
-    default_buffer_size_multiplier: 500.0
-    max_gpu_contact_pairs: 32000000
+    default_buffer_size_multiplier: 300.0
+    max_gpu_contact_pairs: 16777216
 
 reward:
   base_height_target: 0.28
   only_positive_rewards: False
   scales:
     approaching: 0.5
-    lifting: 2.5
-    pick_up: 6.0
+    lifting: 1.0
+    pick_up: 3.5
     acc_penalty: -0.001
-    command_penalty: -0.2
-    command_reward: 0.6
+    command_penalty: -1.0
+    command_reward: 0.25
     standpick: 0.25
     action_rate: -0.001
     ee_orn: 0.01
     base_dir: 0.25
     rad_penalty: 0.0
     base_ang_pen: 0.0
-    base_approaching: 0.2
-    grasp_base_height: 1.0
+    base_approaching: 0.01
+    grasp_base_height: 0.5
     gripper_rate: 0.0
 
 sensor:

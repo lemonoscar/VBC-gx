@@ -28,8 +28,22 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
-from legged_gym import LEGGED_GYM_ROOT_DIR
 import os
+import sys
+
+# Ensure imports resolve to the current repository first.
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+_LOW_LEVEL_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(_LOW_LEVEL_ROOT, ".."))
+for _p in [
+    _LOW_LEVEL_ROOT,
+    os.path.join(_REPO_ROOT, "third_party", "isaacgym", "python"),
+    os.path.join(_REPO_ROOT, "third_party", "rsl_rl"),
+]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from legged_gym import LEGGED_GYM_ROOT_DIR
 
 import isaacgym
 from legged_gym.envs import *
@@ -39,7 +53,6 @@ from legged_gym.utils.helpers import get_load_path
 import numpy as np
 import torch
 import time
-import sys
 
 np.set_printoptions(precision=3, suppress=True)
 

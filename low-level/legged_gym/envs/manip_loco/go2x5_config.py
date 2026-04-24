@@ -48,16 +48,15 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         class sphere_center:
             x_offset = 0.3  # Relative to base
             y_offset = 0    # Relative to base
-            z_invariant_offset = 0.45  # Relative to terrain
-            # Go2 arm base at ~0.36m -> sphere center 0.09m above arm base
-            # min EE world z = 0.45 + 0.55*sin(-0.7) = 0.45 - 0.354 = 0.096m (~10cm above ground)
-            # Low targets allowed: feet_contact_standing reward forces all 4 feet down so robot must CROUCH
+            z_invariant_offset = 0.50  # Relative to terrain
+            # Keep the goal sphere slightly higher than the previous 0.45 setup so
+            # Go2X5 is not over-exposed to "crouch in place and reach" solutions.
 
         class ranges:
-            init_pos_start = [0.3, np.pi/8, 0]
-            init_pos_end = [0.45, 0, 0]
-            pos_l = [0.3, 0.55]  # ARX-X5 max reach ~0.5m from sphere center
-            pos_p = [-0.7, 1 * np.pi / 3]  # -0.7rad: 0.55*sin(-0.7)=-0.354m, world z=0.096m (just above ground)
+            init_pos_start = [0.36, np.pi/10, 0]
+            init_pos_end = [0.52, 0, 0]
+            pos_l = [0.35, 0.60]  # Keep close to X5 reach while avoiding overly tucked goals.
+            pos_p = [-0.45, 1 * np.pi / 3]  # Raise the low-goal floor to reduce stationary crouch bias.
             pos_y = [-1.2, 1.2]
             
             delta_orn_r = [-0.5, 0.5]
@@ -69,8 +68,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         orn_error_scale = [1, 1, 1]
 
     class noise:
-        add_noise = True
-        noise_level = 1.5  # 增大观测/动作噪声
+        add_noise = False
+        noise_level = 1.0  # 增大观测/动作噪声
         class noise_scales:
             dof_pos = 0.01
             dof_vel = 1.5
@@ -80,7 +79,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             height_measurements = 0.1
 
     class commands:
-        curriculum = True
+        curriculum = False
         num_commands = 3
         resampling_time = 3.
 
@@ -106,7 +105,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         clip_actions = 100.
 
     class env:
-        num_envs = 4096
+        num_envs = 6144
         num_actions = 18  # policy/PD only controls non-gripper joints (12 leg + 6 arm)
         num_torques = 18
         action_delay = 3
@@ -140,26 +139,28 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         frequencies = 2
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.35]  # Go2 natural standing height ~0.27m, start a bit higher
+        pos = [0.0, 0.0, 0.40]  # Start slightly higher to avoid immediate ground penetration on reset.
+        leg_reset_ratio_range = [0.98, 1.02]
+        arm_reset_noise_range = [-0.05, 0.05]
         # Go2 leg joints and X5 arm joints
         default_joint_angles = {
             # Go2 leg joints - adjusted for balance with arm
             # Hip: positive = inward, negative = outward
-            'FL_hip_joint': 0.0,   # Neutral to prevent left tilt
-            'FL_thigh_joint': 0.9,  # Slightly more bent
-            'FL_calf_joint': -1.8,
+            'FL_hip_joint': 0.15,
+            'FL_thigh_joint': 0.8,
+            'FL_calf_joint': -1.5,
 
-            'RL_hip_joint': 0.0,
-            'RL_thigh_joint': 1.0,
-            'RL_calf_joint': -1.8,
+            'RL_hip_joint': 0.15,
+            'RL_thigh_joint': 0.8,
+            'RL_calf_joint': -1.5,
 
-            'FR_hip_joint': 0.0,   # Neutral
-            'FR_thigh_joint': 0.9,
-            'FR_calf_joint': -1.8,
+            'FR_hip_joint': -0.15,
+            'FR_thigh_joint': 0.8,
+            'FR_calf_joint': -1.5,
 
-            'RR_hip_joint': 0.0,
-            'RR_thigh_joint': 1.0,
-            'RR_calf_joint': -1.8,
+            'RR_hip_joint': -0.15,
+            'RR_thigh_joint': 0.8,
+            'RR_calf_joint': -1.5,
 
             # X5 arm joints - natural forward-pointing folded position
             # x5_joint1: Z-axis rotation - 0.0 = arm points FORWARD, matching init IK target (yaw=0)
@@ -242,23 +243,25 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         soft_dof_pos_limit = 1.
         soft_dof_vel_limit = 1.
         soft_torque_limit = 0.4
-        base_height_target = 0.28  # Go2 natural standing height (thigh=0.9, calf=-1.8 => ~0.265m + some sag)
-        max_contact_force = 200.  # Go2+arm ~20kg => ~49N per foot static, allow up to 200N dynamic
+        # Keep the locomotion height target consistent with Go2's nominal stance.
+        # 0.55 is the B1 target and strongly biases Go2 toward an unrealistically tall/stiff posture.
+        base_height_target = 0.28
+        max_contact_force = 40.
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
         kappa_gait_probs = 0.07
-        feet_height_target = 0.08  # Realistic swing height for Go2 (leg length 0.213m)
+        feet_height_target = 0.3
 
-        feet_aritime_allfeet = True
-        feet_height_allfeet = True
+        feet_aritime_allfeet = False
+        feet_height_allfeet = False
         min_body_height = 0.15        # Minimum crouching height (~full knee bend)
         low_goal_height_thresh = 0.22 # Only trigger posture shaping when EE goal is low
         low_goal_hind_force_ratio_target = 0.30  # For low goals, hind legs should still carry a meaningful fraction of load
 
         class scales:
             # -------Gait control rewards ---------
-            tracking_contacts_shaped_force = 0.0
-            tracking_contacts_shaped_vel = 0.0
+            tracking_contacts_shaped_force = -2.0
+            tracking_contacts_shaped_vel = -2.0
             feet_air_time = 2.0
             feet_height = 1.0
 
@@ -268,6 +271,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             tracking_lin_vel_x_exp = 0
             tracking_ang_vel = 0.5
 
+            delta_torques = -1.0e-7/4.0
+            work = 0
+            energy_square = 0.0
             torques = -2.5e-5 
             stand_still = 1.0 
             walking_dof = 1.5
@@ -281,7 +287,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             ang_vel_xy = -0.2 
             dof_acc = -7.5e-7 
             collision = -10.
-            action_rate = -0.03
+            action_rate = -0.015
             dof_pos_limits = -10.0
             delta_torques = -1.0e-7
             hip_pos = -0.3
@@ -289,18 +295,18 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_jerk = -0.0002
             feet_drag = -0.08
             feet_contact_forces = -0.001
-            feet_contact_standing = -5.0
-            hind_feet_contact_standing = -2.0
             height_adaptation = 0.0
-            low_goal_front_leg_bend = 0.8
-            low_goal_posture_asymmetry = 0.5
-            low_goal_hind_leg_extension = 0.3
-            low_goal_hind_support_force = 2.5
+            low_goal_front_leg_bend = 0.0
+            low_goal_posture_asymmetry = 0.0
+            low_goal_hind_leg_extension = 0.0
+            low_goal_hind_support_force = 0.0
+            feet_contact_standing = 0.0
+            hind_feet_contact_standing = 0.0
             pitch_soft_limit_standing = 0.0
             orientation = 0.0
             orientation_walking = 0.0
             orientation_standing = 0.0  # Keep 0: penalizing pitch conflicts with goal of bowing; roll=-2 already handles lateral tilt
-            base_height = -2.0
+            base_height = -5.0
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -337,31 +343,31 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         max_error = 0.1
         horizontal_scale = 0.05
         vertical_scale = 0.005
-        border_size = 12
+        border_size = 25
         height = [0.00, 0.1]
         gap_size = [0.02, 0.1]
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
-        curriculum = True
+        curriculum = False
 
         all_vertical = False
-        no_flat = False
+        no_flat = True
         
-        static_friction = 0.8
-        dynamic_friction = 1.2
-        restitution = 0.1
+        static_friction = 1.0
+        dynamic_friction = 1.0
+        restitution = 0.0
 
-        measure_heights = False
+        measure_heights = True
         measured_points_x = [-0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
         measured_points_y = [-0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5]
         
         selected = False
         terrain_kwargs = None
-        max_init_terrain_level = 3
-        terrain_length = 6.
-        terrain_width = 6.
-        num_rows = 8
-        num_cols = 12
+        max_init_terrain_level = 5
+        terrain_length = 8.
+        terrain_width = 8.
+        num_rows = 10
+        num_cols = 20
 
         terrain_dict = {"smooth slope": 0., 
                         "rough slope up": 0.,

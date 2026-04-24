@@ -30,7 +30,21 @@
 
 import numpy as np
 import os
+import sys
 from datetime import datetime
+
+# Ensure imports resolve to the current renamed repository first.
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+_LOW_LEVEL_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(_LOW_LEVEL_ROOT, ".."))
+for _p in [
+    _LOW_LEVEL_ROOT,
+    os.path.join(_REPO_ROOT, "third_party", "isaacgym", "python"),
+    os.path.join(_REPO_ROOT, "third_party", "rsl_rl"),
+]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import isaacgym
 
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR

@@ -1,5 +1,6 @@
 """Simple script to view Go2+X5 robot in IsaacGym - no control, just visualization"""
 import numpy as np
+import os
 from isaacgym import gymapi, gymutil
 
 # Initialize gym
@@ -23,7 +24,7 @@ plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
 gym.add_ground(sim, plane_params)
 
 # Load robot asset
-asset_root = "/home/hpc/visual_wholebody/low-level/resources/robots/go2x5/urdf"
+asset_root = os.path.join(os.path.dirname(os.path.realpath(__file__)), "low-level", "resources", "robots", "go2x5", "urdf")
 asset_file = "go2_arx_x5.urdf"
 
 asset_options = gymapi.AssetOptions()

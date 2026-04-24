@@ -953,14 +953,21 @@ class ManipLoco(LeggedRobot):
         Args:
             env_ids (List[int]): Environemnt ids
         """
-        # Use additive noise for leg joints to preserve arm initial pose
-        # Leg joints (first 12): multiplicative noise 0.8-1.2
-        # Arm joints (12+): small additive noise to preserve initial folded position
+        # Use small reset noise around the default pose.
+        # Wide multiplicative noise on negative calf joints can over-crouch a single leg
+        # and cause immediate falls right after reset.
         num_leg_dofs = 12
         num_arm_dofs = self.num_dofs - num_leg_dofs
-        
-        leg_noise = torch_rand_float(0.8, 1.2, (len(env_ids), num_leg_dofs), device=self.device)
-        arm_noise = torch_rand_float(-0.1, 0.1, (len(env_ids), num_arm_dofs), device=self.device)
+
+        leg_noise_range = getattr(self.cfg.init_state, "leg_reset_ratio_range", [0.8, 1.2])
+        arm_noise_range = getattr(self.cfg.init_state, "arm_reset_noise_range", [-0.1, 0.1])
+
+        leg_noise = torch_rand_float(
+            leg_noise_range[0], leg_noise_range[1], (len(env_ids), num_leg_dofs), device=self.device
+        )
+        arm_noise = torch_rand_float(
+            arm_noise_range[0], arm_noise_range[1], (len(env_ids), num_arm_dofs), device=self.device
+        )
         
         self.dof_pos[env_ids, :num_leg_dofs] = self.default_dof_pos[:num_leg_dofs] * leg_noise
         self.dof_pos[env_ids, num_leg_dofs:] = self.default_dof_pos[num_leg_dofs:] + arm_noise

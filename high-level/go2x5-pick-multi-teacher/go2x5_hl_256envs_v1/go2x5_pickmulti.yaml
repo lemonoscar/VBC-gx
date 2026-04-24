@@ -1,38 +1,40 @@
 env:
-  numEnvs: 10240
+  numEnvs: 256
   numAgents: 1
   envSpacing: 5.0
   enableDebugVis: False
   isFlagrun: False
   maxEpisodeLength: 150
+  globalStepCounter: 50000
   pdControl: True
   powerScale: 1.0
   controlFrequencyInv: 4
   controlFrequencyLow: 8
   imgDelayFrame: 4
 
-  liftedSuccessThreshold: 0.12
+  liftedSuccessThreshold: 0.35
   liftedInitThreshold: 0.05
-  successEeDistThreshold: 0.16
+  successEeDistThreshold: 0.30
   baseObjectDisThreshold: 0.6
-  holdSteps: 10
+  holdSteps: 25
   lastCommands: False
 
   numGripperDof: 2
-  low_policy_path: "../low-level/logs/b1z1-low/go2x5_v9/model_45000.pt"
+  low_policy_path: "../low-level/logs/go2x5-low/go2x5_b1style_20260418/model_11800.pt"
   lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 2.1, 0.6, 0.6, 0.4, 0.4, 0.4]
-  lowLevelLinVelClip: 0.2
-  lowLevelAngVelYawClip: 0.5
-  lowLevelAngVelPitchClip: 0.35
-  robotStartPose: [-2.0, 0.0, 0.35]
-  evalRobotStartPose: [-1.5, 0.0, 0.35]
-  initialEEGoalCart: [0.35, 0.0, 0.25]
+  lowLevelLinVelClip: 0.15
+  lowLevelAngVelYawClip: 0.35
+  lowLevelAngVelPitchClip: 0.25
+  robotStartPose: [-0.75, 0.0, 0.35]
+  evalRobotStartPose: [-0.70, 0.0, 0.35]
+  initialEEGoalCart: [0.28, 0.0, 0.18]
   initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
   maskArmGoalCart: [0.35, 0.0, 0.25]
   armBaseOffset: [0.0, 0.0, 0.08]
   baseHeightClip: [0.2, 0.42]
   wristBodyName: "link6"
   flangeBodyName: "link5"
+  fingerBodyNames: ["link7", "link8"]
 
   asset:
     assetRoot: "data/asset"
@@ -232,15 +234,15 @@ sim:
     solver_type: 1
     num_position_iterations: 8
     num_velocity_iterations: 0
-    contact_offset: 0.02
+    contact_offset: 0.04
     rest_offset: 0.0
     bounce_threshold_velocity: 0.2
     max_depenetration_velocity: 50.0
-    default_buffer_size_multiplier: 100.0
-    max_gpu_contact_pairs: 1000000
+    default_buffer_size_multiplier: 300.0
+    max_gpu_contact_pairs: 16777216
 
 reward:
-  base_height_target: 0.28
+  base_height_target: 0.55
   only_positive_rewards: False
   scales:
     approaching: 0.5

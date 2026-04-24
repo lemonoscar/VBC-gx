@@ -1,5 +1,6 @@
 """Test different arm poses to find the folded-back position"""
 import numpy as np
+import os
 from isaacgym import gymapi, gymutil
 
 gym = gymapi.acquire_gym()
@@ -18,7 +19,8 @@ gym.add_ground(sim, plane_params)
 
 asset_options = gymapi.AssetOptions()
 asset_options.fix_base_link = True  # Fix robot to see arm pose clearly
-asset = gym.load_asset(sim, "/home/hpc/visual_wholebody/low-level/resources/robots/go2x5/urdf", "go2_arx_x5.urdf", asset_options)
+asset_root = os.path.join(os.path.dirname(os.path.realpath(__file__)), "low-level", "resources", "robots", "go2x5", "urdf")
+asset = gym.load_asset(sim, asset_root, "go2_arx_x5.urdf", asset_options)
 
 # Print DOF names and info
 num_dofs = gym.get_asset_dof_count(asset)
