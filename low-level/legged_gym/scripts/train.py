@@ -37,6 +37,29 @@ from datetime import datetime
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _LOW_LEVEL_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
 _REPO_ROOT = os.path.abspath(os.path.join(_LOW_LEVEL_ROOT, ".."))
+_ISAACGYM_BINDINGS_DIR = os.path.join(
+    _REPO_ROOT, "third_party", "isaacgym", "python", "isaacgym", "_bindings", "linux-x86_64"
+)
+_ISAACGYM_USD_PLUGIN_DIR = os.path.join(_ISAACGYM_BINDINGS_DIR, "usd", "plugins")
+
+_ld_library_paths = [
+    _ISAACGYM_BINDINGS_DIR,
+    _ISAACGYM_USD_PLUGIN_DIR,
+]
+if os.environ.get("CONDA_PREFIX"):
+    _ld_library_paths.append(os.path.join(os.environ["CONDA_PREFIX"], "lib"))
+
+_existing_ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+for _path in reversed(_ld_library_paths):
+    if _path and _path not in _existing_ld_library_path.split(":"):
+        _existing_ld_library_path = f"{_path}:{_existing_ld_library_path}" if _existing_ld_library_path else _path
+os.environ["LD_LIBRARY_PATH"] = _existing_ld_library_path
+
+_bootstrap_flag = "_ISAACGYM_LIBRARY_PATH_BOOTSTRAPPED"
+if os.environ.get(_bootstrap_flag) != "1":
+    os.environ[_bootstrap_flag] = "1"
+    os.execvpe(sys.executable, [sys.executable] + sys.argv, os.environ)
+
 for _p in [
     _LOW_LEVEL_ROOT,
     os.path.join(_REPO_ROOT, "third_party", "isaacgym", "python"),

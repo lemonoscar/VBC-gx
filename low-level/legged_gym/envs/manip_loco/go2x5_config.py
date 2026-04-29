@@ -79,7 +79,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             height_measurements = 0.1
 
     class commands:
-        curriculum = False
+        curriculum = True
         num_commands = 3
         resampling_time = 3.
 
@@ -87,12 +87,12 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         ang_vel_yaw_schedule = [0, 1]
         tracking_ang_vel_yaw_schedule = [0, 1]
 
-        ang_vel_yaw_clip = 0.5
-        lin_vel_x_clip = 0.2
+        ang_vel_yaw_clip = 0.35
+        lin_vel_x_clip = 0.15
 
         class ranges:
             lin_vel_x = [-0.8, 0.8]
-            ang_vel_yaw = [-1.0, 1.0]
+            ang_vel_yaw = [-0.8, 0.8]
 
     class normalization:
         class obs_scales:
@@ -232,8 +232,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         randomize_gripper_mass = True
         gripper_added_mass_range = [0, 0.1]
         push_robots = True
-        push_interval_s = 8
-        max_push_vel_xy = 0.5
+        push_interval_s = 10
+        max_push_vel_xy = 0.3
 
     class rewards:
         reward_container_name = "maniploco_rewards"
@@ -245,7 +245,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         soft_torque_limit = 0.4
         # Keep the locomotion height target consistent with Go2's nominal stance.
         # 0.55 is the B1 target and strongly biases Go2 toward an unrealistically tall/stiff posture.
-        base_height_target = 0.28
+        base_height_target = 0.31
         max_contact_force = 40.
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
@@ -266,7 +266,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_height = 1.0
 
             # -------Tracking rewards ----------
-            tracking_lin_vel_max = 2.0 
+            tracking_lin_vel_max = 2.5
             tracking_lin_vel_x_l1 = 0.
             tracking_lin_vel_x_exp = 0
             tracking_ang_vel = 0.5
@@ -275,8 +275,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             work = 0
             energy_square = 0.0
             torques = -2.5e-5 
-            stand_still = 1.0 
-            walking_dof = 1.5
+            stand_still = 0.15
+            walking_dof = 1.8
             dof_default_pos = 0.0
             dof_error = 0.0 
             alive = 1.0
@@ -302,10 +302,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             low_goal_hind_support_force = 0.0
             feet_contact_standing = 0.0
             hind_feet_contact_standing = 0.0
-            pitch_soft_limit_standing = 0.0
+            pitch_soft_limit_standing = -0.25
             orientation = 0.0
             orientation_walking = 0.0
-            orientation_standing = 0.0  # Keep 0: penalizing pitch conflicts with goal of bowing; roll=-2 already handles lateral tilt
+            orientation_standing = 0.0
             base_height = -5.0
             torques_walking = 0.0
             torques_standing = 0.0
@@ -412,7 +412,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         value_loss_coef = 1.0
         use_clipped_value_loss = True
         clip_param = 0.2
-        entropy_coef = 0.0
+        entropy_coef = 0.002
         num_learning_epochs = 5
         num_mini_batches = 4
         learning_rate = 2e-4
