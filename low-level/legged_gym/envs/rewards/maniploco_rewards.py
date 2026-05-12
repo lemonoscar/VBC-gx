@@ -245,10 +245,8 @@ class ManipLoco_rewards:
         ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
-        walking_mask = self.env._get_walking_cmd_mask()
 
         bend[~low_goal_mask] = 0.
-        bend[walking_mask] = 0.
         return bend, bend
 
     def _reward_low_goal_posture_asymmetry(self):
@@ -273,10 +271,8 @@ class ManipLoco_rewards:
         ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
-        walking_mask = self.env._get_walking_cmd_mask()
 
         asymmetry[~low_goal_mask] = 0.
-        asymmetry[walking_mask] = 0.
         return asymmetry, asymmetry
 
     def _reward_low_goal_hind_leg_extension(self):
@@ -293,10 +289,8 @@ class ManipLoco_rewards:
         ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
-        walking_mask = self.env._get_walking_cmd_mask()
 
         extension[~low_goal_mask] = 0.
-        extension[walking_mask] = 0.
         return extension, extension
 
     def _reward_low_goal_hind_support_force(self):
@@ -311,10 +305,8 @@ class ManipLoco_rewards:
         ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
-        walking_mask = self.env._get_walking_cmd_mask()
 
         rew[~low_goal_mask] = 0.
-        rew[walking_mask] = 0.
         return rew, hind_ratio
 
     def _reward_orientation(self):
@@ -352,9 +344,7 @@ class ManipLoco_rewards:
 
         error = torch.abs(base_height - adaptive_target)
 
-        # Only apply when standing (not walking)
-        walking_mask = self.env._get_walking_cmd_mask()
-        error[walking_mask] = 0.
+        # Apply in both standing and walking to shape low-goal posture.
         return error, error
 
     def _reward_pitch_soft_limit_standing(self):

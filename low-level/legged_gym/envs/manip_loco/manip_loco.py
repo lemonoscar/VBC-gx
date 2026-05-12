@@ -93,7 +93,7 @@ class ManipLoco(LeggedRobot):
         ee_orn_norm = torch.norm(self.ee_orn, dim=-1, keepdim=True).clamp(min=1e-6)  # prevent divide-by-zero NaN
         drot = orientation_error(self.ee_goal_orn_quat, self.ee_orn / ee_orn_norm)
         dpose = torch.cat([dpos, drot], -1).unsqueeze(-1)
-        ik_gain = 0.5  # Scale IK delta per step to prevent overshoot and oscillation in arm joints
+        ik_gain = getattr(self.cfg.arm, "ik_gain", 0.5)  # Scale IK delta per step to prevent overshoot
         arm_pos_targets = ik_gain * self._control_ik(dpose) + self.dof_pos[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints]
         all_pos_targets = torch.zeros_like(self.dof_pos)
         all_pos_targets[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints] = arm_pos_targets
@@ -491,8 +491,10 @@ class ManipLoco(LeggedRobot):
         self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
         dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
         dof_props_asset['driveMode'][12:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
-        dof_props_asset['stiffness'][12:].fill(400.0)
-        dof_props_asset['damping'][12:].fill(40.0)
+        arm_pos_stiffness = getattr(self.cfg.control, "arm_pos_stiffness", 400.0)
+        arm_pos_damping = getattr(self.cfg.control, "arm_pos_damping", 40.0)
+        dof_props_asset['stiffness'][12:].fill(arm_pos_stiffness)
+        dof_props_asset['damping'][12:].fill(arm_pos_damping)
         rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
         self.body_names = self.gym.get_asset_rigid_body_names(robot_asset)
         self.body_names_to_idx = self.gym.get_asset_rigid_body_dict(robot_asset)

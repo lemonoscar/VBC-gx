@@ -48,15 +48,14 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         class sphere_center:
             x_offset = 0.3  # Relative to base
             y_offset = 0    # Relative to base
-            z_invariant_offset = 0.50  # Relative to terrain
-            # Keep the goal sphere slightly higher than the previous 0.45 setup so
-            # Go2X5 is not over-exposed to "crouch in place and reach" solutions.
+            z_invariant_offset = 0.45  # Relative to terrain
+            # Lower the goal sphere so low targets are reachable while moving.
 
         class ranges:
             init_pos_start = [0.36, np.pi/10, 0]
             init_pos_end = [0.52, 0, 0]
-            pos_l = [0.35, 0.60]  # Keep close to X5 reach while avoiding overly tucked goals.
-            pos_p = [-0.45, 1 * np.pi / 3]  # Raise the low-goal floor to reduce stationary crouch bias.
+            pos_l = [0.25, 0.50]  # Slightly wider reach window while enabling lower goals.
+            pos_p = [-0.85, 1 * np.pi / 3]  # Lower low-goal floor to increase low-target exposure.
             pos_y = [-1.2, 1.2]
             
             delta_orn_r = [-0.5, 0.5]
@@ -88,7 +87,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         tracking_ang_vel_yaw_schedule = [0, 1]
 
         ang_vel_yaw_clip = 0.35
-        lin_vel_x_clip = 0.15
+        lin_vel_x_clip = 0.05
 
         class ranges:
             lin_vel_x = [-0.8, 0.8]
@@ -181,6 +180,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class control:
         stiffness = {'hip': 80, 'thigh': 80, 'calf': 80, 'x5': 5}  # [N*m/rad]
         damping = {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'x5': 0.5}  # [N*m*s/rad]
+        arm_pos_stiffness = 80.0
+        arm_pos_damping = 8.0
 
         adaptive_arm_gains = False
         # action_scale: [leg_scales (12)] + [arm_scales (6)] 
@@ -213,6 +214,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         base_offset = [0.0, 0.0, 0.08]  # x5_mount in URDF is at base frame z=0.08
         init_target_ee_base = [0.2, 0.0, 0.2]
         grasp_offset = 0.08
+        ik_gain = 0.3
         osc_kp = np.array([100, 100, 100, 30, 30, 30])
         osc_kd = 2 * (osc_kp ** 0.5)
 
@@ -245,17 +247,17 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         soft_torque_limit = 0.4
         # Keep the locomotion height target consistent with Go2's nominal stance.
         # 0.55 is the B1 target and strongly biases Go2 toward an unrealistically tall/stiff posture.
-        base_height_target = 0.31
+        base_height_target = 0.35
         max_contact_force = 40.
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
         kappa_gait_probs = 0.07
-        feet_height_target = 0.3
+        feet_height_target = 0.08
 
         feet_aritime_allfeet = False
         feet_height_allfeet = False
         min_body_height = 0.15        # Minimum crouching height (~full knee bend)
-        low_goal_height_thresh = 0.22 # Only trigger posture shaping when EE goal is low
+        low_goal_height_thresh = 0.30 # Only trigger posture shaping when EE goal is low
         low_goal_hind_force_ratio_target = 0.30  # For low goals, hind legs should still carry a meaningful fraction of load
 
         class scales:
@@ -266,7 +268,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_height = 1.0
 
             # -------Tracking rewards ----------
-            tracking_lin_vel_max = 2.5
+            tracking_lin_vel_max = 3.0
             tracking_lin_vel_x_l1 = 0.
             tracking_lin_vel_x_exp = 0
             tracking_ang_vel = 0.5
@@ -275,7 +277,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             work = 0
             energy_square = 0.0
             torques = -2.5e-5 
-            stand_still = 0.15
+            stand_still = 0.0
             walking_dof = 1.8
             dof_default_pos = 0.0
             dof_error = 0.0 
@@ -295,18 +297,18 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_jerk = -0.0002
             feet_drag = -0.08
             feet_contact_forces = -0.001
-            height_adaptation = 0.0
-            low_goal_front_leg_bend = 0.0
-            low_goal_posture_asymmetry = 0.0
-            low_goal_hind_leg_extension = 0.0
-            low_goal_hind_support_force = 0.0
+            height_adaptation = -2.0
+            low_goal_front_leg_bend = 0.3
+            low_goal_posture_asymmetry = 0.2
+            low_goal_hind_leg_extension = 0.2
+            low_goal_hind_support_force = 0.5
             feet_contact_standing = 0.0
             hind_feet_contact_standing = 0.0
             pitch_soft_limit_standing = -0.25
             orientation = 0.0
-            orientation_walking = 0.0
+            orientation_walking = -5.0   # Heavily penalize pitching while walking to prevent diving
             orientation_standing = 0.0
-            base_height = -5.0
+            base_height = -2.5
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -319,7 +321,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         class arm_scales:
             arm_termination = None
             tracking_ee_sphere = 0.
-            tracking_ee_world = 0.8
+            tracking_ee_world = 0.6
             tracking_ee_sphere_walking = 0.0
             tracking_ee_sphere_standing = 0.0
             tracking_ee_cart = None
@@ -333,9 +335,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         lookat = [0, 0, -2]
 
     class termination:
-        r_threshold = 0.8
-        p_threshold = 0.8
-        z_threshold = 0.1
+        r_threshold = 0.6
+        p_threshold = 0.5
+        z_threshold = 0.15
 
     class terrain:
         mesh_type = 'trimesh'
