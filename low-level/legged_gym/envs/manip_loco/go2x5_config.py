@@ -135,10 +135,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         record_video = False
         stand_by = False
         observe_gait_commands = False
-        frequencies = 2
+        frequencies = 3.0  # Increased from 2 to 3 Hz for Go2's natural faster trot
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.40]  # Start slightly higher to avoid immediate ground penetration on reset.
+        pos = [0.0, 0.0, 0.32]  # Lowered from 0.40 to prevent drastic drop on reset.
         leg_reset_ratio_range = [0.98, 1.02]
         arm_reset_noise_range = [-0.05, 0.05]
         # Go2 leg joints and X5 arm joints
