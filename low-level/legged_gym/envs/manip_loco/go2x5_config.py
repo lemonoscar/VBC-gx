@@ -55,7 +55,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             init_pos_start = [0.36, np.pi/10, 0]
             init_pos_end = [0.52, 0, 0]
             pos_l = [0.25, 0.50]  # Slightly wider reach window while enabling lower goals.
-            pos_p = [-0.85, 1 * np.pi / 3]  # Lower low-goal floor to increase low-target exposure.
+            pos_p = [-0.7, 1 * np.pi / 3]  # Keep sampled EE goals above ground for stable first-stage training.
             pos_y = [-1.2, 1.2]
             
             delta_orn_r = [-0.5, 0.5]
@@ -138,7 +138,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         frequencies = 3.0  # Increased from 2 to 3 Hz for Go2's natural faster trot
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.32]  # Lowered from 0.40 to prevent drastic drop on reset.
+        pos = [0.0, 0.0, 0.40]  # Spawn above nominal stance; rewards target the lower Go2 body height.
         leg_reset_ratio_range = [0.98, 1.02]
         arm_reset_noise_range = [-0.05, 0.05]
         # Go2 leg joints and X5 arm joints
@@ -221,21 +221,21 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class domain_rand:
         observe_priv = True
         randomize_friction = True
-        friction_range = [0.3, 3.0]
+        friction_range = [0.5, 2.0]
         randomize_base_mass = True
-        added_mass_range = [0., 15.]
+        added_mass_range = [0., 8.]
         randomize_base_com = True
-        added_com_range_x = [-0.15, 0.15]
-        added_com_range_y = [-0.15, 0.15]
-        added_com_range_z = [-0.15, 0.15]
+        added_com_range_x = [-0.08, 0.08]
+        added_com_range_y = [-0.08, 0.08]
+        added_com_range_z = [-0.08, 0.08]
         randomize_motor = True
-        leg_motor_strength_range = [0.7, 1.3]
-        arm_motor_strength_range = [0.7, 1.3]
+        leg_motor_strength_range = [0.85, 1.15]
+        arm_motor_strength_range = [0.85, 1.15]
         randomize_gripper_mass = True
-        gripper_added_mass_range = [0, 0.1]
+        gripper_added_mass_range = [0, 0.06]
         push_robots = True
         push_interval_s = 10
-        max_push_vel_xy = 0.3
+        max_push_vel_xy = 0.25
 
     class rewards:
         reward_container_name = "maniploco_rewards"
@@ -247,8 +247,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         soft_torque_limit = 0.4
         # Keep the locomotion height target consistent with Go2's nominal stance.
         # 0.55 is the B1 target and strongly biases Go2 toward an unrealistically tall/stiff posture.
-        base_height_target = 0.35
-        max_contact_force = 40.
+        base_height_target = 0.28
+        max_contact_force = 200.
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
         kappa_gait_probs = 0.07
