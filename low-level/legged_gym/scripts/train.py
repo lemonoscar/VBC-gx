@@ -82,13 +82,17 @@ def train(args):
         os.makedirs(log_pth)
     except:
         pass
+    wandb_mode = os.environ.get("WANDB_MODE", "").strip().lower()
     if args.debug:
         mode = "disabled"
         args.rows = 6
         args.cols = 2
         args.num_envs = 128
+    elif wandb_mode:
+        mode = wandb_mode
     else:
         mode = "online"
+    print(f"W&B mode: {mode}")
     wandb.init(project=args.proj_name, name=args.exptid, mode=mode, dir=LEGGED_GYM_ENVS_DIR +"/logs")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/manip_loco/b1z1_config.py", policy="now")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/manip_loco/manip_loco.py", policy="now")
