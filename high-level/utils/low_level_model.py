@@ -190,18 +190,21 @@ class ActorCritic(nn.Module):
                         actor_leg_layers.append(activation)
                 self.actor_leg_control_head = nn.Sequential(*actor_leg_layers)
 
-                actor_arm_layers = []
-                actor_arm_layers.append(nn.Linear(actor_backbone_output_dim, arm_control_head_hidden_dims[0]))
-                actor_arm_layers.append(activation)
-                for l in range(len(arm_control_head_hidden_dims)):
-                    if l == len(arm_control_head_hidden_dims) - 1:
-                        actor_arm_layers.append(nn.Linear(arm_control_head_hidden_dims[l], num_arm_actions))
-                        if output_tanh:
-                            actor_arm_layers.append(nn.Tanh())
-                    else:
-                        actor_arm_layers.append(nn.Linear(arm_control_head_hidden_dims[l], arm_control_head_hidden_dims[l + 1]))
-                        actor_arm_layers.append(activation)
-                self.actor_arm_control_head = nn.Sequential(*actor_arm_layers)
+                if num_arm_actions > 0:
+                    actor_arm_layers = []
+                    actor_arm_layers.append(nn.Linear(actor_backbone_output_dim, arm_control_head_hidden_dims[0]))
+                    actor_arm_layers.append(activation)
+                    for l in range(len(arm_control_head_hidden_dims)):
+                        if l == len(arm_control_head_hidden_dims) - 1:
+                            actor_arm_layers.append(nn.Linear(arm_control_head_hidden_dims[l], num_arm_actions))
+                            if output_tanh:
+                                actor_arm_layers.append(nn.Tanh())
+                        else:
+                            actor_arm_layers.append(nn.Linear(arm_control_head_hidden_dims[l], arm_control_head_hidden_dims[l + 1]))
+                            actor_arm_layers.append(activation)
+                    self.actor_arm_control_head = nn.Sequential(*actor_arm_layers)
+                else:
+                    self.actor_arm_control_head = None
             
             def forward(self, obs, hist_encoding=False):
                 obs_prop = obs[:, :self.num_prop]
@@ -212,6 +215,8 @@ class ActorCritic(nn.Module):
                 backbone_input = torch.cat([obs_prop, latent], dim=1)
                 backbone_output = self.actor_backbone(backbone_input)
                 leg_output = self.actor_leg_control_head(backbone_output)
+                if self.actor_arm_control_head is None:
+                    return leg_output
                 arm_output = self.actor_arm_control_head(backbone_output)
                 if self.adaptive_arm_gains:
                     gains = self.adaptive_arm_gains_scale * (arm_output[:, self.num_arm_actions // 2:])

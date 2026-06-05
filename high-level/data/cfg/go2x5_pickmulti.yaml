@@ -21,7 +21,8 @@ env:
 
   numGripperDof: 2
   low_policy_path: "../low-level/logs/go2x5-low/go2x5_b1style_20260418/model_11800.pt"
-  lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 2.1, 0.6, 0.6, 0.4, 0.4, 0.4]
+  lowPolicyNumActions: 12
+  lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45]
   lowLevelLinVelClip: 0.15
   lowLevelAngVelYawClip: 0.35
   lowLevelAngVelPitchClip: 0.25

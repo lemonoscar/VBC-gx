@@ -68,7 +68,6 @@ class ManipLoco(LeggedRobot):
         Args:
             actions (torch.Tensor): Tensor of shape (num_envs, num_actions_per_env)
         """
-        actions[:, 12:] = 0.  # Arm is controlled by IK, not policy
         actions = self._reindex_all(actions)
         actions = torch.clip(actions, -self.clip_actions, self.clip_actions).to(self.device)
         # step physics and render each frame
@@ -235,7 +234,7 @@ class ManipLoco(LeggedRobot):
                         self.base_ang_vel * self.obs_scales.ang_vel,  # dim 3
                         dof_pos_obs,  # dim 18 (for 20 dof with 2 gripper joints)
                         dof_vel_obs,  # dim 18 (for 20 dof with 2 gripper joints)
-                        self._reindex_all(self.action_history_buf[:, -1])[:, :12],  # dim 12 (leg actions only, same as B1Z1 setup)
+                        self.action_history_buf[:, -1],  # dim 12 (leg actions only, same as B1Z1 setup)
                                     self._reindex_feet(self.foot_contacts_from_sensor),  # dim 4
                                     self.commands[:, :3] * self.commands_scale,  # dim 3
                                     # self.curr_ee_goal_sphere,  # dim 3 position
@@ -1254,9 +1253,11 @@ class ManipLoco(LeggedRobot):
         """
         actions_scaled = actions * self.motor_strength * self.action_scale
 
-        default_torques = self.p_gains * (actions_scaled + self.default_dof_pos_wo_gripper - self.dof_pos_wo_gripper) - self.d_gains * self.dof_vel_wo_gripper
-        default_torques[:, -6:] = 0  # Arm uses position control (DOF_MODE_POS), not torque
-        torques = torch.cat([default_torques, self.gripper_torques_zero], dim=-1)
+        leg_torques = self.p_gains * (
+            actions_scaled + self.default_dof_pos_wo_gripper[:12] - self.dof_pos_wo_gripper[:, :12]
+        ) - self.d_gains * self.dof_vel_wo_gripper[:, :12]
+        arm_torques_zero = torch.zeros(self.num_envs, 6, device=self.device, dtype=actions.dtype)
+        torques = torch.cat([leg_torques, arm_torques_zero, self.gripper_torques_zero], dim=-1)
         
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
     

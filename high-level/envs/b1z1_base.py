@@ -76,7 +76,8 @@ class B1Z1Base(RewardVecTask):
         self.mask_arm_goal_cart_cfg = self.cfg["env"].get("maskArmGoalCart", [0.46, 0.0, 0.31])
         self.base_height_clip_cfg = self.cfg["env"].get("baseHeightClip", [0.4, 0.55])
         self.arm_base_offset_cfg = self.cfg["env"].get("armBaseOffset", [0.3, 0.0, 0.09])
-        
+        self.low_policy_num_actions = int(self.cfg["env"].get("lowPolicyNumActions", 18))
+
         self.num_torques = 18
         if sim_device == "cpu":
             self.sim_id = 0
@@ -301,7 +302,7 @@ class B1Z1Base(RewardVecTask):
         self._terminate_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
         self.reset_buf = self._terminate_buf.clone()
         
-        self.last_low_actions = torch.zeros(self.num_envs, 18, device=self.device, dtype=torch.float32)
+        self.last_low_actions = torch.zeros(self.num_envs, self.low_policy_num_actions, device=self.device, dtype=torch.float32)
         
         self.commands = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
         
@@ -322,14 +323,14 @@ class B1Z1Base(RewardVecTask):
         if self.rand_depth_clip:
             self.depth_clip_lower = self.depth_clip_lower*torch.ones(self.num_envs, 1, 1, dtype=torch.float, device=self.device, requires_grad=False)
         
-        # self.motor_strength = torch.ones(self.num_envs, 18, device=self.device, dtype=torch.float32)
+        # self.motor_strength = torch.ones(self.num_envs, self.low_policy_num_actions, device=self.device, dtype=torch.float32)
         self.motor_strength = torch.cat([
                     torch_rand_float(0.7, 1.3, (self.num_envs, 12), device=self.device),
-                    torch_rand_float(0.7, 1.3, (self.num_envs, 6), device=self.device)
+                    torch_rand_float(0.7, 1.3, (self.num_envs, max(self.low_policy_num_actions - 12, 0)), device=self.device)
                 ], dim=1)
-        
+
         if not self.floating_base:
-            low_action_scale = self.cfg["env"].get("lowActionScale", [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2 + [2.1, 0.6, 0.6, 0, 0, 0])
+            low_action_scale = self.cfg["env"].get("lowActionScale", [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2)
             self.low_action_scale = torch.tensor(low_action_scale, device=self.device)
             
             self.p_gains = torch.zeros(self.num_torques, dtype=torch.float, device=self.device, requires_grad=False)
@@ -716,9 +717,11 @@ class B1Z1Base(RewardVecTask):
         pass
     
     def _load_low_level_model(self, num_priv=5 + 1 + 12, stochastic=False):
+        low_policy_num_actions = self.low_policy_num_actions
+        low_policy_num_arm_actions = max(low_policy_num_actions - 12, 0)
         low_level_kwargs = {
             "continue_from_last_std": True,
-            "init_std": [[0.8, 1.0, 1.0] * 4 + [1.0] * 6],
+            "init_std": [[0.8, 1.0, 1.0] * 4 + [1.0] * low_policy_num_arm_actions],
             "actor_hidden_dims": [128],
             "critic_hidden_dims": [128],
             "activation": 'elu', # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
@@ -727,11 +730,11 @@ class B1Z1Base(RewardVecTask):
             "arm_control_head_hidden_dims": [128, 128],
             "priv_encoder_dims": [64, 20],
             "num_leg_actions": 12,
-            "num_arm_actions": 6,
+            "num_arm_actions": low_policy_num_arm_actions,
             "adaptive_arm_gains": False,
             "adaptive_arm_gains_scale": 10.0
         }
-        num_actions = 18
+        num_actions = low_policy_num_actions
         self.num_priv = num_priv
         self.num_gripper_joints = self.num_gripper_dof
         self.num_proprio = 2 + 3 + 18 + 18 + 12 + 4 + 3 + 3 + 3
@@ -931,11 +934,14 @@ class B1Z1Base(RewardVecTask):
         return center
         
     def _compute_torques(self, actions):
-        actions_scaled = actions * self.motor_strength * self.low_action_scale
+        leg_actions = actions[:, :12]
+        actions_scaled = leg_actions * self.motor_strength[:, :12] * self.low_action_scale[:12]
 
-        default_torques = self.p_gains * (actions_scaled + self.default_dof_pos_wo_gripper - self.dof_pos_wo_gripper) - self.d_gains * self.dof_vel_wo_gripper
-        default_torques[:, -6:] = 0
-        torques = torch.cat([default_torques, self.gripper_torques_zero], dim=-1)
+        leg_torques = self.p_gains[:12] * (
+            actions_scaled + self.default_dof_pos_wo_gripper[:, :12] - self.dof_pos_wo_gripper[:, :12]
+        ) - self.d_gains[:12] * self.dof_vel_wo_gripper[:, :12]
+        arm_torques_zero = torch.zeros(self.num_envs, 6, device=self.device, dtype=actions.dtype)
+        torques = torch.cat([leg_torques, arm_torques_zero, self.gripper_torques_zero], dim=-1)
         
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
         
@@ -977,7 +983,7 @@ class B1Z1Base(RewardVecTask):
         self.gym.clear_lines(self.viewer)
         sphere_geom = gymutil.WireframeSphereGeometry(0.03, 4, 4, None, color=(1, 0.129, 0))
         ee_goal_local = self.curr_ee_goal_cart
-        arm_base_local = torch.tensor([0.3, 0.0, 0.09], device=self.device).repeat(self.num_envs, 1)
+        arm_base_local = self.arm_base_offset.repeat(self.num_envs, 1)
         arm_base = quat_apply(self._robot_root_states[:, 3:7], arm_base_local) + self._robot_root_states[:, :3]
         ee_goal_global = quat_apply(self._robot_root_states[:, 3:7], ee_goal_local) + arm_base
         for i in range(self.num_envs):
@@ -1536,7 +1542,7 @@ class B1Z1Base(RewardVecTask):
     def update_roboinfo(self):
         # Arm base
         base_quat = self._robot_root_states[:, 3:7]
-        arm_base_local = torch.tensor([0.3, 0.0, 0.09], device=self.device).repeat(self.num_envs, 1)
+        arm_base_local = self.arm_base_offset.repeat(self.num_envs, 1)
         self.arm_base = quat_apply(base_quat, arm_base_local) + self._robot_root_states[:, :3]
         
     def obtain_imgs(self):

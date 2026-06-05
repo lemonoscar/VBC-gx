@@ -86,12 +86,12 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         ang_vel_yaw_schedule = [0, 1]
         tracking_ang_vel_yaw_schedule = [0, 1]
 
-        ang_vel_yaw_clip = 0.35
-        lin_vel_x_clip = 0.05
+        ang_vel_yaw_clip = 0.5
+        lin_vel_x_clip = 0.2
 
         class ranges:
             lin_vel_x = [-0.8, 0.8]
-            ang_vel_yaw = [-0.8, 0.8]
+            ang_vel_yaw = [-1.0, 1.0]
 
     class normalization:
         class obs_scales:
@@ -105,8 +105,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class env:
         num_envs = 6144
-        num_actions = 18  # policy/PD only controls non-gripper joints (12 leg + 6 arm)
-        num_torques = 18
+        num_actions = 12  # low-level policy controls legs only; arm is driven by IK position targets
+        num_torques = 12
         action_delay = 3
         num_gripper_joints = 2  # ARX-X5 gripper has 2 DOF (sliding mechanism with 2 claws)
         # Observation breakdown:
@@ -135,29 +135,28 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         record_video = False
         stand_by = False
         observe_gait_commands = False
-        frequencies = 3.0  # Increased from 2 to 3 Hz for Go2's natural faster trot
+        frequencies = 2
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.40]  # Spawn above nominal stance; rewards target the lower Go2 body height.
+        pos = [0.0, 0.0, 0.35]  # Go2-specific spawn height; B1Z1 uses 0.5 m.
         leg_reset_ratio_range = [0.98, 1.02]
         arm_reset_noise_range = [-0.05, 0.05]
         # Go2 leg joints and X5 arm joints
         default_joint_angles = {
-            # Go2 leg joints - adjusted for balance with arm
-            # Hip: positive = inward, negative = outward
-            'FL_hip_joint': 0.15,
+            # Go2 leg joints - keep the B1Z1 nominal leg posture unless geometry requires otherwise.
+            'FL_hip_joint': 0.2,
             'FL_thigh_joint': 0.8,
             'FL_calf_joint': -1.5,
 
-            'RL_hip_joint': 0.15,
+            'RL_hip_joint': 0.2,
             'RL_thigh_joint': 0.8,
             'RL_calf_joint': -1.5,
 
-            'FR_hip_joint': -0.15,
+            'FR_hip_joint': -0.2,
             'FR_thigh_joint': 0.8,
             'FR_calf_joint': -1.5,
 
-            'RR_hip_joint': -0.15,
+            'RR_hip_joint': -0.2,
             'RR_thigh_joint': 0.8,
             'RR_calf_joint': -1.5,
 
@@ -184,9 +183,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         arm_pos_damping = 8.0
 
         adaptive_arm_gains = False
-        # action_scale: [leg_scales (12)] + [arm_scales (6)] 
-        # Total 18 scales for 18 actions (gripper joints 7,8 handled separately via force control)
-        action_scale = [0.4, 0.45, 0.45] * 4 + [2.1, 0.6, 0.6, 0.4, 0.4, 0.4]
+        # action_scale: leg scales only; arm joints are controlled by IK position targets.
+        action_scale = [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2
         decimation = 4
         torque_supervision = False
 
@@ -221,21 +219,21 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class domain_rand:
         observe_priv = True
         randomize_friction = True
-        friction_range = [0.5, 2.0]
+        friction_range = [0.3, 3.0]
         randomize_base_mass = True
-        added_mass_range = [0., 8.]
+        added_mass_range = [0., 15.]
         randomize_base_com = True
-        added_com_range_x = [-0.08, 0.08]
-        added_com_range_y = [-0.08, 0.08]
-        added_com_range_z = [-0.08, 0.08]
+        added_com_range_x = [-0.15, 0.15]
+        added_com_range_y = [-0.15, 0.15]
+        added_com_range_z = [-0.15, 0.15]
         randomize_motor = True
-        leg_motor_strength_range = [0.85, 1.15]
-        arm_motor_strength_range = [0.85, 1.15]
+        leg_motor_strength_range = [0.7, 1.3]
+        arm_motor_strength_range = [0.7, 1.3]
         randomize_gripper_mass = True
-        gripper_added_mass_range = [0, 0.06]
+        gripper_added_mass_range = [0, 0.1]
         push_robots = True
-        push_interval_s = 10
-        max_push_vel_xy = 0.25
+        push_interval_s = 8
+        max_push_vel_xy = 0.5
 
     class rewards:
         reward_container_name = "maniploco_rewards"
@@ -268,7 +266,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_height = 1.0
 
             # -------Tracking rewards ----------
-            tracking_lin_vel_max = 3.0
+            tracking_lin_vel_max = 2.0
             tracking_lin_vel_x_l1 = 0.
             tracking_lin_vel_x_exp = 0
             tracking_ang_vel = 0.5
@@ -277,8 +275,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             work = 0
             energy_square = 0.0
             torques = -2.5e-5 
-            stand_still = 0.0
-            walking_dof = 1.8
+            stand_still = 1.0
+            walking_dof = 1.5
             dof_default_pos = 0.0
             dof_error = 0.0 
             alive = 1.0
@@ -297,18 +295,18 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_jerk = -0.0002
             feet_drag = -0.08
             feet_contact_forces = -0.001
-            height_adaptation = -2.0
-            low_goal_front_leg_bend = 0.3
-            low_goal_posture_asymmetry = 0.2
-            low_goal_hind_leg_extension = 0.2
-            low_goal_hind_support_force = 0.5
+            height_adaptation = 0.0
+            low_goal_front_leg_bend = 0.0
+            low_goal_posture_asymmetry = 0.0
+            low_goal_hind_leg_extension = 0.0
+            low_goal_hind_support_force = 0.0
             feet_contact_standing = 0.0
             hind_feet_contact_standing = 0.0
-            pitch_soft_limit_standing = -0.25
+            pitch_soft_limit_standing = 0.0
             orientation = 0.0
-            orientation_walking = -5.0   # Heavily penalize pitching while walking to prevent diving
+            orientation_walking = 0.0
             orientation_standing = 0.0
-            base_height = -2.5
+            base_height = -5.0
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -321,7 +319,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         class arm_scales:
             arm_termination = None
             tracking_ee_sphere = 0.
-            tracking_ee_world = 0.6
+            tracking_ee_world = 0.8
             tracking_ee_sphere_walking = 0.0
             tracking_ee_sphere_standing = 0.0
             tracking_ee_cart = None
@@ -335,9 +333,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         lookat = [0, 0, -2]
 
     class termination:
-        r_threshold = 0.6
-        p_threshold = 0.5
-        z_threshold = 0.15
+        r_threshold = 0.8
+        p_threshold = 0.8
+        z_threshold = 0.1
 
     class terrain:
         mesh_type = 'trimesh'
@@ -392,7 +390,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        init_std = [[0.8, 1.0, 1.0] * 4 + [1.0] * 6]
+        init_std = [[0.8, 1.0, 1.0] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'
@@ -404,7 +402,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         priv_encoder_dims = [64, 20]
 
         num_leg_actions = 12
-        num_arm_actions = 6
+        num_arm_actions = 0
 
         adaptive_arm_gains = Go2X5RoughCfg.control.adaptive_arm_gains
         adaptive_arm_gains_scale = 10.0
@@ -414,7 +412,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         value_loss_coef = 1.0
         use_clipped_value_loss = True
         clip_param = 0.2
-        entropy_coef = 0.002
+        entropy_coef = 0.0
         num_learning_epochs = 5
         num_mini_batches = 4
         learning_rate = 2e-4
@@ -423,7 +421,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         lam = 0.95
         desired_kl = None
         max_grad_norm = 1.
-        min_policy_std = [[0.15, 0.25, 0.25] * 4 + [0.2] * 3 + [0.05] * 3]
+        min_policy_std = [[0.15, 0.25, 0.25] * 4]
 
         mixing_schedule = [1.0, 0, 3000]
         torque_supervision = Go2X5RoughCfg.control.torque_supervision
