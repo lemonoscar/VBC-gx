@@ -330,7 +330,10 @@ class B1Z1Base(RewardVecTask):
                 ], dim=1)
 
         if not self.floating_base:
-            low_action_scale = self.cfg["env"].get("lowActionScale", [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2)
+            default_low_action_scale = [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2
+            if self.low_policy_num_actions > 12:
+                default_low_action_scale += [2.1, 0.6, 0.6, 0, 0, 0][:self.low_policy_num_actions - 12]
+            low_action_scale = self.cfg["env"].get("lowActionScale", default_low_action_scale)
             self.low_action_scale = torch.tensor(low_action_scale, device=self.device)
             
             self.p_gains = torch.zeros(self.num_torques, dtype=torch.float, device=self.device, requires_grad=False)
@@ -876,11 +879,14 @@ class B1Z1Base(RewardVecTask):
         commands = self.commands.clone()
         if self.rand_cmd_scale:
             commands[:, 0] *= self.command_scale
+        low_action_obs = self.last_low_actions[:, :12]
+        if self.low_policy_num_actions > 12:
+            low_action_obs = reindex_all(self.last_low_actions)[:, :12]
         low_level_obs_buf = torch.cat((self.get_body_orientation(), # dim 2
                                        base_ang_vel, # dim 3
                                        reindex_all(self._dof_pos - self._initial_dof_pos)[:, :-self.num_gripper_joints], # dim 19 or 20
                                        reindex_all(self._dof_vel * 0.05)[:, :-self.num_gripper_joints], # dim 19 or 20
-                                       reindex_all(self.last_low_actions)[:, :12],
+                                       low_action_obs,
                                        reindex_feet(self.foot_contacts_from_sensor),
                                        commands[:, :3],
                                     #    self.curr_ee_goal_sphere,
@@ -896,7 +902,7 @@ class B1Z1Base(RewardVecTask):
                                        base_ang_vel, # dim 3
                                        arm_pos_obs, # dim 19 or 20
                                        arm_vel_obs, # dim 19 or 20
-                                       reindex_all(self.last_low_actions)[:, :12],
+                                       low_action_obs,
                                        reindex_feet(self.foot_contacts_from_sensor),
                                        commands[:, :3],
                                     #    self.curr_ee_goal_sphere,

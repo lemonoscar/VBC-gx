@@ -94,7 +94,14 @@ def train(args):
         mode = "online"
     print(f"W&B mode: {mode}")
     wandb.init(project=args.proj_name, name=args.exptid, mode=mode, dir=LEGGED_GYM_ENVS_DIR +"/logs")
-    wandb.save(LEGGED_GYM_ENVS_DIR + "/manip_loco/b1z1_config.py", policy="now")
+    task_config_files = {
+        "b1z1": "b1z1_config.py",
+        "go2x5": "go2x5_config.py",
+        "go2x5_ftlift": "go2x5_ftlift_config.py",
+    }
+    task_config_file = task_config_files.get(args.task)
+    if task_config_file is not None:
+        wandb.save(LEGGED_GYM_ENVS_DIR + f"/manip_loco/{task_config_file}", policy="now")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/manip_loco/manip_loco.py", policy="now")
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)

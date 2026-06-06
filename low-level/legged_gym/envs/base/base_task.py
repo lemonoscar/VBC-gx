@@ -140,6 +140,7 @@ class BaseTask():
         raise NotImplementedError
 
     def lookat(self, i):
+        i = int(i) % self.num_envs
         look_at_pos = self.root_states[i, :3].clone()
         cam_pos = look_at_pos + self.lookat_vec
         self.set_camera(cam_pos, look_at_pos)
@@ -154,7 +155,7 @@ class BaseTask():
             for i in range(9):
                 if evt.action == "lookat" + str(i) and evt.value > 0:
                     self.lookat(i)
-                    self.lookat_id = i
+                    self.lookat_id = int(i) % self.num_envs
             if evt.action == "prev_id" and evt.value > 0:
                 self.lookat_id  = (self.lookat_id-1) % self.num_envs
                 self.lookat(self.lookat_id)

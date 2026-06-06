@@ -319,23 +319,30 @@ class ManipLoco_rewards:
         roll = self.env._get_body_orientation()[:, 0]
         error = torch.abs(roll)
         return error, error
+
+    def _base_height_relative_to_terrain(self):
+        base_height = self.env.root_states[:, 2]
+        measured_heights = getattr(self.env, "measured_heights", None)
+        if torch.is_tensor(measured_heights) and measured_heights.ndim == 2:
+            base_height = base_height - torch.mean(measured_heights, dim=1)
+        return base_height
     
     def _reward_base_height(self):
-        # Penalize deviation from target base height on both sides for stable standing
-        base_height = self.env.root_states[:, 2]
+        # Penalize deviation from target body height relative to terrain, not absolute world z.
+        base_height = self._base_height_relative_to_terrain()
         error = torch.abs(base_height - self.env.cfg.rewards.base_height_target)
         return error, base_height
 
     def _reward_height_adaptation(self):
         """Encourage lower body posture when EE goal is near the ground.
         When EE target z is low (~0.1m), body should crouch (~0.15m).
-        When EE target z is high (~0.45m), body stays at natural height (~0.28m).
+        When EE target z is high (~0.45m), body stays near the configured natural height.
         """
         ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
-        base_height = self.env.root_states[:, 2]
+        base_height = self._base_height_relative_to_terrain()
 
         sphere_center_z = self.env.cfg.goal_ee.sphere_center.z_invariant_offset  # 0.45
-        natural_body_h = self.env.cfg.rewards.base_height_target                 # 0.28
+        natural_body_h = self.env.cfg.rewards.base_height_target
         min_body_h = getattr(self.env.cfg.rewards, 'min_body_height', 0.15)
 
         # Adaptive target: proportional to EE goal height, clamped to feasible range

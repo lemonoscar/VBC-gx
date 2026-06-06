@@ -277,9 +277,9 @@ class ManipLoco(LeggedRobot):
 
         # r_threshold_buff = ((r > 0.2) & (self.curr_ee_goal_sphere[:, 2] >= 0)) | ((r < -0.2) & (self.curr_ee_goal_sphere[:, 2] <= 0))
         # p_threshold_buff = ((p > 0.2) & (self.curr_ee_goal_sphere[:, 1] >= 0)) | ((p < -0.2) & (self.curr_ee_goal_sphere[:, 1] <= 0))
-        r_term = torch.abs(r) > 0.8
-        p_term = torch.abs(p) > 0.8
-        z_term = z < 0.1
+        r_term = torch.abs(r) > self.cfg.termination.r_threshold
+        p_term = torch.abs(p) > self.cfg.termination.p_threshold
+        z_term = z < self.cfg.termination.z_threshold
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
 
         # arm_base_local = torch.tensor([0.3, 0.0, 0.09], device=self.device).repeat(self.num_envs, 1)

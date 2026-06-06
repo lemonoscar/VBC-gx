@@ -40,22 +40,21 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         hold_time = [0.5, 2]
         collision_upper_limits = [0.1, 0.2, -0.05]
         collision_lower_limits = [-0.8, -0.2, -0.7]
-        underground_limit = -0.7  # local cartesian z (world_z = z_invariant_offset + local_z = 0.45 + (-0.7) = -0.25m, well below ground but limits extreme downward goals)
+        underground_limit = -0.6  # local cartesian z; keeps sampled EE goals from spending too much time below the terrain.
         num_collision_check_samples = 10
         command_mode = 'sphere'
         arm_induced_pitch = 0.38
 
         class sphere_center:
-            x_offset = 0.3  # Relative to base
+            x_offset = 0.22  # Relative to base; shifted closer to the Go2-X5-lab arm mount at x=0.085.
             y_offset = 0    # Relative to base
-            z_invariant_offset = 0.45  # Relative to terrain
-            # Lower the goal sphere so low targets are reachable while moving.
+            z_invariant_offset = 0.37  # Relative to terrain; target sphere center lowered by 5 cm.
 
         class ranges:
-            init_pos_start = [0.36, np.pi/10, 0]
-            init_pos_end = [0.52, 0, 0]
-            pos_l = [0.25, 0.50]  # Slightly wider reach window while enabling lower goals.
-            pos_p = [-0.7, 1 * np.pi / 3]  # Keep sampled EE goals above ground for stable first-stage training.
+            init_pos_start = [0.30, np.pi/10, 0]
+            init_pos_end = [0.44, 0, 0]
+            pos_l = [0.20, 0.50]
+            pos_p = [-0.6, 1 * np.pi / 3]  # Keep sampled EE goals reachable and above ground for stable first-stage training.
             pos_y = [-1.2, 1.2]
             
             delta_orn_r = [-0.5, 0.5]
@@ -138,7 +137,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         frequencies = 2
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.35]  # Go2-specific spawn height; B1Z1 uses 0.5 m.
+        pos = [0.0, 0.0, 0.32]  # Go2-specific spawn height; keep close to the 0.30-0.32 m working stance.
         leg_reset_ratio_range = [0.98, 1.02]
         arm_reset_noise_range = [-0.05, 0.05]
         # Go2 leg joints and X5 arm joints
@@ -160,27 +159,27 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             'RR_thigh_joint': 0.8,
             'RR_calf_joint': -1.5,
 
-            # X5 arm joints - natural forward-pointing folded position
-            # x5_joint1: Z-axis rotation - 0.0 = arm points FORWARD, matching init IK target (yaw=0)
+            # X5 arm joints from the Go2-X5-lab URDF - natural forward-pointing folded position
+            # arm_joint1: Z-axis rotation - 0.0 = arm points FORWARD, matching init IK target (yaw=0)
             # Using π (backward) caused 800 N*m startup torque shock due to ~π mismatch with forward IK target
-            'x5_joint1': 0.0,      # Arm points forward - aligned with init_pos_start yaw=0
-            'x5_joint2': 0.5,      # Lift arm slightly
-            'x5_joint3': 1.5,      # Bend elbow to fold
-            'x5_joint4': 0.0,      # Wrist - neutral
-            'x5_joint5': 0.0,      # Wrist 2
-            'x5_joint6': 0.0,      # Wrist 3
-            'x5_joint7': 0.022,    # Gripper
-            'x5_joint8': 0.022,    # Gripper
+            'arm_joint1': 0.0,      # Arm points forward - aligned with init_pos_start yaw=0
+            'arm_joint2': 0.5,      # Lift arm slightly
+            'arm_joint3': 1.5,      # Bend elbow to fold
+            'arm_joint4': 0.0,      # Wrist - neutral
+            'arm_joint5': 0.0,      # Wrist 2
+            'arm_joint6': 0.0,      # Wrist 3
+            'arm_joint7': 0.022,    # Gripper
+            'arm_joint8': 0.022,    # Gripper
         }
         rand_yaw_range = np.pi/2
         origin_perturb_range = 0.5
         init_vel_perturb_range = 0.1
 
     class control:
-        stiffness = {'hip': 80, 'thigh': 80, 'calf': 80, 'x5': 5}  # [N*m/rad]
-        damping = {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'x5': 0.5}  # [N*m*s/rad]
-        arm_pos_stiffness = 80.0
-        arm_pos_damping = 8.0
+        stiffness = {'hip': 80, 'thigh': 80, 'calf': 80, 'arm': 5}  # [N*m/rad]
+        damping = {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'arm': 0.5}  # [N*m*s/rad]
+        arm_pos_stiffness = 120.0
+        arm_pos_damping = 12.0
 
         adaptive_arm_gains = False
         # action_scale: leg scales only; arm joints are controlled by IK position targets.
@@ -189,9 +188,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         torque_supervision = False
 
     class asset( LeggedRobotCfg.asset ):
-        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/go2x5/urdf/go2_arx_x5.urdf'
+        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/go2x5/go2_x5.urdf'
         foot_name = "foot"  # Go2 foot links are named *_foot
-        gripper_name = "ee_gripper_link"  # ARX-X5 gripper end-effector link
+        gripper_name = "arm_eef_link"  # End-effector frame from the Go2-X5-lab URDF
         # Note: Go2 has no "trunk" like B1, use "thigh" instead for penalization
         penalize_contacts_on = ["thigh", "calf"]  # Changed from ["thigh", "trunk", "calf"] for Go2
         terminate_after_contacts_on = []
@@ -209,10 +208,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         box_env_origins_z = box_size / 2 + 0.16
 
     class arm:
-        base_offset = [0.0, 0.0, 0.08]  # x5_mount in URDF is at base frame z=0.08
+        base_offset = [0.085, 0.0, 0.094]  # arm_base_joint origin in the Go2-X5-lab URDF
         init_target_ee_base = [0.2, 0.0, 0.2]
         grasp_offset = 0.08
-        ik_gain = 0.3
+        ik_gain = 0.5
         osc_kp = np.array([100, 100, 100, 30, 30, 30])
         osc_kd = 2 * (osc_kp ** 0.5)
 
@@ -239,13 +238,13 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         reward_container_name = "maniploco_rewards"
         only_positive_rewards = False
         tracking_sigma = 0.2
-        tracking_ee_sigma = 1
+        tracking_ee_sigma = 0.5
         soft_dof_pos_limit = 1.
         soft_dof_vel_limit = 1.
         soft_torque_limit = 0.4
         # Keep the locomotion height target consistent with Go2's nominal stance.
         # 0.55 is the B1 target and strongly biases Go2 toward an unrealistically tall/stiff posture.
-        base_height_target = 0.28
+        base_height_target = 0.33
         max_contact_force = 200.
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
@@ -306,7 +305,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             orientation = 0.0
             orientation_walking = 0.0
             orientation_standing = 0.0
-            base_height = -5.0
+            base_height = -0.75
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -335,7 +334,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class termination:
         r_threshold = 0.8
         p_threshold = 0.8
-        z_threshold = 0.1
+        z_threshold = 0.18
 
     class terrain:
         mesh_type = 'trimesh'
