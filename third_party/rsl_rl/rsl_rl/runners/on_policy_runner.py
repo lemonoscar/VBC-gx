@@ -174,8 +174,11 @@ class OnPolicyRunner:
             
             stop = time.time()
             learn_time = stop - start
+            metric_snapshot = {}
             if self.log_dir is not None:
-                self.log(locals())
+                metric_snapshot = self.log(locals())
+            if hasattr(self.env, "update_auto_curriculum"):
+                self.env.update_auto_curriculum(it, metric_snapshot)
             if it % self.save_interval == 0:
                 self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)), it)
             ep_infos.clear()
@@ -230,6 +233,8 @@ class OnPolicyRunner:
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
         wandb_dict['Perf/learning_time'] = locs['learn_time']
+        if hasattr(self.env, "get_curriculum_log_info"):
+            wandb_dict.update(self.env.get_curriculum_log_info())
         if len(locs['rewbuffer']) > 0:
             wandb_dict['Train/mean_reward'] = statistics.mean(locs['rewbuffer'])
             wandb_dict['Train/mean_arm_reward'] = statistics.mean(locs['armrewbuffer'])
@@ -282,13 +287,16 @@ class OnPolicyRunner:
                        f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n""")
         print(log_string)
+        return wandb_dict
 
     def save(self, path, it, infos=None):
+        metadata = self.env.get_training_metadata() if hasattr(self.env, "get_training_metadata") else None
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
             'iter': it,
             'infos': infos,
+            'metadata': metadata,
             }, path)
 
     def load(self, path, load_optimizer=True):
@@ -297,6 +305,8 @@ class OnPolicyRunner:
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
         self.current_learning_iteration = loaded_dict['iter']
+        if hasattr(self.env, "load_training_metadata"):
+            self.env.load_training_metadata(loaded_dict.get('metadata'))
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None, stochastic=False):

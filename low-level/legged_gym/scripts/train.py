@@ -102,6 +102,7 @@ def train(args):
     task_config_file = task_config_files.get(args.task)
     if task_config_file is not None:
         wandb.save(LEGGED_GYM_ENVS_DIR + f"/manip_loco/{task_config_file}", policy="now")
+        wandb.save(LEGGED_GYM_ENVS_DIR + "/manip_loco/go2x5_robot_spec.py", policy="now")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/manip_loco/manip_loco.py", policy="now")
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)

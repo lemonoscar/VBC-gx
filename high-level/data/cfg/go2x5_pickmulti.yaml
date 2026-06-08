@@ -20,8 +20,10 @@ env:
   lastCommands: False
 
   numGripperDof: 2
-  low_policy_path: "../low-level/logs/go2x5-low/go2x5_b1style_20260418/model_11800.pt"
+  low_policy_path: "../low-level/logs/go2x5-low/go2x5_stable_base_v1/model_17600.pt"
+  requireLowPolicyMetadata: True
   lowPolicyNumActions: 12
+  lowPolicyObserveGaitCommands: True
   lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45]
   lowLevelLinVelClip: 0.15
   lowLevelAngVelYawClip: 0.35
@@ -31,17 +33,18 @@ env:
   initialEEGoalCart: [0.28, 0.0, 0.18]
   initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
   maskArmGoalCart: [0.35, 0.0, 0.25]
-  armBaseOffset: [0.0, 0.0, 0.08]
+  armBaseOffset: [0.085, 0.0, 0.094]
   baseHeightClip: [0.2, 0.42]
-  wristBodyName: "link6"
-  flangeBodyName: "link5"
-  fingerBodyNames: ["link7", "link8"]
+  eeBodyName: "arm_eef_link"
+  wristBodyName: "arm_link6"
+  flangeBodyName: "arm_link6"
+  fingerBodyNames: ["arm_link7", "arm_link8"]
 
   asset:
     assetRoot: "data/asset"
     robotAssetRoot: "../low-level/resources/robots"
     objectAssetRoot: "data/asset"
-    assetFileRobot: "go2x5/urdf/go2_arx_x5.urdf"
+    assetFileRobot: "go2x5/go2_x5.urdf"
     assetFileObj: "obj_set/"
 
     asset_multi:
@@ -212,8 +215,8 @@ env:
         scale: 1.0
 
     control:
-      stiffness: {'hip': 80, 'thigh': 80, 'calf': 80, 'x5': 5}
-      damping: {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'x5': 0.5}
+      stiffness: {'hip': 80, 'thigh': 80, 'calf': 80, 'arm': 5}
+      damping: {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'arm': 0.5}
 
   plane:
     staticFriction: 1.0

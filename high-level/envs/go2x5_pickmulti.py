@@ -10,41 +10,41 @@ class Go2X5PickMulti(B1Z1PickMulti):
     def _set_default_joint_angles_dict(self):
         if self.floating_base:
             default_joint_angles = {
-                'x5_joint1': 0.0,
-                'x5_joint2': 0.5,
-                'x5_joint3': 1.5,
-                'x5_joint4': 0.0,
-                'x5_joint5': 0.0,
-                'x5_joint6': 0.0,
-                'x5_joint7': 0.022,
-                'x5_joint8': 0.022,
+                'arm_joint1': 0.0,
+                'arm_joint2': 0.5,
+                'arm_joint3': 1.5,
+                'arm_joint4': 0.0,
+                'arm_joint5': 0.0,
+                'arm_joint6': 0.0,
+                'arm_joint7': 0.022,
+                'arm_joint8': 0.022,
             }
         else:
             default_joint_angles = {
-                'FL_hip_joint': 0.0,
-                'FL_thigh_joint': 0.9,
-                'FL_calf_joint': -1.8,
+                'FL_hip_joint': 0.2,
+                'FL_thigh_joint': 0.8,
+                'FL_calf_joint': -1.5,
 
-                'RL_hip_joint': 0.0,
-                'RL_thigh_joint': 1.0,
-                'RL_calf_joint': -1.8,
+                'RL_hip_joint': 0.2,
+                'RL_thigh_joint': 0.8,
+                'RL_calf_joint': -1.5,
 
-                'FR_hip_joint': 0.0,
-                'FR_thigh_joint': 0.9,
-                'FR_calf_joint': -1.8,
+                'FR_hip_joint': -0.2,
+                'FR_thigh_joint': 0.8,
+                'FR_calf_joint': -1.5,
 
-                'RR_hip_joint': 0.0,
-                'RR_thigh_joint': 1.0,
-                'RR_calf_joint': -1.8,
+                'RR_hip_joint': -0.2,
+                'RR_thigh_joint': 0.8,
+                'RR_calf_joint': -1.5,
 
-                'x5_joint1': 0.0,
-                'x5_joint2': 0.5,
-                'x5_joint3': 1.5,
-                'x5_joint4': 0.0,
-                'x5_joint5': 0.0,
-                'x5_joint6': 0.0,
-                'x5_joint7': 0.022,
-                'x5_joint8': 0.022,
+                'arm_joint1': 0.0,
+                'arm_joint2': 0.5,
+                'arm_joint3': 1.5,
+                'arm_joint4': 0.0,
+                'arm_joint5': 0.0,
+                'arm_joint6': 0.0,
+                'arm_joint7': 0.022,
+                'arm_joint8': 0.022,
             }
         return default_joint_angles
 

@@ -31,6 +31,8 @@
 import time
 import numpy as np
 import os
+import hashlib
+from collections import defaultdict, deque
 
 from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
@@ -44,6 +46,7 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.helpers import class_to_dict
 from legged_gym.utils.terrain import Terrain, Terrain_Perlin
 from .b1z1_config import B1Z1RoughCfg
+from . import go2x5_robot_spec as go2x5_robot_spec
 
 import sys
 
@@ -52,15 +55,212 @@ class ManipLoco(LeggedRobot):
     cfg: B1Z1RoughCfg
 
     def __init__(self, cfg, *args, **kwargs):
+        self._apply_initial_auto_curriculum(cfg)
+        base_num_proprio = getattr(cfg.env, "_base_num_proprio", cfg.env.num_proprio)
+        cfg.env._base_num_proprio = base_num_proprio
         if cfg.env.observe_gait_commands:
             print("||||||||||Observe gait commands!")
-            cfg.env.num_proprio += 5 # gait_indices=1, clock_phase=4
-            cfg.env.num_observations = cfg.env.num_proprio * (cfg.env.history_len+1) + cfg.env.num_priv
-            self.num_obs = cfg.env.num_observations
+            cfg.env.num_proprio = base_num_proprio + 5 # gait_indices=1, clock_phase=4
+        else:
+            cfg.env.num_proprio = base_num_proprio
+        cfg.env.num_observations = cfg.env.num_proprio * (cfg.env.history_len+1) + cfg.env.num_priv
+        self.num_obs = cfg.env.num_observations
         self.stand_by = cfg.env.stand_by
         super().__init__(cfg, *args, **kwargs)
+        if getattr(self, "auto_curriculum_enabled", False) and self.curriculum_stages:
+            self.set_training_stage(self.curriculum_stage_index, self.curriculum_stage_cfg, iteration=0)
         # Call reset after init to set initial joint positions
         self.reset_idx(torch.arange(self.num_envs, device=self.device), start=True)
+
+    @staticmethod
+    def _apply_initial_auto_curriculum(cfg):
+        auto_cfg = getattr(cfg, "auto_curriculum", None)
+        if auto_cfg is None or not getattr(auto_cfg, "enabled", False):
+            return
+        stages = getattr(auto_cfg, "stages", [])
+        if not stages:
+            return
+        stage_index = max(0, min(getattr(auto_cfg, "current_stage_index", 0), len(stages) - 1))
+        ManipLoco._apply_stage_to_cfg(cfg, stages[stage_index])
+        auto_cfg.current_stage_index = stage_index
+        auto_cfg.current_stage_name = stages[stage_index].get("name", f"stage_{stage_index}")
+
+    @staticmethod
+    def _apply_stage_to_cfg(cfg, stage_cfg):
+        domain_rand = cfg.domain_rand
+        rewards = cfg.rewards
+        if "push_robots" in stage_cfg:
+            domain_rand.push_robots = stage_cfg["push_robots"]
+        if "max_push_vel_xy" in stage_cfg:
+            domain_rand.max_push_vel_xy = stage_cfg["max_push_vel_xy"]
+        if "friction_range" in stage_cfg:
+            domain_rand.friction_range = stage_cfg["friction_range"]
+        if "added_mass_range" in stage_cfg:
+            domain_rand.added_mass_range = stage_cfg["added_mass_range"]
+        if "added_com_range" in stage_cfg:
+            domain_rand.added_com_range_x = stage_cfg["added_com_range"][0]
+            domain_rand.added_com_range_y = stage_cfg["added_com_range"][1]
+            domain_rand.added_com_range_z = stage_cfg["added_com_range"][2]
+        if "leg_motor_strength_range" in stage_cfg:
+            domain_rand.leg_motor_strength_range = stage_cfg["leg_motor_strength_range"]
+        if "goal_pos_l" in stage_cfg:
+            cfg.goal_ee.ranges.pos_l = stage_cfg["goal_pos_l"]
+        if "goal_pos_p" in stage_cfg:
+            cfg.goal_ee.ranges.pos_p = stage_cfg["goal_pos_p"]
+        if "collision_force_threshold" in stage_cfg:
+            rewards.collision_force_threshold = stage_cfg["collision_force_threshold"]
+        if "terrain" in stage_cfg:
+            cfg.terrain.curriculum = True
+            max_terrain_level = int(stage_cfg.get("max_terrain_level", 1))
+            cfg.terrain.max_init_terrain_level = max(0, max_terrain_level - 1)
+
+        reward_scale_map = {
+            "collision_scale": ("scales", "collision"),
+            "hip_pos_scale": ("scales", "hip_pos"),
+            "roll_scale": ("scales", "roll"),
+            "torques_scale": ("scales", "torques"),
+            "work_scale": ("scales", "work"),
+            "ee_tracking_weight": ("arm_scales", "tracking_ee_world"),
+        }
+        for stage_key, (container_name, reward_name) in reward_scale_map.items():
+            if stage_key in stage_cfg:
+                setattr(getattr(rewards, container_name), reward_name, stage_cfg[stage_key])
+
+    def set_training_stage(self, stage_index, stage_cfg, iteration=None):
+        stage_index = int(stage_index)
+        self._apply_stage_to_cfg(self.cfg, stage_cfg)
+        self.curriculum_stage_index = stage_index
+        self.curriculum_stage_name = stage_cfg.get("name", f"stage_{stage_index}")
+        self.curriculum_stage_cfg = stage_cfg
+        self.curriculum_stage_iteration = iteration
+        if hasattr(self.cfg.auto_curriculum, "current_stage_index"):
+            self.cfg.auto_curriculum.current_stage_index = stage_index
+            self.cfg.auto_curriculum.current_stage_name = self.curriculum_stage_name
+
+        self.goal_ee_ranges = class_to_dict(self.cfg.goal_ee.ranges)
+        self.reward_scales.update(class_to_dict(self.cfg.rewards.scales))
+        self.reward_scales = {k: v for k, v in self.reward_scales.items() if v is not None and v != 0}
+        self.arm_reward_scales.update(class_to_dict(self.cfg.rewards.arm_scales))
+        self.arm_reward_scales = {k: v for k, v in self.arm_reward_scales.items() if v is not None and v != 0}
+        self.push_interval = np.ceil(self.cfg.domain_rand.push_interval_s / self.dt)
+        if "max_terrain_level" in stage_cfg and hasattr(self, "terrain_levels"):
+            self.max_terrain_level = max(1, min(int(stage_cfg["max_terrain_level"]), self.cfg.terrain.num_rows))
+            self.terrain_levels[:] = torch.clamp(self.terrain_levels, 0, self.max_terrain_level - 1)
+            self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
+
+        if getattr(self.cfg.auto_curriculum, "log_stage", True):
+            print(f"[Go2X5 curriculum] iteration={iteration} stage={stage_index}:{self.curriculum_stage_name}")
+        self.curriculum_metric_history.clear()
+
+    @staticmethod
+    def _metric_to_float(value):
+        if isinstance(value, torch.Tensor):
+            value = value.detach().mean().cpu().item()
+        if isinstance(value, (float, int, np.floating, np.integer)):
+            return float(value)
+        return None
+
+    def _record_curriculum_metrics(self, metrics):
+        for key, value in (metrics or {}).items():
+            scalar = self._metric_to_float(value)
+            if scalar is not None:
+                self.curriculum_metric_history[key].append(scalar)
+
+    def _curriculum_metric_mean(self, key):
+        values = self.curriculum_metric_history.get(key)
+        if not values:
+            return None
+        return float(np.mean(values))
+
+    def _advance_conditions_met(self, stage_cfg):
+        conditions = stage_cfg.get("advance", {})
+        for key, condition in conditions.items():
+            value = self._curriculum_metric_mean(key)
+            if value is None:
+                return False
+            op, threshold = condition
+            if op == ">" and not value > threshold:
+                return False
+            if op == "<" and not value < threshold:
+                return False
+        return True
+
+    def update_auto_curriculum(self, iteration, metrics=None):
+        if not getattr(self, "auto_curriculum_enabled", False):
+            return
+        self._record_curriculum_metrics(metrics)
+        if self.curriculum_stage_index >= len(self.curriculum_stages) - 1:
+            return
+
+        current_stage = self.curriculum_stages[self.curriculum_stage_index]
+        min_iterations = current_stage.get("min_iterations", 0)
+        if iteration < min_iterations:
+            return
+        if not self._advance_conditions_met(current_stage):
+            return
+
+        next_index = self.curriculum_stage_index + 1
+        self.set_training_stage(next_index, self.curriculum_stages[next_index], iteration=iteration)
+
+    def get_curriculum_log_info(self):
+        if not getattr(self, "auto_curriculum_enabled", False):
+            return {}
+        return {
+            "Curriculum/stage_index": self.curriculum_stage_index,
+            "Curriculum/stage_min_iterations": self.curriculum_stage_cfg.get("min_iterations", 0),
+            "Curriculum/max_terrain_level": self.curriculum_stage_cfg.get("max_terrain_level", 0),
+            "Curriculum/collision_force_threshold": getattr(self.cfg.rewards, "collision_force_threshold", 0.0),
+        }
+
+    def _asset_sha256(self):
+        asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
+        try:
+            with open(asset_path, "rb") as asset_file:
+                return hashlib.sha256(asset_file.read()).hexdigest()
+        except OSError:
+            return None
+
+    def get_training_metadata(self):
+        asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
+        return {
+            "go2x5_alignment": {
+                "schema_version": 1,
+                "asset_file": asset_path,
+                "asset_sha256": self._asset_sha256(),
+                "action_dim": self.cfg.env.num_actions,
+                "num_torques": self.cfg.env.num_torques,
+                "num_gripper_joints": self.cfg.env.num_gripper_joints,
+                "num_proprio": self.cfg.env.num_proprio,
+                "num_priv": self.cfg.env.num_priv,
+                "history_len": self.cfg.env.history_len,
+                "num_observations": self.cfg.env.num_observations,
+                "observe_gait_commands": self.cfg.env.observe_gait_commands,
+                "ee_body_name": self.cfg.asset.gripper_name,
+                "arm_base_offset": list(self.cfg.arm.base_offset),
+                "spec_action_dim": go2x5_robot_spec.ACTION_DIM,
+                "spec_proprio_without_gait": go2x5_robot_spec.PROPRIO_DIM_WITHOUT_GAIT,
+                "curriculum": {
+                    "enabled": getattr(self, "auto_curriculum_enabled", False),
+                    "profile_name": getattr(self, "curriculum_profile_name", ""),
+                    "stage_index": getattr(self, "curriculum_stage_index", 0),
+                    "stage_name": getattr(self, "curriculum_stage_name", ""),
+                    "stage_iteration": getattr(self, "curriculum_stage_iteration", None),
+                    "max_terrain_level": getattr(self, "max_terrain_level", None),
+                },
+            }
+        }
+
+    def load_training_metadata(self, metadata):
+        if not metadata or not getattr(self, "auto_curriculum_enabled", False):
+            return
+        alignment = metadata.get("go2x5_alignment", metadata)
+        curriculum = alignment.get("curriculum", {})
+        stage_index = curriculum.get("stage_index")
+        if stage_index is None:
+            return
+        stage_index = int(stage_index)
+        if 0 <= stage_index < len(self.curriculum_stages):
+            self.set_training_stage(stage_index, self.curriculum_stages[stage_index], iteration=curriculum.get("stage_iteration"))
 
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
@@ -371,6 +571,21 @@ class ManipLoco(LeggedRobot):
         self.action_delay = self.cfg.env.action_delay
         self.stop_update_goal = self.cfg.env.stop_update_goal
         self.record_video = self.cfg.env.record_video
+        auto_cfg = getattr(self.cfg, "auto_curriculum", None)
+        self.auto_curriculum_enabled = bool(auto_cfg is not None and getattr(auto_cfg, "enabled", False))
+        self.curriculum_stages = list(getattr(auto_cfg, "stages", [])) if self.auto_curriculum_enabled else []
+        self.curriculum_profile_name = getattr(auto_cfg, "profile_name", "") if auto_cfg is not None else ""
+        self.curriculum_stage_index = int(getattr(auto_cfg, "current_stage_index", 0)) if self.curriculum_stages else 0
+        if self.curriculum_stages:
+            self.curriculum_stage_index = max(0, min(self.curriculum_stage_index, len(self.curriculum_stages) - 1))
+            self.curriculum_stage_cfg = self.curriculum_stages[self.curriculum_stage_index]
+            self.curriculum_stage_name = self.curriculum_stage_cfg.get("name", f"stage_{self.curriculum_stage_index}")
+        else:
+            self.curriculum_stage_cfg = {}
+            self.curriculum_stage_name = ""
+        self.curriculum_stage_iteration = None
+        metric_window = int(getattr(auto_cfg, "metric_window", 200)) if auto_cfg is not None else 200
+        self.curriculum_metric_history = defaultdict(lambda: deque(maxlen=metric_window))
 
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.

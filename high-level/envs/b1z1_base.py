@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import hashlib
 import torch
 import cv2
 import random
@@ -77,6 +78,14 @@ class B1Z1Base(RewardVecTask):
         self.base_height_clip_cfg = self.cfg["env"].get("baseHeightClip", [0.4, 0.55])
         self.arm_base_offset_cfg = self.cfg["env"].get("armBaseOffset", [0.3, 0.0, 0.09])
         self.low_policy_num_actions = int(self.cfg["env"].get("lowPolicyNumActions", 18))
+        self.low_policy_metadata_required = bool(self.cfg["env"].get("requireLowPolicyMetadata", True))
+        cfg_observe_gait = self.cfg["env"].get("lowPolicyObserveGaitCommands", None)
+        if cfg_observe_gait is not None and (not self.floating_base):
+            if bool(cfg_observe_gait) != self.observe_gait_commands:
+                raise ValueError(
+                    "lowPolicyObserveGaitCommands in yaml must match --observe_gait_commands "
+                    f"(yaml={bool(cfg_observe_gait)}, runtime={self.observe_gait_commands})"
+                )
 
         self.num_torques = 18
         if sim_device == "cpu":
@@ -173,6 +182,14 @@ class B1Z1Base(RewardVecTask):
             imgs.append(img.reshape([w, h // 4, 4]))
         return imgs
 
+    def _find_required_body_index(self, body_name, role):
+        body_idx = self.gym.find_actor_rigid_body_index(
+            self.envs[0], self.robot_handles[0], body_name, gymapi.DOMAIN_ENV
+        )
+        if body_idx < 0:
+            raise ValueError(f"Missing {role} body '{body_name}' in robot asset. Available bodies: {self.body_names}")
+        return body_idx
+
     def _extra_env_settings(self):
         """
         Extrta settings for the environment, different from each environment.
@@ -268,22 +285,21 @@ class B1Z1Base(RewardVecTask):
         self.arm_base_offset = torch.tensor(self.arm_base_offset_cfg, device=self.device, dtype=torch.float)
 
         self.jacobian_whole = gymtorch.wrap_tensor(self._jacobian_tensor)
-        self.gripper_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], "ee_gripper_link", gymapi.DOMAIN_ENV)
+        ee_body_name = self.cfg["env"].get("eeBodyName", "ee_gripper_link")
+        self.gripper_idx = self._find_required_body_index(ee_body_name, "end-effector")
         self.ee_j_eef = self.jacobian_whole[:, self.gripper_idx, :6, -(6 + self.num_gripper_dof):-self.num_gripper_dof]
         self.ee_pos = rigid_body_state_reshaped[:, self.gripper_idx, 0:3]
         self.ee_orn = rigid_body_state_reshaped[:, self.gripper_idx, 3:7]
 
         wrist_body_name = self.cfg["env"].get("wristBodyName", "link06")
         flange_body_name = self.cfg["env"].get("flangeBodyName", "link05")
-        self.wrist_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], wrist_body_name, gymapi.DOMAIN_ENV)
-        self.flange_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], flange_body_name, gymapi.DOMAIN_ENV)
+        self.wrist_idx = self._find_required_body_index(wrist_body_name, "wrist")
+        self.flange_idx = self._find_required_body_index(flange_body_name, "flange")
 
         finger_body_names = self.cfg["env"].get("fingerBodyNames", [])
         self.finger_indices = []
         for body_name in finger_body_names:
-            body_idx = self.gym.find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], body_name, gymapi.DOMAIN_ENV)
-            if body_idx >= 0:
-                self.finger_indices.append(body_idx)
+            self.finger_indices.append(self._find_required_body_index(body_name, "finger"))
 
         self.gripper_dof_pos = torch.zeros(self.num_envs, self.num_gripper_dof, device=self.device)
         self.gripper_dof_vel = torch.zeros(self.num_envs, self.num_gripper_dof, device=self.device)
@@ -485,6 +501,8 @@ class B1Z1Base(RewardVecTask):
     def _create_wrist_cameras(self, env_handle, actor_handle, i):
         wrist_body_name = self.cfg["env"].get("wristBodyName", "link06")
         wrist_handle = self.gym.find_actor_rigid_body_handle(env_handle, actor_handle, wrist_body_name)
+        if wrist_handle < 0:
+            raise ValueError(f"Missing wrist camera body '{wrist_body_name}' in robot asset. Available bodies: {self.body_names}")
         camera_props = gymapi.CameraProperties()
         camera_props.enable_tensors = True
         camera_props.height = self.cfg["sensor"]["wrist_camera"]["resolution"][1]
@@ -522,6 +540,57 @@ class B1Z1Base(RewardVecTask):
             gymapi.FOLLOW_TRANSFORM,
         )
         return camera_handle
+
+    def _robot_asset_path(self):
+        asset_cfg = self.cfg["env"]["asset"]
+        asset_root = asset_cfg.get("robotAssetRoot", asset_cfg["assetRoot"])
+        if not os.path.isabs(asset_root):
+            high_level_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            asset_root = os.path.abspath(os.path.join(high_level_root, asset_root))
+        return os.path.abspath(os.path.join(asset_root, asset_cfg["assetFileRobot"]))
+
+    @staticmethod
+    def _file_sha256(path):
+        with open(path, "rb") as file:
+            return hashlib.sha256(file.read()).hexdigest()
+
+    def _validate_low_level_metadata(self, loaded_dict, policy_path):
+        metadata = loaded_dict.get("metadata") or {}
+        alignment = metadata.get("go2x5_alignment")
+        if alignment is None:
+            if self.low_policy_metadata_required:
+                raise RuntimeError(
+                    f"Low-level checkpoint '{policy_path}' has no go2x5_alignment metadata. "
+                    "Retrain with the updated low-level runner or set requireLowPolicyMetadata: False only for legacy debugging."
+                )
+            return
+
+        checks = [
+            ("action_dim", alignment.get("action_dim"), self.low_policy_num_actions),
+            ("num_proprio", alignment.get("num_proprio"), self.num_proprio),
+            ("num_priv", alignment.get("num_priv"), self.num_priv),
+            ("history_len", alignment.get("history_len"), self.history_len),
+            ("observe_gait_commands", alignment.get("observe_gait_commands"), self.observe_gait_commands),
+            ("ee_body_name", alignment.get("ee_body_name"), self.cfg["env"].get("eeBodyName", "ee_gripper_link")),
+        ]
+        for name, actual, expected in checks:
+            if actual != expected:
+                raise RuntimeError(f"Low-level checkpoint metadata mismatch for {name}: checkpoint={actual}, high-level={expected}")
+
+        expected_offset = self.cfg["env"].get("armBaseOffset", [])
+        actual_offset = alignment.get("arm_base_offset", [])
+        if len(actual_offset) != len(expected_offset) or any(abs(float(a) - float(b)) > 1e-6 for a, b in zip(actual_offset, expected_offset)):
+            raise RuntimeError(f"Low-level checkpoint metadata mismatch for arm_base_offset: checkpoint={actual_offset}, high-level={expected_offset}")
+
+        asset_sha256 = alignment.get("asset_sha256")
+        if asset_sha256:
+            robot_asset_path = self._robot_asset_path()
+            high_level_sha256 = self._file_sha256(robot_asset_path)
+            if asset_sha256 != high_level_sha256:
+                raise RuntimeError(
+                    "Low-level checkpoint metadata mismatch for robot asset hash: "
+                    f"checkpoint={asset_sha256}, high-level={high_level_sha256}, asset={robot_asset_path}"
+                )
     
     # def draw_link06(self, i):
     #     axes_geom = gymutil.AxesGeometry(scale=0.2)
@@ -753,6 +822,7 @@ class B1Z1Base(RewardVecTask):
                                                     )
         policy_path = self.cfg["env"]["low_policy_path"]
         loaded_dict = torch.load(policy_path, map_location=self.device)
+        self._validate_low_level_metadata(loaded_dict, policy_path)
         low_actor_critic.load_state_dict(loaded_dict["model_state_dict"])
         low_actor_critic = low_actor_critic.to(self.device)
         low_actor_critic.eval()

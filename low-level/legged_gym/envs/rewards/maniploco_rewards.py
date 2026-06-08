@@ -167,7 +167,11 @@ class ManipLoco_rewards:
         return rew, rew
     
     def _reward_collision(self):
-        rew = torch.sum(1.*(torch.norm(self.env.contact_forces[:, self.env.penalized_contact_indices, :], dim=-1) > 0.1), dim=1)
+        threshold = getattr(self.env.cfg.rewards, "collision_force_threshold", 5.0)
+        soft_clip = getattr(self.env.cfg.rewards, "collision_soft_clip", 50.0)
+        contact_force = torch.norm(self.env.contact_forces[:, self.env.penalized_contact_indices, :], dim=-1)
+        excess = torch.clamp(contact_force - threshold, min=0.0, max=soft_clip)
+        rew = torch.sum(excess / max(threshold, 1e-6), dim=1)
         return rew, rew
         
     def _reward_stand_still(self):
