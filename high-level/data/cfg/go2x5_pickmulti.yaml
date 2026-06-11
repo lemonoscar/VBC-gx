@@ -24,6 +24,7 @@ env:
   requireLowPolicyMetadata: True
   lowPolicyNumActions: 12
   lowPolicyObserveGaitCommands: True
+  lowPolicyReorderDofs: False
   lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45]
   lowLevelLinVelClip: 0.15
   lowLevelAngVelYawClip: 0.35

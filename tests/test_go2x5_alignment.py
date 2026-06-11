@@ -40,6 +40,8 @@ def test_robot_spec_matches_go2x5_urdf():
     assert URDF_PATH.exists()
     assert len(movable_joint_names) == spec.NUM_DOFS
     assert movable_joint_names == spec.MOVABLE_JOINT_NAMES
+    assert spec.POLICY_LEG_JOINT_NAMES == spec.LEG_JOINT_NAMES
+    assert spec.FOOT_BODY_NAMES == ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
     assert spec.EE_BODY_NAME in link_names
     assert spec.WRIST_BODY_NAME in link_names
     assert spec.FLANGE_BODY_NAME in link_names
@@ -54,6 +56,7 @@ def test_high_level_yaml_uses_same_robot_interface():
 
     assert env_cfg["lowPolicyNumActions"] == spec.ACTION_DIM
     assert env_cfg["lowPolicyObserveGaitCommands"] is True
+    assert env_cfg["lowPolicyReorderDofs"] is False
     assert env_cfg["requireLowPolicyMetadata"] is True
     assert env_cfg["lowActionScale"] == spec.LOW_ACTION_SCALE
     assert env_cfg["armBaseOffset"] == spec.ARM_BASE_OFFSET
@@ -84,17 +87,23 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     go2x5_pickmulti = (ROOT / "high-level/envs/go2x5_pickmulti.py").read_text(encoding="utf-8")
     b1z1_base = (ROOT / "high-level/envs/b1z1_base.py").read_text(encoding="utf-8")
     go2x5_config = (ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_config.py").read_text(encoding="utf-8")
+    manip_loco = (ROOT / "low-level/legged_gym/envs/manip_loco/manip_loco.py").read_text(encoding="utf-8")
 
     assert "x5_joint" not in go2x5_pickmulti
     assert 'find_actor_rigid_body_index(self.envs[0], self.robot_handles[0], "ee_gripper_link"' not in b1z1_base
     assert 'self.cfg["env"].get("eeBodyName"' in b1z1_base
     assert "robot_spec.ACTION_DIM" in go2x5_config
+    assert "reorder_dofs = False" in go2x5_config
+    assert 'profile_name = "go2x5_stable_auto_v2"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert "S0_sanity_flat" in go2x5_config
     assert "S4_robustness" in go2x5_config
     assert '"max_terrain_level": 1' in go2x5_config
     assert '"max_terrain_level": 10' in go2x5_config
     assert "collision_force_threshold = 5.0" in go2x5_config
+    assert "def _reward_foot_lateral_spacing" in (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
+    assert "if not self.cfg.env.reorder_dofs:" in manip_loco
+    assert '"reorder_dofs": self.cfg.env.reorder_dofs' in manip_loco
 
 
 if __name__ == "__main__":

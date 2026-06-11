@@ -78,6 +78,7 @@ class B1Z1Base(RewardVecTask):
         self.base_height_clip_cfg = self.cfg["env"].get("baseHeightClip", [0.4, 0.55])
         self.arm_base_offset_cfg = self.cfg["env"].get("armBaseOffset", [0.3, 0.0, 0.09])
         self.low_policy_num_actions = int(self.cfg["env"].get("lowPolicyNumActions", 18))
+        self.low_policy_reorder_dofs = bool(self.cfg["env"].get("lowPolicyReorderDofs", True))
         self.low_policy_metadata_required = bool(self.cfg["env"].get("requireLowPolicyMetadata", True))
         cfg_observe_gait = self.cfg["env"].get("lowPolicyObserveGaitCommands", None)
         if cfg_observe_gait is not None and (not self.floating_base):
@@ -189,6 +190,16 @@ class B1Z1Base(RewardVecTask):
         if body_idx < 0:
             raise ValueError(f"Missing {role} body '{body_name}' in robot asset. Available bodies: {self.body_names}")
         return body_idx
+
+    def _reindex_low_all(self, vec):
+        if self.low_policy_reorder_dofs:
+            return reindex_all(vec)
+        return vec
+
+    def _reindex_low_feet(self, vec):
+        if self.low_policy_reorder_dofs:
+            return reindex_feet(vec)
+        return vec
 
     def _extra_env_settings(self):
         """
@@ -571,6 +582,7 @@ class B1Z1Base(RewardVecTask):
             ("num_priv", alignment.get("num_priv"), self.num_priv),
             ("history_len", alignment.get("history_len"), self.history_len),
             ("observe_gait_commands", alignment.get("observe_gait_commands"), self.observe_gait_commands),
+            ("reorder_dofs", alignment.get("reorder_dofs"), self.low_policy_reorder_dofs),
             ("ee_body_name", alignment.get("ee_body_name"), self.cfg["env"].get("eeBodyName", "ee_gripper_link")),
         ]
         for name, actual, expected in checks:
@@ -705,6 +717,9 @@ class B1Z1Base(RewardVecTask):
         robot_body_dict = self.gym.get_asset_rigid_body_dict(robot_asset)
         robot_body_names = self.gym.get_asset_rigid_body_names(robot_asset)
         feet_names = [s for s in robot_body_names if "foot" in s]
+        preferred_feet_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+        if all(name in feet_names for name in preferred_feet_names):
+            feet_names = preferred_feet_names
         self.sensor_indices = []
         for name in feet_names:
             foot_idx = robot_body_dict[name]
@@ -950,30 +965,30 @@ class B1Z1Base(RewardVecTask):
         if self.rand_cmd_scale:
             commands[:, 0] *= self.command_scale
         low_action_obs = self.last_low_actions[:, :12]
-        if self.low_policy_num_actions > 12:
-            low_action_obs = reindex_all(self.last_low_actions)[:, :12]
+        if self.low_policy_reorder_dofs and self.low_policy_num_actions > 12:
+            low_action_obs = self._reindex_low_all(self.last_low_actions)[:, :12]
         low_level_obs_buf = torch.cat((self.get_body_orientation(), # dim 2
                                        base_ang_vel, # dim 3
-                                       reindex_all(self._dof_pos - self._initial_dof_pos)[:, :-self.num_gripper_joints], # dim 19 or 20
-                                       reindex_all(self._dof_vel * 0.05)[:, :-self.num_gripper_joints], # dim 19 or 20
+                                       self._reindex_low_all(self._dof_pos - self._initial_dof_pos)[:, :-self.num_gripper_joints], # dim 19 or 20
+                                       self._reindex_low_all(self._dof_vel * 0.05)[:, :-self.num_gripper_joints], # dim 19 or 20
                                        low_action_obs,
-                                       reindex_feet(self.foot_contacts_from_sensor),
+                                       self._reindex_low_feet(self.foot_contacts_from_sensor),
                                        commands[:, :3],
                                     #    self.curr_ee_goal_sphere,
                                        self.curr_ee_goal_cart,
                                        0*self.curr_ee_goal_cart,
                                        ), dim=-1)
         if self.mask_arm:
-            arm_pos_obs = reindex_all(self._dof_pos - self._initial_dof_pos)[:, :-self.num_gripper_joints]
+            arm_pos_obs = self._reindex_low_all(self._dof_pos - self._initial_dof_pos)[:, :-self.num_gripper_joints]
             arm_pos_obs[:, 12:] = 0
-            arm_vel_obs = reindex_all(self._dof_vel * 0.05)[:, :-self.num_gripper_joints]
+            arm_vel_obs = self._reindex_low_all(self._dof_vel * 0.05)[:, :-self.num_gripper_joints]
             arm_vel_obs[:, 12:] = 0
             low_level_obs_buf = torch.cat((self.get_body_orientation(), # dim 2
                                        base_ang_vel, # dim 3
                                        arm_pos_obs, # dim 19 or 20
                                        arm_vel_obs, # dim 19 or 20
                                        low_action_obs,
-                                       reindex_feet(self.foot_contacts_from_sensor),
+                                       self._reindex_low_feet(self.foot_contacts_from_sensor),
                                        commands[:, :3],
                                     #    self.curr_ee_goal_sphere,
                                                     torch.tensor(self.mask_arm_goal_cart_cfg, device=self.device).repeat(self.num_envs, 1),
@@ -1386,7 +1401,7 @@ class B1Z1Base(RewardVecTask):
                 self._compute_low_level_observations()
                 with torch.no_grad():
                     low_actions = self.low_level_policy(self.low_obs_buf.detach(), hist_encoding=True)
-                low_actions = reindex_all(low_actions)
+                low_actions = self._reindex_low_all(low_actions)
             
                 self.last_low_actions[:] = low_actions[:]
 
