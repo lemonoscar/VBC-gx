@@ -86,12 +86,12 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         ang_vel_yaw_schedule = [0, 1]
         tracking_ang_vel_yaw_schedule = [0, 1]
 
-        ang_vel_yaw_clip = 0.15
-        lin_vel_x_clip = 0.05
+        ang_vel_yaw_clip = 0.5
+        lin_vel_x_clip = 0.2
 
         class ranges:
-            lin_vel_x = [-0.25, 0.25]
-            ang_vel_yaw = [-0.35, 0.35]
+            lin_vel_x = [-0.8, 0.8]
+            ang_vel_yaw = [-1.0, 1.0]
 
     class normalization:
         class obs_scales:
@@ -135,10 +135,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         record_video = False
         stand_by = False
         observe_gait_commands = False
-        frequencies = 1.5
+        frequencies = 2
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.31]  # Go2-specific spawn height; keep close to the low nominal working stance.
+        pos = [0.0, 0.0, 0.32]  # Go2-specific spawn height; keep close to the nominal working stance.
         leg_reset_ratio_range = [0.98, 1.02]
         arm_reset_noise_range = [-0.05, 0.05]
         # Go2 leg joints and X5 arm joints
@@ -216,17 +216,17 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         soft_torque_limit = 0.4
         # Keep the locomotion height target consistent with Go2's nominal stance.
         # 0.55 is the B1 target and strongly biases Go2 toward an unrealistically tall/stiff posture.
-        base_height_target = 0.31
+        base_height_target = 0.33
         max_contact_force = 200.
         collision_force_threshold = 5.0
         collision_soft_clip = 50.0
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
         kappa_gait_probs = 0.07
-        feet_height_target = 0.05
+        feet_height_target = 0.10
 
-        feet_aritime_allfeet = True
-        feet_height_allfeet = True
+        feet_aritime_allfeet = False
+        feet_height_allfeet = False
         foot_lateral_min = 0.06
         min_body_height = 0.15        # Minimum crouching height (~full knee bend)
         low_goal_height_thresh = 0.30 # Only trigger posture shaping when EE goal is low
@@ -234,13 +234,13 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
         class scales:
             # -------Gait control rewards ---------
-            tracking_contacts_shaped_force = -0.4
-            tracking_contacts_shaped_vel = -0.4
-            feet_air_time = 0.4
-            feet_height = 0.3
+            tracking_contacts_shaped_force = -2.0
+            tracking_contacts_shaped_vel = -2.0
+            feet_air_time = 2.0
+            feet_height = 1.0
 
             # -------Tracking rewards ----------
-            tracking_lin_vel_max = 0.6
+            tracking_lin_vel_max = 2.0
             tracking_lin_vel_x_l1 = 0.
             tracking_lin_vel_x_exp = 0
             tracking_ang_vel = 0.5
@@ -250,7 +250,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             energy_square = 0.0
             torques = -2.5e-5 
             stand_still = 1.0
-            walking_dof = 0.3
+            walking_dof = 1.5
             dof_default_pos = 0.0
             dof_error = 0.0 
             alive = 1.0
@@ -267,8 +267,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             hip_pos = -0.3
             work = -0.003
             feet_jerk = -0.0002
-            feet_drag = -0.18
-            foot_lateral_spacing = -2.0
+            feet_drag = -0.08
+            foot_lateral_spacing = 0.0
             feet_contact_forces = -0.001
             height_adaptation = 0.0
             low_goal_front_leg_bend = 0.0
@@ -281,7 +281,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             orientation = 0.0
             orientation_walking = 0.0
             orientation_standing = 0.0
-            base_height = -2.0
+            base_height = -1.5
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -360,199 +360,12 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         origin_zero_z = False
 
     class auto_curriculum:
-        enabled = True
-        profile_name = "go2x5_stable_auto_v2"
+        enabled = False
+        profile_name = "go2x5_b1z1_unified_v1"
         metric_window = 200
-        log_stage = True
+        log_stage = False
         save_stage_metadata = True
-        stages = [
-            {
-                "name": "S0_sanity_flat",
-                "min_iterations": 1000,
-                "terrain": "flat",
-                "max_terrain_level": 1,
-                "push_robots": False,
-                "friction_range": [0.8, 1.2],
-                "added_mass_range": [0.0, 2.0],
-                "added_com_range": [[-0.02, 0.02], [-0.02, 0.02], [-0.01, 0.01]],
-                "leg_motor_strength_range": [0.9, 1.1],
-                "lin_vel_x_range": [-0.25, 0.25],
-                "ang_vel_yaw_range": [-0.35, 0.35],
-                "lin_vel_x_clip": 0.05,
-                "ang_vel_yaw_clip": 0.15,
-                "ee_tracking_weight": 0.15,
-                "goal_pos_l": [0.20, 0.35],
-                "goal_pos_p": [-0.15, 0.35],
-                "collision_scale": -4.0,
-                "collision_force_threshold": 8.0,
-                "hip_pos_scale": -0.35,
-                "base_height_scale": -2.5,
-                "roll_scale": -1.0,
-                "feet_drag_scale": -0.20,
-                "foot_lateral_spacing_scale": -2.5,
-                "tracking_lin_vel_max_scale": 0.6,
-                "walking_dof_scale": 0.3,
-                "tracking_contacts_shaped_force_scale": -0.3,
-                "tracking_contacts_shaped_vel_scale": -0.3,
-                "feet_air_time_scale": 0.3,
-                "feet_height_scale": 0.2,
-                "torques_scale": -8e-6,
-                "work_scale": -0.001,
-                "advance": {
-                    "Train/mean_episode_length": [">", 250],
-                    "Train/dones": ["<", 0.02],
-                    "Episode_metric/metric_roll": ["<", 1.0],
-                    "Episode_metric/metric_collision": ["<", 2.5],
-                    "Episode_metric/metric_foot_lateral_spacing": ["<", 0.10],
-                },
-            },
-            {
-                "name": "S1_stable_gait_flat",
-                "min_iterations": 5000,
-                "terrain": "flat",
-                "max_terrain_level": 1,
-                "push_robots": False,
-                "friction_range": [0.7, 1.4],
-                "added_mass_range": [0.0, 4.0],
-                "added_com_range": [[-0.04, 0.04], [-0.04, 0.04], [-0.02, 0.02]],
-                "leg_motor_strength_range": [0.85, 1.15],
-                "lin_vel_x_range": [-0.40, 0.40],
-                "ang_vel_yaw_range": [-0.55, 0.55],
-                "lin_vel_x_clip": 0.08,
-                "ang_vel_yaw_clip": 0.20,
-                "ee_tracking_weight": 0.25,
-                "goal_pos_l": [0.20, 0.42],
-                "goal_pos_p": [-0.25, 0.55],
-                "collision_scale": -5.0,
-                "collision_force_threshold": 7.0,
-                "hip_pos_scale": -0.30,
-                "base_height_scale": -2.2,
-                "roll_scale": -1.2,
-                "feet_drag_scale": -0.18,
-                "foot_lateral_spacing_scale": -2.0,
-                "tracking_lin_vel_max_scale": 0.9,
-                "walking_dof_scale": 0.5,
-                "tracking_contacts_shaped_force_scale": -0.5,
-                "tracking_contacts_shaped_vel_scale": -0.5,
-                "feet_air_time_scale": 0.5,
-                "feet_height_scale": 0.3,
-                "torques_scale": -1.2e-5,
-                "work_scale": -0.0012,
-                "advance": {
-                    "Train/mean_episode_length": [">", 350],
-                    "Train/dones": ["<", 0.015],
-                    "Episode_metric/metric_collision": ["<", 2.0],
-                    "Episode_metric/metric_foot_lateral_spacing": ["<", 0.08],
-                },
-            },
-            {
-                "name": "S2_ee_tracking_flat",
-                "min_iterations": 7000,
-                "terrain": "flat",
-                "max_terrain_level": 2,
-                "push_robots": False,
-                "friction_range": [0.6, 1.5],
-                "added_mass_range": [0.0, 5.0],
-                "added_com_range": [[-0.05, 0.05], [-0.05, 0.05], [-0.03, 0.03]],
-                "leg_motor_strength_range": [0.85, 1.15],
-                "lin_vel_x_range": [-0.50, 0.50],
-                "ang_vel_yaw_range": [-0.75, 0.75],
-                "lin_vel_x_clip": 0.10,
-                "ang_vel_yaw_clip": 0.25,
-                "ee_tracking_weight": 0.45,
-                "goal_pos_l": [0.20, 0.50],
-                "goal_pos_p": [-0.40, 0.85],
-                "collision_scale": -4.0,
-                "collision_force_threshold": 6.0,
-                "hip_pos_scale": -0.25,
-                "base_height_scale": -2.0,
-                "roll_scale": -1.2,
-                "feet_drag_scale": -0.15,
-                "foot_lateral_spacing_scale": -1.5,
-                "tracking_lin_vel_max_scale": 1.2,
-                "walking_dof_scale": 0.7,
-                "tracking_contacts_shaped_force_scale": -0.8,
-                "tracking_contacts_shaped_vel_scale": -0.8,
-                "feet_air_time_scale": 0.8,
-                "feet_height_scale": 0.4,
-                "torques_scale": -1.2e-5,
-                "work_scale": -0.0012,
-                "advance": {
-                    "Train/mean_episode_length": [">", 400],
-                    "Train/dones": ["<", 0.01],
-                    "Episode_metric/metric_tracking_ee_world": ["<", 0.25],
-                    "Episode_metric/metric_collision": ["<", 2.0],
-                    "Episode_metric/metric_foot_lateral_spacing": ["<", 0.06],
-                },
-            },
-            {
-                "name": "S3_rough_terrain",
-                "min_iterations": 10000,
-                "terrain": "rough",
-                "max_terrain_level": 6,
-                "push_robots": False,
-                "friction_range": [0.5, 2.0],
-                "added_mass_range": [0.0, 8.0],
-                "added_com_range": [[-0.08, 0.08], [-0.08, 0.08], [-0.05, 0.05]],
-                "leg_motor_strength_range": [0.8, 1.2],
-                "lin_vel_x_range": [-0.65, 0.65],
-                "ang_vel_yaw_range": [-0.90, 0.90],
-                "lin_vel_x_clip": 0.12,
-                "ang_vel_yaw_clip": 0.30,
-                "ee_tracking_weight": 0.6,
-                "collision_scale": -5.0,
-                "collision_force_threshold": 5.0,
-                "hip_pos_scale": -0.25,
-                "base_height_scale": -1.8,
-                "roll_scale": -1.5,
-                "feet_drag_scale": -0.12,
-                "foot_lateral_spacing_scale": -1.2,
-                "tracking_lin_vel_max_scale": 1.5,
-                "walking_dof_scale": 0.8,
-                "tracking_contacts_shaped_force_scale": -1.0,
-                "tracking_contacts_shaped_vel_scale": -1.0,
-                "feet_air_time_scale": 1.0,
-                "feet_height_scale": 0.5,
-                "torques_scale": -1.5e-5,
-                "work_scale": -0.0015,
-                "advance": {
-                    "Train/dones": ["<", 0.015],
-                    "Episode_metric/metric_collision": ["<", 2.5],
-                },
-            },
-            {
-                "name": "S4_robustness",
-                "min_iterations": 12000,
-                "terrain": "rough",
-                "max_terrain_level": 10,
-                "push_robots": True,
-                "max_push_vel_xy": 0.3,
-                "friction_range": [0.4, 2.5],
-                "added_mass_range": [0.0, 10.0],
-                "added_com_range": [[-0.10, 0.10], [-0.10, 0.10], [-0.08, 0.08]],
-                "leg_motor_strength_range": [0.75, 1.25],
-                "lin_vel_x_range": [-0.80, 0.80],
-                "ang_vel_yaw_range": [-1.00, 1.00],
-                "lin_vel_x_clip": 0.15,
-                "ang_vel_yaw_clip": 0.35,
-                "ee_tracking_weight": 0.8,
-                "collision_scale": -6.0,
-                "collision_force_threshold": 5.0,
-                "hip_pos_scale": -0.25,
-                "base_height_scale": -1.8,
-                "roll_scale": -1.8,
-                "feet_drag_scale": -0.10,
-                "foot_lateral_spacing_scale": -1.0,
-                "tracking_lin_vel_max_scale": 1.7,
-                "walking_dof_scale": 0.8,
-                "tracking_contacts_shaped_force_scale": -1.2,
-                "tracking_contacts_shaped_vel_scale": -1.2,
-                "feet_air_time_scale": 1.2,
-                "feet_height_scale": 0.5,
-                "torques_scale": -2e-5,
-                "work_scale": -0.002,
-            },
-        ]
+        stages = []
 
 
 class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):

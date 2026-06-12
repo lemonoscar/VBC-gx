@@ -94,12 +94,16 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert 'self.cfg["env"].get("eeBodyName"' in b1z1_base
     assert "robot_spec.ACTION_DIM" in go2x5_config
     assert "reorder_dofs = False" in go2x5_config
-    assert 'profile_name = "go2x5_stable_auto_v2"' in go2x5_config
+    assert "enabled = False" in go2x5_config
+    assert 'profile_name = "go2x5_b1z1_unified_v1"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
-    assert "S0_sanity_flat" in go2x5_config
-    assert "S4_robustness" in go2x5_config
-    assert '"max_terrain_level": 1' in go2x5_config
-    assert '"max_terrain_level": 10' in go2x5_config
+    assert "stages = []" in go2x5_config
+    assert "S0_stand_sanity" not in go2x5_config
+    assert "S4_robustness" not in go2x5_config
+    assert "feet_height_target = 0.10" in go2x5_config
+    assert "base_height = -1.5" in go2x5_config
+    assert "tracking_contacts_shaped_force = -2.0" in go2x5_config
+    assert "tracking_lin_vel_max = 2.0" in go2x5_config
     assert "collision_force_threshold = 5.0" in go2x5_config
     assert "def _reward_foot_lateral_spacing" in (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
     assert "if not self.cfg.env.reorder_dofs:" in manip_loco
