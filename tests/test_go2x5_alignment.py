@@ -83,6 +83,20 @@ def test_low_level_observation_dimensions_are_explicit():
     assert spec.observation_dim(True) == 799
 
 
+def test_low_level_action_interfaces_keep_b1z1_full_dim():
+    go2x5_config = (ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_config.py").read_text(encoding="utf-8")
+    b1z1_config = (ROOT / "low-level/legged_gym/envs/manip_loco/b1z1_config.py").read_text(encoding="utf-8")
+    manip_loco = (ROOT / "low-level/legged_gym/envs/manip_loco/manip_loco.py").read_text(encoding="utf-8")
+
+    assert "num_actions = robot_spec.ACTION_DIM" in go2x5_config
+    assert "num_torques = robot_spec.NUM_TORQUES" in go2x5_config
+    assert "num_actions = 12 + 6" in b1z1_config
+    assert "num_torques = 12 + 6" in b1z1_config
+    assert "if actions.shape[1] == 12 and self.num_torques == 12:" in manip_loco
+    assert "elif actions.shape[1] == self.num_torques:" in manip_loco
+    assert "default_torques[:, 12:] = 0." in manip_loco
+
+
 def test_configs_do_not_fall_back_to_old_go2x5_names():
     go2x5_pickmulti = (ROOT / "high-level/envs/go2x5_pickmulti.py").read_text(encoding="utf-8")
     b1z1_base = (ROOT / "high-level/envs/b1z1_base.py").read_text(encoding="utf-8")

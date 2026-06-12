@@ -1501,11 +1501,24 @@ class ManipLoco(LeggedRobot):
         """
         actions_scaled = actions * self.motor_strength * self.action_scale
 
-        leg_torques = self.p_gains * (
-            actions_scaled + self.default_dof_pos_wo_gripper[:12] - self.dof_pos_wo_gripper[:, :12]
-        ) - self.d_gains * self.dof_vel_wo_gripper[:, :12]
-        arm_torques_zero = torch.zeros(self.num_envs, 6, device=self.device, dtype=actions.dtype)
-        torques = torch.cat([leg_torques, arm_torques_zero, self.gripper_torques_zero], dim=-1)
+        if actions.shape[1] == 12 and self.num_torques == 12:
+            leg_torques = self.p_gains * (
+                actions_scaled + self.default_dof_pos_wo_gripper[:12] - self.dof_pos_wo_gripper[:, :12]
+            ) - self.d_gains * self.dof_vel_wo_gripper[:, :12]
+            num_arm_dofs = self.default_dof_pos_wo_gripper.shape[0] - 12
+            arm_torques_zero = torch.zeros(self.num_envs, num_arm_dofs, device=self.device, dtype=actions.dtype)
+            torques = torch.cat([leg_torques, arm_torques_zero, self.gripper_torques_zero], dim=-1)
+        elif actions.shape[1] == self.num_torques:
+            default_torques = self.p_gains * (
+                actions_scaled + self.default_dof_pos_wo_gripper - self.dof_pos_wo_gripper
+            ) - self.d_gains * self.dof_vel_wo_gripper
+            if self.num_torques > 12:
+                default_torques[:, 12:] = 0.  # Arm uses position control, not policy torques.
+            torques = torch.cat([default_torques, self.gripper_torques_zero], dim=-1)
+        else:
+            raise ValueError(
+                f"Unsupported action dimension {actions.shape[1]} for num_torques={self.num_torques}"
+            )
 
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
 
