@@ -32,9 +32,13 @@ import time
 import os
 from collections import deque
 import statistics
+from numbers import Number
 
-# from torch.utils.tensorboard import SummaryWriter
 import torch
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
 
 from rsl_rl.algorithms import PPO
 from rsl_rl.modules import ActorCritic, ActorCriticRecurrent
@@ -81,6 +85,8 @@ class OnPolicyRunner:
         # Log
         self.log_dir = log_dir
         self.writer = None
+        self.tensorboard_log_dir = os.path.join(log_dir, "tensorboard") if log_dir is not None else None
+        self._tensorboard_warning_printed = False
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
@@ -102,12 +108,19 @@ class OnPolicyRunner:
         value_mixing_ratio = 0.
         torque_supervision_weight = 0.
         mean_hist_latent_loss = 0.
-        mean_priv_reg_loss = 0. 
+        mean_priv_reg_loss = 0.
         priv_reg_coef = 0.
 
         # initialize writer
-        # if self.log_dir is not None and self.writer is None:
-        #     self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
+        if self.log_dir is not None and self.writer is None:
+            if SummaryWriter is None:
+                if not self._tensorboard_warning_printed:
+                    print("TensorBoard is unavailable: install tensorboard to enable local event logging.")
+                    self._tensorboard_warning_printed = True
+            else:
+                os.makedirs(self.tensorboard_log_dir, exist_ok=True)
+                self.writer = SummaryWriter(log_dir=self.tensorboard_log_dir, flush_secs=10)
+                print(f"TensorBoard logging to: {self.tensorboard_log_dir}")
         if init_at_random_ep_len:
             self.env.episode_length_buf = torch.randint_like(self.env.episode_length_buf, high=int(self.env.max_episode_length))
         obs = self.env.get_observations()
@@ -182,9 +195,11 @@ class OnPolicyRunner:
             if it % self.save_interval == 0:
                 self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)), it)
             ep_infos.clear()
-        
+
         self.current_learning_iteration += num_learning_iterations
         self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)), self.current_learning_iteration)
+        if self.writer is not None:
+            self.writer.flush()
 
     def log(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -242,7 +257,8 @@ class OnPolicyRunner:
             wandb_dict['Train/dones'] = statistics.mean(locs['donebuffer'])
             # wandb.log({'Train/mean_reward/time': statistics.mean(locs['rewbuffer'])}, step=self.tot_time)
             # wandb.log({'Train/mean_episode_length/time': statistics.mean(locs['lenbuffer'])}, step=self.tot_time)
-        
+
+        self._log_tensorboard(wandb_dict, locs['it'])
         wandb.log(wandb_dict, step=locs['it'])
 
         str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
@@ -288,6 +304,30 @@ class OnPolicyRunner:
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n""")
         print(log_string)
         return wandb_dict
+
+    @staticmethod
+    def _to_tensorboard_scalar(value):
+        if isinstance(value, torch.Tensor):
+            if value.numel() != 1:
+                return None
+            return value.detach().cpu().item()
+        if isinstance(value, Number):
+            return float(value)
+        return None
+
+    def _log_tensorboard(self, metrics, step):
+        if self.writer is None:
+            return
+        for key, value in metrics.items():
+            if key == "Policy/noise_std_dist":
+                continue
+            scalar = self._to_tensorboard_scalar(value)
+            if scalar is not None:
+                self.writer.add_scalar(key, scalar, step)
+        self.writer.add_scalar("Perf/total_timesteps", self.tot_timesteps, step)
+        self.writer.add_scalar("Perf/total_time", self.tot_time, step)
+        self.writer.add_histogram("Policy/noise_std_dist", self.alg.actor_critic.std.detach().cpu(), step)
+        self.writer.flush()
 
     def save(self, path, it, infos=None):
         metadata = self.env.get_training_metadata() if hasattr(self.env, "get_training_metadata") else None

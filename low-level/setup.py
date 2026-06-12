@@ -13,5 +13,6 @@ setup(
                       'rsl-rl',
                       'matplotlib',
                       'wandb',
+                      'tensorboard',
                       'torchinfo']
 )

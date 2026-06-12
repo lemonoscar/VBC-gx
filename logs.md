@@ -660,6 +660,15 @@ IndexError: index 1 is out of bounds for dimension 0 with size 1
 - 将 high-level 的末端 link、wrist link、finger links、joint names 做成配置项。
 - 为新 URDF 写 high-level smoke test，确认 body index 和 DOF order。
 
+### 6.11 TensorBoard 本地记录
+
+low-level runner 已补充 TensorBoard 记录，用于在 W&B 在线连接不稳定时保留本地训练曲线：
+
+- TensorBoard 事件文件写入每个 run 目录下的 `tensorboard/` 子目录。
+- 典型路径：`low-level/legged_gym/logs/<proj_name>/<exptid>/tensorboard/`。
+- 记录内容包括 `Train/*`、`Episode_rew/*`、`Episode_metric/*`、`Loss/*`、`Policy/*`、`Perf/*` 等 scalar，以及 `Policy/noise_std_dist` histogram。
+- 如果 W&B 在线模式因为 SSL 或网络问题卡住，可以先用 `WANDB_MODE=disabled` 跑训练，同时保留 TensorBoard 本地曲线。
+
 ## 下一步计划
 
 1. 基于当前 Go2X5 配置新建 Stage 1 stable low-level 配置，降低随机化和过强 penalty。
