@@ -95,6 +95,7 @@ def test_low_level_action_interfaces_keep_b1z1_full_dim():
     assert "if actions.shape[1] == 12 and self.num_torques == 12:" in manip_loco
     assert "elif actions.shape[1] == self.num_torques:" in manip_loco
     assert "default_torques[:, 12:] = 0." in manip_loco
+    assert "self._reindex_all(self.action_history_buf[:, -1])[:, :12]" in manip_loco
 
 
 def test_configs_do_not_fall_back_to_old_go2x5_names():

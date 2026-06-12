@@ -460,7 +460,7 @@ class ManipLoco(LeggedRobot):
                         self.base_ang_vel * self.obs_scales.ang_vel,  # dim 3
                         dof_pos_obs,  # dim 18 (for 20 dof with 2 gripper joints)
                         dof_vel_obs,  # dim 18 (for 20 dof with 2 gripper joints)
-                        self.action_history_buf[:, -1],  # dim 12 (leg actions only, same as B1Z1 setup)
+                        self._reindex_all(self.action_history_buf[:, -1])[:, :12],  # dim 12 leg actions only
                                     self._reindex_feet(self.foot_contacts_from_sensor),  # dim 4
                                     self.commands[:, :3] * self.commands_scale,  # dim 3
                                     # self.curr_ee_goal_sphere,  # dim 3 position
