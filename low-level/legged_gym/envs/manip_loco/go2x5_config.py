@@ -104,7 +104,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         clip_actions = 100.
 
     class env:
-        num_envs = 6144
+        num_envs = 4096
         num_actions = robot_spec.ACTION_DIM  # low-level policy controls legs only; arm is driven by IK position targets
         num_torques = robot_spec.NUM_TORQUES
         action_delay = 3
