@@ -47,16 +47,16 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         arm_induced_pitch = 0.38
 
         class sphere_center:
-            x_offset = 0.22  # Relative to base; shifted closer to the Go2-X5-lab arm mount at x=0.085.
+            x_offset = 0.0  # Relative to base root; dense IK grid keeps sampled goals forward of this center.
             y_offset = 0    # Relative to base
-            z_invariant_offset = 0.37  # Relative to terrain; target sphere center lowered by 5 cm.
+            z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + 0.20  # Relative to terrain; 0.20 m above the nominal base root.
 
         class ranges:
-            init_pos_start = [0.30, np.pi/10, 0]
-            init_pos_end = [0.44, 0, 0]
-            pos_l = [0.20, 0.50]
-            pos_p = [-0.6, 1 * np.pi / 3]  # Keep sampled EE goals reachable and above ground for stable first-stage training.
-            pos_y = [-1.2, 1.2]
+            init_pos_start = [0.335, 0.686, 0.0]  # Canonical home EE, converted from arm-base cartesian grid.
+            init_pos_end = [0.396, 0.239, 0.0]  # Dense-grid initial high-level goal [0.30, 0.0, 0.20].
+            pos_l = [0.20, 0.56]
+            pos_p = [0.15, 1.05]
+            pos_y = [-0.65, 0.65]
             
             delta_orn_r = [-0.5, 0.5]
             delta_orn_p = [-0.5, 0.5]
@@ -108,7 +108,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         num_actions = robot_spec.ACTION_DIM  # low-level policy controls legs only; arm is driven by IK position targets
         num_torques = robot_spec.NUM_TORQUES
         action_delay = 3
-        num_gripper_joints = robot_spec.NUM_GRIPPER_DOFS  # ARX-X5 gripper has 2 DOF (sliding mechanism with 2 claws)
+        num_gripper_joints = robot_spec.NUM_PHYSICAL_GRIPPER_DOFS  # Isaac Gym loads the mirrored finger sliders as physical DOFs.
         # Observation breakdown:
         # - body_orientation: 2
         # - base_ang_vel: 3
@@ -130,7 +130,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         num_privileged_obs = None
         send_timeouts = True
         episode_length_s = 10
-        reorder_dofs = False
+        reorder_dofs = True
         teleop_mode = False
         record_video = False
         stand_by = False
@@ -138,7 +138,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         frequencies = 2
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.32]  # Go2-specific spawn height; keep close to the nominal working stance.
+        pos = [0.0, 0.0, robot_spec.BASE_INIT_HEIGHT]  # Go2-X5 canonical screening stance height.
         leg_reset_ratio_range = [0.98, 1.02]
         arm_reset_noise_range = [-0.05, 0.05]
         # Go2 leg joints and X5 arm joints
@@ -148,10 +148,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         init_vel_perturb_range = 0.1
 
     class control:
-        stiffness = {'hip': 80, 'thigh': 80, 'calf': 80, 'arm': 5}  # [N*m/rad]
-        damping = {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'arm': 0.5}  # [N*m*s/rad]
-        arm_pos_stiffness = 120.0
-        arm_pos_damping = 12.0
+        stiffness = {'hip': robot_spec.LEG_STIFFNESS, 'thigh': robot_spec.LEG_STIFFNESS, 'calf': robot_spec.LEG_STIFFNESS, 'arm': 5}  # [N*m/rad]
+        damping = {'hip': robot_spec.LEG_DAMPING, 'thigh': robot_spec.LEG_DAMPING, 'calf': robot_spec.LEG_DAMPING, 'arm': 0.5}  # [N*m*s/rad]
+        arm_pos_stiffness = robot_spec.ARM_POS_STIFFNESS
+        arm_pos_damping = robot_spec.ARM_POS_DAMPING
 
         adaptive_arm_gains = False
         # action_scale: leg scales only; arm joints are controlled by IK position targets.
@@ -181,7 +181,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class arm:
         base_offset = robot_spec.ARM_BASE_OFFSET  # arm_base_joint origin in the Go2-X5-lab URDF
-        init_target_ee_base = [0.2, 0.0, 0.2]
+        init_target_ee_base = [0.30, 0.0, 0.20]
         grasp_offset = 0.08
         ik_gain = 0.5
         osc_kp = np.array([100, 100, 100, 30, 30, 30])
@@ -216,7 +216,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         soft_torque_limit = 0.4
         # Keep the locomotion height target consistent with Go2's nominal stance.
         # 0.55 is the B1 target and strongly biases Go2 toward an unrealistically tall/stiff posture.
-        base_height_target = 0.33
+        base_height_target = robot_spec.BASE_HEIGHT_TARGET
         max_contact_force = 200.
         collision_force_threshold = 5.0
         collision_soft_clip = 50.0

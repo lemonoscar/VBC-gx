@@ -254,13 +254,12 @@ class ManipLoco(LeggedRobot):
                 "num_observations": self.cfg.env.num_observations,
                 "observe_gait_commands": self.cfg.env.observe_gait_commands,
                 "reorder_dofs": self.cfg.env.reorder_dofs,
-                "policy_leg_joint_order": go2x5_robot_spec.POLICY_LEG_JOINT_NAMES if not self.cfg.env.reorder_dofs else [
-                    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-                    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-                    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
-                    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-                ],
-                "foot_order": go2x5_robot_spec.FOOT_BODY_NAMES,
+                "policy_leg_joint_order": go2x5_robot_spec.POLICY_LEG_JOINT_NAMES
+                if self.cfg.env.reorder_dofs
+                else go2x5_robot_spec.URDF_LEG_JOINT_NAMES,
+                "foot_order": go2x5_robot_spec.FOOT_BODY_NAMES
+                if self.cfg.env.reorder_dofs
+                else go2x5_robot_spec.URDF_FOOT_BODY_NAMES,
                 "ee_body_name": self.cfg.asset.gripper_name,
                 "arm_base_offset": list(self.cfg.arm.base_offset),
                 "spec_action_dim": go2x5_robot_spec.ACTION_DIM,
@@ -744,7 +743,7 @@ class ManipLoco(LeggedRobot):
         # self.num_bodies = len(self.body_names)
         # self.num_dofs = len(self.dof_names)
         feet_names = [s for s in self.body_names if self.cfg.asset.foot_name in s]
-        preferred_feet_names = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+        preferred_feet_names = go2x5_robot_spec.URDF_FOOT_BODY_NAMES
         if all(name in feet_names for name in preferred_feet_names):
             feet_names = preferred_feet_names
         penalized_contact_names = []
@@ -1026,9 +1025,11 @@ class ManipLoco(LeggedRobot):
             self.ee_pos = self.rigid_body_state[:, self.gripper_idx, :3]
             self.ee_orn = self.rigid_body_state[:, self.gripper_idx, 3:7]
             self.ee_vel = self.rigid_body_state[:, self.gripper_idx, 7:]
-            self.ee_j_eef = self.jacobian_whole[:, self.gripper_idx, :6, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints]
+            self.ee_jacobian_idx = self.gripper_idx - 1 if self.jacobian_whole.shape[1] == self.num_bodies - 1 else self.gripper_idx
+            self.ee_j_eef = self.jacobian_whole[:, self.ee_jacobian_idx, :6, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints]
         else:
             # Dummy values if no gripper
+            self.ee_jacobian_idx = -1
             self.ee_pos = torch.zeros((self.num_envs, 3), device=self.device)
             self.ee_orn = torch.zeros((self.num_envs, 4), device=self.device)
             self.ee_vel = torch.zeros((self.num_envs, 3), device=self.device)
@@ -1084,6 +1085,7 @@ class ManipLoco(LeggedRobot):
         print(f'contact_forces shape: {self.contact_forces.shape}')
         print(f'rigid_body_state shape: {self.rigid_body_state.shape}')
         print(f'jacobian_whole shape: {self.jacobian_whole.shape}')
+        print(f'ee_jacobian_idx: {self.ee_jacobian_idx}')
         print(f'box_root_state shape: {self.box_root_state.shape}')
         print(f'box_contact_force shape: {self.box_contact_force.shape}')
         print(f'box_rigid_body_state shape: {self.box_rigid_body_state.shape}')

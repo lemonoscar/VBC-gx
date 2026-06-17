@@ -4,15 +4,15 @@ from .b1z1_pickmulti import B1Z1PickMulti
 
 class Go2X5PickMulti(B1Z1PickMulti):
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("num_gripper_dof", 2)
+        kwargs.setdefault("num_gripper_dof", 1)
         super().__init__(*args, **kwargs)
 
     def _set_default_joint_angles_dict(self):
         if self.floating_base:
             default_joint_angles = {
                 'arm_joint1': 0.0,
-                'arm_joint2': 0.5,
-                'arm_joint3': 1.5,
+                'arm_joint2': 0.3,
+                'arm_joint3': 0.5,
                 'arm_joint4': 0.0,
                 'arm_joint5': 0.0,
                 'arm_joint6': 0.0,
@@ -21,25 +21,25 @@ class Go2X5PickMulti(B1Z1PickMulti):
             }
         else:
             default_joint_angles = {
-                'FL_hip_joint': 0.2,
-                'FL_thigh_joint': 0.8,
-                'FL_calf_joint': -1.5,
-
-                'RL_hip_joint': 0.2,
-                'RL_thigh_joint': 0.8,
-                'RL_calf_joint': -1.5,
-
-                'FR_hip_joint': -0.2,
+                'FR_hip_joint': 0.1,
                 'FR_thigh_joint': 0.8,
                 'FR_calf_joint': -1.5,
 
-                'RR_hip_joint': -0.2,
-                'RR_thigh_joint': 0.8,
+                'FL_hip_joint': -0.1,
+                'FL_thigh_joint': 0.8,
+                'FL_calf_joint': -1.5,
+
+                'RR_hip_joint': 0.1,
+                'RR_thigh_joint': 1.0,
                 'RR_calf_joint': -1.5,
 
+                'RL_hip_joint': -0.1,
+                'RL_thigh_joint': 1.0,
+                'RL_calf_joint': -1.5,
+
                 'arm_joint1': 0.0,
-                'arm_joint2': 0.5,
-                'arm_joint3': 1.5,
+                'arm_joint2': 0.3,
+                'arm_joint3': 0.5,
                 'arm_joint4': 0.0,
                 'arm_joint5': 0.0,
                 'arm_joint6': 0.0,

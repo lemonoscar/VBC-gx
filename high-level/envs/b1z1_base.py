@@ -64,6 +64,9 @@ class B1Z1Base(RewardVecTask):
         self.rand_control = rand_control
         self.arm_delay = arm_delay
         self.num_gripper_dof = self.cfg["env"].get("numGripperDof", num_gripper_dof)
+        self.num_physical_gripper_dof = self.cfg["env"].get("numPhysicalGripperDof", self.num_gripper_dof)
+        self.num_gripper_joints = self.num_physical_gripper_dof
+        self.gripper_open_at_upper = bool(self.cfg["env"].get("gripperOpenAtUpper", False))
         self.rand_cmd_scale = rand_cmd_scale
         self.rand_depth_clip = rand_depth_clip
         self.stop_pick = stop_pick
@@ -134,7 +137,7 @@ class B1Z1Base(RewardVecTask):
         if not self.floating_base:
             self.low_level_policy = self._load_low_level_model()
         else:
-            self.num_gripper_joints = self.num_gripper_dof
+            self.num_gripper_joints = self.num_physical_gripper_dof
         
         self._prepare_reward_function()
         
@@ -298,7 +301,8 @@ class B1Z1Base(RewardVecTask):
         self.jacobian_whole = gymtorch.wrap_tensor(self._jacobian_tensor)
         ee_body_name = self.cfg["env"].get("eeBodyName", "ee_gripper_link")
         self.gripper_idx = self._find_required_body_index(ee_body_name, "end-effector")
-        self.ee_j_eef = self.jacobian_whole[:, self.gripper_idx, :6, -(6 + self.num_gripper_dof):-self.num_gripper_dof]
+        self.ee_jacobian_idx = self.gripper_idx - 1 if self.jacobian_whole.shape[1] == bodies_per_env - 1 else self.gripper_idx
+        self.ee_j_eef = self.jacobian_whole[:, self.ee_jacobian_idx, :6, -(6 + self.num_physical_gripper_dof):-self.num_physical_gripper_dof]
         self.ee_pos = rigid_body_state_reshaped[:, self.gripper_idx, 0:3]
         self.ee_orn = rigid_body_state_reshaped[:, self.gripper_idx, 3:7]
 
@@ -312,8 +316,8 @@ class B1Z1Base(RewardVecTask):
         for body_name in finger_body_names:
             self.finger_indices.append(self._find_required_body_index(body_name, "finger"))
 
-        self.gripper_dof_pos = torch.zeros(self.num_envs, self.num_gripper_dof, device=self.device)
-        self.gripper_dof_vel = torch.zeros(self.num_envs, self.num_gripper_dof, device=self.device)
+        self.gripper_dof_pos = torch.zeros(self.num_envs, self.num_physical_gripper_dof, device=self.device)
+        self.gripper_dof_vel = torch.zeros(self.num_envs, self.num_physical_gripper_dof, device=self.device)
         
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, device=self.device, dtype=torch.float32)
         self.actions = torch.zeros(self.num_envs, self.num_actions, device=self.device, dtype=torch.float32)
@@ -361,6 +365,11 @@ class B1Z1Base(RewardVecTask):
             if self.low_policy_num_actions > 12:
                 default_low_action_scale += [2.1, 0.6, 0.6, 0, 0, 0][:self.low_policy_num_actions - 12]
             low_action_scale = self.cfg["env"].get("lowActionScale", default_low_action_scale)
+            if len(low_action_scale) != self.low_policy_num_actions:
+                raise ValueError(
+                    "lowActionScale length must match lowPolicyNumActions "
+                    f"(len={len(low_action_scale)}, expected={self.low_policy_num_actions})"
+                )
             self.low_action_scale = torch.tensor(low_action_scale, device=self.device)
             
             self.p_gains = torch.zeros(self.num_torques, dtype=torch.float, device=self.device, requires_grad=False)
@@ -737,25 +746,27 @@ class B1Z1Base(RewardVecTask):
         
         # arm_kp_range = np.linspace(300,400, self.num_envs)
         # gripper_kp_range = np.linspace(1.5,3, self.num_envs)
-        
+        control_cfg = self.cfg["env"]["asset"].get("control", {})
+        arm_kp = float(control_cfg.get("armPositionDriveStiffness", 400.0))
+        arm_kd = float(control_cfg.get("armPositionDriveDamping", 40.0))
+
         for i in range(self.num_envs):
-            arm_kp = 400 # np.random.uniform(300,400)
             gripper_kp = np.random.uniform(2,5)
-            
+
             if self.floating_base:
                 dof_props_asset['driveMode'][:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
-                dof_props_asset['stiffness'][:-self.num_gripper_dof].fill(arm_kp)
-                dof_props_asset['damping'][:-self.num_gripper_dof].fill(40.0)
-                # TODO: find proper gripper kp and kd   
-                dof_props_asset['stiffness'][-self.num_gripper_dof:].fill(gripper_kp)
-                dof_props_asset['damping'][-self.num_gripper_dof:].fill(2.5)
+                dof_props_asset['stiffness'][:-self.num_physical_gripper_dof].fill(arm_kp)
+                dof_props_asset['damping'][:-self.num_physical_gripper_dof].fill(arm_kd)
+                # TODO: find proper gripper kp and kd
+                dof_props_asset['stiffness'][-self.num_physical_gripper_dof:].fill(gripper_kp)
+                dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(2.5)
             else:
                 dof_props_asset['driveMode'][12:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
-                dof_props_asset['stiffness'][12:-self.num_gripper_dof].fill(arm_kp)
-                dof_props_asset['damping'][12:-self.num_gripper_dof].fill(40.0)
-                # TODO: find proper gripper kp and kd   
-                dof_props_asset['stiffness'][-self.num_gripper_dof:].fill(gripper_kp)
-                dof_props_asset['damping'][-self.num_gripper_dof:].fill(2.5)
+                dof_props_asset['stiffness'][12:-self.num_physical_gripper_dof].fill(arm_kp)
+                dof_props_asset['damping'][12:-self.num_physical_gripper_dof].fill(arm_kd)
+                # TODO: find proper gripper kp and kd
+                dof_props_asset['stiffness'][-self.num_physical_gripper_dof:].fill(gripper_kp)
+                dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(2.5)
         
             env_ptr = self.gym.create_env(self.sim, lower, upper, num_per_row)
             self.envs.append(env_ptr)
@@ -823,7 +834,7 @@ class B1Z1Base(RewardVecTask):
         }
         num_actions = low_policy_num_actions
         self.num_priv = num_priv
-        self.num_gripper_joints = self.num_gripper_dof
+        self.num_gripper_joints = self.num_physical_gripper_dof
         self.num_proprio = 2 + 3 + 18 + 18 + 12 + 4 + 3 + 3 + 3
         self.num_proprio += 5 if self.observe_gait_commands else 0
         self.history_len = 10
@@ -875,8 +886,11 @@ class B1Z1Base(RewardVecTask):
         self._dof_pos[env_ids] = self._initial_dof_pos[env_ids]
         self._dof_vel[env_ids] = self._initial_dof_vel[env_ids]
         
-        # Randomize arm joint
-        self.dof_pos_gripper[env_ids] += torch_rand_float(-0.5, 0.5, (len(env_ids), self.num_gripper_joints), device=self.device) # small randomization
+        # Randomize the semantic gripper opening while keeping mirrored physical joints synchronized.
+        gripper_alpha = torch_rand_float(0.0, 1.0, (len(env_ids), 1), device=self.device)
+        gripper_lower = self.dof_limits_lower[-self.num_gripper_joints:].unsqueeze(0)
+        gripper_upper = self.dof_limits_upper[-self.num_gripper_joints:].unsqueeze(0)
+        self.dof_pos_gripper[env_ids] = gripper_lower + gripper_alpha * (gripper_upper - gripper_lower)
         
         # Get current ee pos local
         self.update_roboinfo()
@@ -965,7 +979,7 @@ class B1Z1Base(RewardVecTask):
         if self.rand_cmd_scale:
             commands[:, 0] *= self.command_scale
         low_action_obs = self.last_low_actions[:, :12]
-        if self.low_policy_reorder_dofs and self.low_policy_num_actions > 12:
+        if self.low_policy_reorder_dofs:
             low_action_obs = self._reindex_low_all(self.last_low_actions)[:, :12]
         low_level_obs_buf = torch.cat((self.get_body_orientation(), # dim 2
                                        base_ang_vel, # dim 3
@@ -1563,14 +1577,13 @@ class B1Z1Base(RewardVecTask):
     
     def set_gripper(self):
         u_gripper = self.actions[:, 6].unsqueeze(-1)
-        if self.num_gripper_dof == 1:
-            self.gripper_dof_pos[:] = torch.where(u_gripper >= 0, self.dof_limits_lower[-1].item(), self.dof_limits_upper[-1].item()) # >= 0 open
-        elif self.num_gripper_dof == 2:
-            # TODO: May check this; dof limits lower or higher corresponds to gripper open or close
-            self.gripper_dof_pos[:, -2] = torch.where(u_gripper >= 0, self.dof_limits_lower[-2].item(), self.dof_limits_upper[-2].item()).squeeze(-1)
-            self.gripper_dof_pos[:, -1] = torch.where(u_gripper >= 0, self.dof_limits_lower[-1].item(), self.dof_limits_upper[-1].item()).squeeze(-1)
-        else:
+        if self.num_gripper_dof != 1:
             raise NotImplementedError
+        lower = self.dof_limits_lower[-self.num_physical_gripper_dof:].unsqueeze(0)
+        upper = self.dof_limits_upper[-self.num_physical_gripper_dof:].unsqueeze(0)
+        open_target = upper if self.gripper_open_at_upper else lower
+        close_target = lower if self.gripper_open_at_upper else upper
+        self.gripper_dof_pos[:] = torch.where(u_gripper >= 0, open_target, close_target)
     
     # def clip_commands(self):
     #     if not self.commands_curriculum:

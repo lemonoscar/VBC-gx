@@ -19,21 +19,23 @@ env:
   holdSteps: 25
   lastCommands: False
 
-  numGripperDof: 2
+  numGripperDof: 1
+  numPhysicalGripperDof: 2
+  gripperOpenAtUpper: True
   low_policy_path: "../low-level/logs/go2x5-low/go2x5_stable_base_v1/model_17600.pt"
   requireLowPolicyMetadata: True
   lowPolicyNumActions: 12
   lowPolicyObserveGaitCommands: True
-  lowPolicyReorderDofs: False
-  lowActionScale: [0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45, 0.4, 0.45, 0.45]
+  lowPolicyReorderDofs: True
+  lowActionScale: [0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35]
   lowLevelLinVelClip: 0.15
   lowLevelAngVelYawClip: 0.35
   lowLevelAngVelPitchClip: 0.25
-  robotStartPose: [-0.75, 0.0, 0.35]
-  evalRobotStartPose: [-0.70, 0.0, 0.35]
-  initialEEGoalCart: [0.28, 0.0, 0.18]
+  robotStartPose: [-0.75, 0.0, 0.33]
+  evalRobotStartPose: [-0.70, 0.0, 0.33]
+  initialEEGoalCart: [0.30, 0.0, 0.20]
   initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
-  maskArmGoalCart: [0.35, 0.0, 0.25]
+  maskArmGoalCart: [0.34, 0.0, 0.24]
   armBaseOffset: [0.085, 0.0, 0.094]
   baseHeightClip: [0.2, 0.42]
   eeBodyName: "arm_eef_link"
@@ -216,8 +218,10 @@ env:
         scale: 1.0
 
     control:
-      stiffness: {'hip': 80, 'thigh': 80, 'calf': 80, 'arm': 5}
-      damping: {'hip': 2.0, 'thigh': 2.0, 'calf': 2.0, 'arm': 0.5}
+      stiffness: {'hip': 60, 'thigh': 60, 'calf': 60, 'arm': 5}
+      damping: {'hip': 1.5, 'thigh': 1.5, 'calf': 1.5, 'arm': 0.5}
+      armPositionDriveStiffness: 110.0
+      armPositionDriveDamping: 7.5
 
   plane:
     staticFriction: 1.0
@@ -247,7 +251,7 @@ sim:
     max_gpu_contact_pairs: 16777216
 
 reward:
-  base_height_target: 0.28
+  base_height_target: 0.33
   only_positive_rewards: False
   scales:
     approaching: 0.5

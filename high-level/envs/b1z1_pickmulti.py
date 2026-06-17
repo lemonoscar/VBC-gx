@@ -228,10 +228,10 @@ class B1Z1PickMulti(B1Z1Base):
             near_lower_rate = 0.0
             cmd_close_and_near_upper_rate = 0.0
             cmd_close_and_near_lower_rate = 0.0
-            if self.num_gripper_dof > 0:
+            if self.num_gripper_joints > 0:
                 gpos = self.dof_pos_gripper
-                lower = self.dof_limits_lower[-self.num_gripper_dof:].unsqueeze(0)
-                upper = self.dof_limits_upper[-self.num_gripper_dof:].unsqueeze(0)
+                lower = self.dof_limits_lower[-self.num_gripper_joints:].unsqueeze(0)
+                upper = self.dof_limits_upper[-self.num_gripper_joints:].unsqueeze(0)
                 dof_span = torch.clamp(torch.abs(upper - lower), min=1e-6)
                 near_upper = (torch.abs(gpos - upper) / dof_span).mean(dim=-1) < 0.15
                 near_lower = (torch.abs(gpos - lower) / dof_span).mean(dim=-1) < 0.15
@@ -403,7 +403,7 @@ class B1Z1PickMulti(B1Z1Base):
         obs = compute_robot_observations(robot_root_state, table_root_state, cube_root_state, body_pos,
                                          body_rot, body_vel, body_ang_vel, dof_pos, dof_vel, base_quat_yaw, spherical_center, commands, self.gripper_idx, table_dim,
                                          ee_goal_cart, ee_goal_orn_rpy, self.use_roboinfo, self.floating_base,
-                                         self.num_gripper_dof, self.arm_base_offset)
+                                         self.num_gripper_joints, self.arm_base_offset)
         
         return obs
     

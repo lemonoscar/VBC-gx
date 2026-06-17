@@ -7,7 +7,8 @@ HIGH_LEVEL_ASSET_FILE = "go2x5/go2_x5.urdf"
 NUM_DOFS = 20
 NUM_LEG_DOFS = 12
 NUM_ARM_DOFS = 6
-NUM_GRIPPER_DOFS = 2
+NUM_PHYSICAL_GRIPPER_DOFS = 2
+NUM_GRIPPER_DOFS = 1
 ACTION_DIM = 12
 NUM_TORQUES = 12
 
@@ -22,9 +23,19 @@ FLANGE_BODY_NAME = "arm_link6"
 FINGER_BODY_NAMES = ["arm_link7", "arm_link8"]
 ARM_BASE_OFFSET = [0.085, 0.0, 0.094]
 
-LOW_ACTION_SCALE = [0.4, 0.45, 0.45] * 4
+BASE_HEIGHT_TARGET = 0.33
+BASE_INIT_HEIGHT = 0.33
 
-LEG_JOINT_NAMES = [
+GO2X5_LAB_LEG_ACTION_SCALE = [0.125, 0.25, 0.25] * 4
+LEGACY_LEG_ACTION_SCALE = [0.4, 0.45, 0.45] * 4
+LOW_ACTION_SCALE = [0.2625, 0.35, 0.35] * 4
+
+LEG_STIFFNESS = 60.0
+LEG_DAMPING = 1.5
+ARM_POS_STIFFNESS = 110.0
+ARM_POS_DAMPING = 7.5
+
+URDF_LEG_JOINT_NAMES = [
     "FL_hip_joint",
     "FL_thigh_joint",
     "FL_calf_joint",
@@ -39,6 +50,21 @@ LEG_JOINT_NAMES = [
     "RR_calf_joint",
 ]
 
+POLICY_LEG_JOINT_NAMES = [
+    "FR_hip_joint",
+    "FR_thigh_joint",
+    "FR_calf_joint",
+    "FL_hip_joint",
+    "FL_thigh_joint",
+    "FL_calf_joint",
+    "RR_hip_joint",
+    "RR_thigh_joint",
+    "RR_calf_joint",
+    "RL_hip_joint",
+    "RL_thigh_joint",
+    "RL_calf_joint",
+]
+
 ARM_JOINT_NAMES = [
     "arm_joint1",
     "arm_joint2",
@@ -49,26 +75,28 @@ ARM_JOINT_NAMES = [
 ]
 
 GRIPPER_JOINT_NAMES = ["arm_joint7", "arm_joint8"]
-MOVABLE_JOINT_NAMES = LEG_JOINT_NAMES + ARM_JOINT_NAMES + GRIPPER_JOINT_NAMES
-POLICY_LEG_JOINT_NAMES = LEG_JOINT_NAMES
-FOOT_BODY_NAMES = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+MOVABLE_JOINT_NAMES = URDF_LEG_JOINT_NAMES + ARM_JOINT_NAMES + GRIPPER_JOINT_NAMES
+URDF_FOOT_BODY_NAMES = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+FOOT_BODY_NAMES = ["FR_foot", "FL_foot", "RR_foot", "RL_foot"]
+
+LEG_JOINT_NAMES = POLICY_LEG_JOINT_NAMES
 
 DEFAULT_JOINT_ANGLES = {
-    "FL_hip_joint": 0.2,
-    "FL_thigh_joint": 0.8,
-    "FL_calf_joint": -1.5,
-    "RL_hip_joint": 0.2,
-    "RL_thigh_joint": 0.8,
-    "RL_calf_joint": -1.5,
-    "FR_hip_joint": -0.2,
+    "FR_hip_joint": 0.1,
     "FR_thigh_joint": 0.8,
     "FR_calf_joint": -1.5,
-    "RR_hip_joint": -0.2,
-    "RR_thigh_joint": 0.8,
+    "FL_hip_joint": -0.1,
+    "FL_thigh_joint": 0.8,
+    "FL_calf_joint": -1.5,
+    "RR_hip_joint": 0.1,
+    "RR_thigh_joint": 1.0,
     "RR_calf_joint": -1.5,
+    "RL_hip_joint": -0.1,
+    "RL_thigh_joint": 1.0,
+    "RL_calf_joint": -1.5,
     "arm_joint1": 0.0,
-    "arm_joint2": 0.5,
-    "arm_joint3": 1.5,
+    "arm_joint2": 0.3,
+    "arm_joint3": 0.5,
     "arm_joint4": 0.0,
     "arm_joint5": 0.0,
     "arm_joint6": 0.0,
