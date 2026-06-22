@@ -233,9 +233,12 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "leg_motor_strength_range = [0.9, 1.1]" in go2x5_config
     assert "max_push_vel_xy = 0.15" in go2x5_config
     assert "tracking_ee_sigma = 1.0" in go2x5_config
+    assert "ik_gain = 0.25" in go2x5_config
+    assert "track_ee_orientation = False" in go2x5_config
     assert "def _reward_foot_lateral_spacing" in (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
     assert "if not self.cfg.env.reorder_dofs:" in manip_loco
     assert "self.ee_jacobian_idx = self.gripper_idx - 1" in manip_loco
+    assert 'getattr(self.cfg.arm, "track_ee_orientation", True)' in manip_loco
     assert '"reorder_dofs": self.cfg.env.reorder_dofs' in manip_loco
     assert 'if self.cfg.goal_ee.command_mode == "cart":' in manip_loco
     assert "def _resample_ee_goal_cart_once" in manip_loco

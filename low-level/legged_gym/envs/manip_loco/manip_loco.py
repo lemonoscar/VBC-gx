@@ -316,6 +316,8 @@ class ManipLoco(LeggedRobot):
         dpos = self.curr_ee_goal_cart_world - self.ee_pos
         ee_orn_norm = torch.norm(self.ee_orn, dim=-1, keepdim=True).clamp(min=1e-6)  # prevent divide-by-zero NaN
         drot = orientation_error(self.ee_goal_orn_quat, self.ee_orn / ee_orn_norm)
+        if not getattr(self.cfg.arm, "track_ee_orientation", True):
+            drot = torch.zeros_like(drot)
         dpose = torch.cat([dpos, drot], -1).unsqueeze(-1)
         ik_gain = getattr(self.cfg.arm, "ik_gain", 0.5)  # Scale IK delta per step to prevent overshoot
         arm_pos_targets = ik_gain * self._control_ik(dpose) + self.dof_pos[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints]

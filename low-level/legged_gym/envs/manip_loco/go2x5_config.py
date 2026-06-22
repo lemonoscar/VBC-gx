@@ -192,7 +192,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         base_offset = robot_spec.ARM_BASE_OFFSET  # arm_base_joint origin in the Go2-X5-lab URDF
         init_target_ee_base = [0.30, 0.0, 0.20]
         grasp_offset = 0.08
-        ik_gain = 0.5
+        # Go2-X5 zero-action checks show that simultaneous position+orientation
+        # IK can roll the base over. Train the low-level controller with
+        # position-only EE IK first, then reintroduce orientation later.
+        ik_gain = 0.25
+        track_ee_orientation = False
         osc_kp = np.array([100, 100, 100, 30, 30, 30])
         osc_kd = 2 * (osc_kp ** 0.5)
 
