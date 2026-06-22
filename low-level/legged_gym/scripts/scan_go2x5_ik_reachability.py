@@ -2,8 +2,8 @@
 """Headless IK reachability grid for the Go2-X5 arm.
 
 The scan is not a training run. It fixes the base, starts from the canonical
-home pose, sweeps arm-base-frame x/y/z/rpy targets, runs damped least-squares
-IK, and writes per-target reachability statistics.
+home pose, sweeps x/y/z/rpy targets in the selected target frame, runs damped
+least-squares IK, and writes per-target reachability statistics.
 """
 
 import argparse
@@ -63,6 +63,12 @@ def parse_float_list(text):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="go2x5")
+    parser.add_argument(
+        "--target_frame",
+        choices=["goal_center", "arm_base"],
+        default="goal_center",
+        help="Frame for target x/y/z. goal_center matches the low-level terrain-invariant task sampler.",
+    )
     parser.add_argument("--quick", action="store_true", help="Use a small 27-point smoke-test grid.")
     parser.add_argument("--x", default="0.18,0.24,0.30,0.36")
     parser.add_argument("--y", default="-0.18,-0.09,0.0,0.09,0.18")
@@ -184,11 +190,15 @@ def settle(env, steps, jacobian_body_offset=-1):
     refresh_runtime_state(env, jacobian_body_offset=jacobian_body_offset)
 
 
-def target_world_from_arm_base(env, local_target):
+def target_world_from_frame(env, local_target, target_frame):
+    local = torch.tensor(local_target, device=env.device, dtype=torch.float).view(1, 3)
+    if target_frame == "goal_center":
+        center = env._get_ee_goal_spherical_center()[0:1]
+        return center + quat_apply(env.base_yaw_quat[0:1], local)
+
     root_quat = env.root_states[0:1, 3:7]
     root_pos = env.root_states[0:1, :3]
     arm_base_local = torch.tensor(robot_spec.ARM_BASE_OFFSET, device=env.device, dtype=torch.float).view(1, 3)
-    local = torch.tensor(local_target, device=env.device, dtype=torch.float).view(1, 3)
     return root_pos + quat_apply(root_quat, arm_base_local) + quat_apply(root_quat, local)
 
 
@@ -207,7 +217,11 @@ def contact_summary(env, threshold):
     return contacts, max_force
 
 
-def local_ee_position(env):
+def local_ee_position(env, target_frame):
+    if target_frame == "goal_center":
+        center = env._get_ee_goal_spherical_center()[0:1]
+        return quat_rotate_inverse(env.base_yaw_quat[0:1], env.ee_pos[0:1] - center)[0]
+
     root_quat = env.root_states[0:1, 3:7]
     root_pos = env.root_states[0:1, :3]
     arm_base_local = torch.tensor(robot_spec.ARM_BASE_OFFSET, device=env.device, dtype=torch.float).view(1, 3)
@@ -269,7 +283,7 @@ def scan_target(env, target_xyz, target_rpy, cli):
 
     q = home_q.clone()
     set_dof_positions(env, q, jacobian_body_offset=cli.jacobian_body_offset)
-    target_world = target_world_from_arm_base(env, target_xyz)
+    target_world = target_world_from_frame(env, target_xyz, cli.target_frame)
     target_quat = quat_from_euler_xyz(
         torch.tensor([target_rpy[0]], device=env.device),
         torch.tensor([target_rpy[1]], device=env.device),
@@ -299,7 +313,7 @@ def scan_target(env, target_xyz, target_rpy, cli):
     settle(env, cli.settle_steps, jacobian_body_offset=cli.jacobian_body_offset)
     refresh_runtime_state(env, jacobian_body_offset=cli.jacobian_body_offset)
 
-    final_local = local_ee_position(env)
+    final_local = local_ee_position(env, cli.target_frame)
     final_arm_q = env.dof_pos[0, arm_start:arm_end].detach().clone()
     margin = torch.minimum(final_arm_q - lower, upper - final_arm_q)
     limit_hits = int((margin < cli.limit_margin).sum().item())
@@ -415,7 +429,7 @@ def main():
         env._jacobian_body_idx = best_idx
     set_dof_positions(env, env.default_dof_pos.detach().clone(), jacobian_body_offset=cli.jacobian_body_offset)
     settle(env, cli.settle_steps, jacobian_body_offset=cli.jacobian_body_offset)
-    home_ee_local = [float(value) for value in local_ee_position(env).detach().cpu().tolist()]
+    home_ee_local = [float(value) for value in local_ee_position(env, cli.target_frame).detach().cpu().tolist()]
     home_ee_axes_base = local_ee_axes(env)
 
     xs, ys, zs, rolls, pitches, yaws = grid_values(cli)
@@ -424,7 +438,7 @@ def main():
         targets = targets[: cli.max_targets]
 
     print("\n=== Go2-X5 IK reachability grid ===")
-    print(f"frame: arm_base, armBaseOffset={robot_spec.ARM_BASE_OFFSET}")
+    print(f"target_frame: {cli.target_frame}, armBaseOffset={robot_spec.ARM_BASE_OFFSET}")
     print(f"home arm q: {[robot_spec.DEFAULT_JOINT_ANGLES[name] for name in robot_spec.ARM_JOINT_NAMES]}")
     print(f"home ee local: {[round(value, 4) for value in home_ee_local]}")
     print(f"home ee axes base: {home_ee_axes_base}")

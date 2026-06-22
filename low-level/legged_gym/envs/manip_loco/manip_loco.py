@@ -1044,6 +1044,7 @@ class ManipLoco(LeggedRobot):
         self.traj_total_timesteps = self.traj_timesteps + torch_rand_float(self.cfg.goal_ee.hold_time[0], self.cfg.goal_ee.hold_time[1], (self.num_envs, 1), device=self.device).squeeze(1) / self.dt
         self.goal_timer = torch.zeros(self.num_envs, device=self.device)
         self.ee_start_sphere = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_start_cart = torch.zeros(self.num_envs, 3, device=self.device)
 
         self.ee_goal_cart = torch.zeros(self.num_envs, 3, device=self.device)
         self.ee_goal_sphere = torch.zeros(self.num_envs, 3, device=self.device)
@@ -1056,8 +1057,16 @@ class ManipLoco(LeggedRobot):
         self.curr_ee_goal_cart = torch.zeros(self.num_envs, 3, device=self.device)
         self.curr_ee_goal_sphere = torch.zeros(self.num_envs, 3, device=self.device)
 
-        self.init_start_ee_sphere = torch.tensor(self.cfg.goal_ee.ranges.init_pos_start, device=self.device).unsqueeze(0)
-        self.init_end_ee_sphere = torch.tensor(self.cfg.goal_ee.ranges.init_pos_end, device=self.device).unsqueeze(0)
+        if self.cfg.goal_ee.command_mode == "cart":
+            self.init_start_ee_cart = torch.tensor(self.cfg.goal_ee.ranges.init_pos_start, device=self.device).unsqueeze(0)
+            self.init_end_ee_cart = torch.tensor(self.cfg.goal_ee.ranges.init_pos_end, device=self.device).unsqueeze(0)
+            self.init_start_ee_sphere = cart2sphere(self.init_start_ee_cart)
+            self.init_end_ee_sphere = cart2sphere(self.init_end_ee_cart)
+        else:
+            self.init_start_ee_sphere = torch.tensor(self.cfg.goal_ee.ranges.init_pos_start, device=self.device).unsqueeze(0)
+            self.init_end_ee_sphere = torch.tensor(self.cfg.goal_ee.ranges.init_pos_end, device=self.device).unsqueeze(0)
+            self.init_start_ee_cart = sphere2cart(self.init_start_ee_sphere)
+            self.init_end_ee_cart = sphere2cart(self.init_end_ee_sphere)
 
         #noise
         self.noise_scale_vec = self._get_noise_scale_vec(self.cfg)
@@ -1471,11 +1480,16 @@ class ManipLoco(LeggedRobot):
         sphere_geom_yellow = gymutil.WireframeSphereGeometry(0.01, 16, 16, None, color=(1, 1, 0))
 
         t = torch.linspace(0, 1, 10, device=self.device)[None, None, None, :]
-        ee_target_all_sphere = torch.lerp(self.ee_start_sphere[..., None], self.ee_goal_sphere[..., None], t).squeeze(0)
-        ee_target_all_cart_world = torch.zeros_like(ee_target_all_sphere)
+        if self.cfg.goal_ee.command_mode == "cart":
+            ee_target_all_cart = torch.lerp(self.ee_start_cart[..., None], self.ee_goal_cart[..., None], t).squeeze(0)
+        else:
+            ee_target_all_sphere = torch.lerp(self.ee_start_sphere[..., None], self.ee_goal_sphere[..., None], t).squeeze(0)
+            ee_target_all_cart = torch.zeros_like(ee_target_all_sphere)
+            for i in range(10):
+                ee_target_all_cart[..., i] = sphere2cart(ee_target_all_sphere[..., i])
+        ee_target_all_cart_world = torch.zeros_like(ee_target_all_cart)
         for i in range(10):
-            ee_target_cart = sphere2cart(ee_target_all_sphere[..., i])
-            ee_target_all_cart_world[..., i] = quat_apply(self.base_yaw_quat, ee_target_cart)
+            ee_target_all_cart_world[..., i] = quat_apply(self.base_yaw_quat, ee_target_all_cart[..., i])
         ee_target_all_cart_world += self._get_ee_goal_spherical_center()[:, :, None]
         for i in range(self.num_envs):
             for j in range(10):
@@ -1528,6 +1542,28 @@ class ManipLoco(LeggedRobot):
         self.ee_goal_sphere[env_ids, 0] = torch_rand_float(self.goal_ee_ranges["pos_l"][0], self.goal_ee_ranges["pos_l"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         self.ee_goal_sphere[env_ids, 1] = torch_rand_float(self.goal_ee_ranges["pos_p"][0], self.goal_ee_ranges["pos_p"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         self.ee_goal_sphere[env_ids, 2] = torch_rand_float(self.goal_ee_ranges["pos_y"][0], self.goal_ee_ranges["pos_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        self.ee_goal_cart[env_ids] = sphere2cart(self.ee_goal_sphere[env_ids])
+
+    def _resample_ee_goal_cart_once(self, env_ids):
+        self.ee_goal_cart[env_ids, 0] = torch_rand_float(
+            self.goal_ee_ranges["pos_x"][0],
+            self.goal_ee_ranges["pos_x"][1],
+            (len(env_ids), 1),
+            device=self.device,
+        ).squeeze(1)
+        self.ee_goal_cart[env_ids, 1] = torch_rand_float(
+            self.goal_ee_ranges["pos_y_cart"][0],
+            self.goal_ee_ranges["pos_y_cart"][1],
+            (len(env_ids), 1),
+            device=self.device,
+        ).squeeze(1)
+        self.ee_goal_cart[env_ids, 2] = torch_rand_float(
+            self.goal_ee_ranges["pos_z"][0],
+            self.goal_ee_ranges["pos_z"][1],
+            (len(env_ids), 1),
+            device=self.device,
+        ).squeeze(1)
+        self.ee_goal_sphere[env_ids] = cart2sphere(self.ee_goal_cart[env_ids])
 
     def _resample_ee_goal_orn_once(self, env_ids):
         ee_goal_delta_orn_r = torch_rand_float(self.goal_ee_ranges["delta_orn_r"][0], self.goal_ee_ranges["delta_orn_r"][1], (len(env_ids), 1), device=self.device)
@@ -1549,28 +1585,47 @@ class ManipLoco(LeggedRobot):
                 self.ee_goal_orn_delta_rpy[env_ids, :] = 0
                 self.ee_start_sphere[env_ids] = self.init_start_ee_sphere[:]
                 self.ee_goal_sphere[env_ids] = self.init_end_ee_sphere[:]
-                # Also initialize curr_ee_goal_sphere to start position for proper IK at init
+                self.ee_start_cart[env_ids] = self.init_start_ee_cart[:]
+                self.ee_goal_cart[env_ids] = self.init_end_ee_cart[:]
+                self.curr_ee_goal_cart[env_ids] = self.init_start_ee_cart[:]
                 self.curr_ee_goal_sphere[env_ids] = self.init_start_ee_sphere[:]
             else:
                 self._resample_ee_goal_orn_once(env_ids)
                 self.ee_start_sphere[env_ids] = self.ee_goal_sphere[env_ids].clone()
+                self.ee_start_cart[env_ids] = self.ee_goal_cart[env_ids].clone()
                 for i in range(10):
-                    self._resample_ee_goal_sphere_once(env_ids)
+                    if self.cfg.goal_ee.command_mode == "cart":
+                        self._resample_ee_goal_cart_once(env_ids)
+                    else:
+                        self._resample_ee_goal_sphere_once(env_ids)
                     collision_mask = self._collision_check(env_ids)
                     env_ids = env_ids[collision_mask]
                     if len(env_ids) == 0:
                         break
-            self.ee_goal_cart[init_env_ids, :] = sphere2cart(self.ee_goal_sphere[init_env_ids, :])
+            if self.cfg.goal_ee.command_mode == "sphere":
+                self.ee_goal_cart[init_env_ids, :] = sphere2cart(self.ee_goal_sphere[init_env_ids, :])
+            else:
+                self.ee_goal_sphere[init_env_ids, :] = cart2sphere(self.ee_goal_cart[init_env_ids, :])
             self.goal_timer[init_env_ids] = 0.0
 
             # Update curr_ee_goal_cart_world immediately after resampling
-            self.curr_ee_goal_cart[init_env_ids] = sphere2cart(self.curr_ee_goal_sphere[init_env_ids])
+            if self.cfg.goal_ee.command_mode == "sphere":
+                self.curr_ee_goal_cart[init_env_ids] = sphere2cart(self.curr_ee_goal_sphere[init_env_ids])
+            else:
+                self.curr_ee_goal_sphere[init_env_ids] = cart2sphere(self.curr_ee_goal_cart[init_env_ids])
             ee_goal_cart_yaw_global = quat_apply(self.base_yaw_quat[init_env_ids], self.curr_ee_goal_cart[init_env_ids])
             self.curr_ee_goal_cart_world[init_env_ids] = self._get_ee_goal_spherical_center()[init_env_ids] + ee_goal_cart_yaw_global
 
     def _collision_check(self, env_ids):
-        ee_target_all_sphere = torch.lerp(self.ee_start_sphere[env_ids, ..., None], self.ee_goal_sphere[env_ids, ...,  None], self.collision_check_t).squeeze(-1)
-        ee_target_cart = sphere2cart(torch.permute(ee_target_all_sphere, (2, 0, 1)).reshape(-1, 3)).reshape(self.num_collision_check_samples, -1, 3)
+        if self.cfg.goal_ee.command_mode == "cart":
+            ee_target_cart = torch.lerp(
+                self.ee_start_cart[env_ids, ..., None],
+                self.ee_goal_cart[env_ids, ..., None],
+                self.collision_check_t,
+            ).permute(2, 0, 1)
+        else:
+            ee_target_all_sphere = torch.lerp(self.ee_start_sphere[env_ids, ..., None], self.ee_goal_sphere[env_ids, ...,  None], self.collision_check_t).squeeze(-1)
+            ee_target_cart = sphere2cart(torch.permute(ee_target_all_sphere, (2, 0, 1)).reshape(-1, 3)).reshape(self.num_collision_check_samples, -1, 3)
         collision_mask = torch.any(torch.logical_and(torch.all(ee_target_cart < self.collision_upper_limits, dim=-1), torch.all(ee_target_cart > self.collision_lower_limits, dim=-1)), dim=0)
         underground_mask = torch.any(ee_target_cart[..., 2] < self.underground_limit, dim=0)
         return collision_mask | underground_mask
@@ -1578,10 +1633,14 @@ class ManipLoco(LeggedRobot):
     def _update_curr_ee_goal(self):
         if not self.cfg.env.teleop_mode:
             t = torch.clip(self.goal_timer / self.traj_timesteps, 0, 1)
-            self.curr_ee_goal_sphere[:] = torch.lerp(self.ee_start_sphere, self.ee_goal_sphere, t[:, None])
+            if self.cfg.goal_ee.command_mode == "cart":
+                self.curr_ee_goal_cart[:] = torch.lerp(self.ee_start_cart, self.ee_goal_cart, t[:, None])
+                self.curr_ee_goal_sphere[:] = cart2sphere(self.curr_ee_goal_cart)
+            else:
+                self.curr_ee_goal_sphere[:] = torch.lerp(self.ee_start_sphere, self.ee_goal_sphere, t[:, None])
+                self.curr_ee_goal_cart[:] = sphere2cart(self.curr_ee_goal_sphere)
 
         # TODO: for the teleop mode, we need to directly update self.curr_ee_goal_cart using VR controller.
-        self.curr_ee_goal_cart[:] = sphere2cart(self.curr_ee_goal_sphere)
         ee_goal_cart_yaw_global = quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart)
         self.curr_ee_goal_cart_world = self._get_ee_goal_spherical_center() + ee_goal_cart_yaw_global
 
@@ -1601,9 +1660,14 @@ class ManipLoco(LeggedRobot):
         self._resample_ee_goal(resample_id)
 
     def _get_ee_goal_spherical_center(self):
+        if getattr(self.cfg.goal_ee, "center_mode", "terrain_invariant") == "arm_base":
+            return self.base_pos + quat_apply(self.base_yaw_quat, self.arm_base_offset)
         center = torch.cat([self.root_states[:, :2], torch.zeros(self.num_envs, 1, device=self.device)], dim=1)
         center = center + quat_apply(self.base_yaw_quat, self.ee_goal_center_offset)
         return center
+
+    def get_ee_goal_spherical_center(self):
+        return self._get_ee_goal_spherical_center()
 
     def _get_walking_cmd_mask(self, env_ids=None, return_all=False):
         if env_ids is None:

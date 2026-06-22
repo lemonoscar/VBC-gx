@@ -43,17 +43,26 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         collision_lower_limits = [-0.8, -0.2, -0.7]
         underground_limit = -0.6  # local cartesian z; keeps sampled EE goals from spending too much time below the terrain.
         num_collision_check_samples = 10
-        command_mode = 'sphere'
+        command_mode = 'cart'
+        center_mode = 'terrain_invariant'
         arm_induced_pitch = 0.38
 
         class sphere_center:
-            x_offset = 0.0  # Relative to base root; dense IK grid keeps sampled goals forward of this center.
+            x_offset = robot_spec.ARM_BASE_OFFSET[0]  # Relative to base root xy/yaw; z remains terrain-invariant.
             y_offset = 0    # Relative to base
-            z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + 0.20  # Relative to terrain; 0.20 m above the nominal base root.
+            z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + robot_spec.ARM_BASE_OFFSET[2]  # Relative to terrain.
 
         class ranges:
-            init_pos_start = [0.335, 0.686, 0.0]  # Canonical home EE, converted from arm-base cartesian grid.
-            init_pos_end = [0.396, 0.239, 0.0]  # Dense-grid initial high-level goal [0.30, 0.0, 0.20].
+            # Cartesian targets relative to the terrain-invariant nominal arm-base center. This wide
+            # box is a task target region, not an IK-feasible-only set; some targets intentionally
+            # require body/arm coordination.
+            init_pos_start = [0.174, 0.0, 0.318]  # Default arm home from the IK reachability scan.
+            init_pos_end = [0.30, 0.0, 0.16]
+            pos_x = [0.05, 0.60]
+            pos_y_cart = [-0.30, 0.30]
+            pos_z = [-0.40, 0.42]
+
+            # Legacy spherical ranges remain defined for B1Z1-compatible helpers and diagnostics.
             pos_l = [0.20, 0.56]
             pos_p = [0.15, 1.05]
             pos_y = [-0.65, 0.65]
@@ -190,27 +199,30 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class domain_rand:
         observe_priv = True
         randomize_friction = True
-        friction_range = [0.3, 3.0]
+        # Start Go2-X5 from a learnable unified low-level task. The B1Z1
+        # randomization range is too aggressive before the migrated robot can
+        # reliably stand, walk, and absorb X5 arm motion.
+        friction_range = [0.8, 1.5]
         randomize_base_mass = True
-        added_mass_range = [0., 15.]
+        added_mass_range = [0.0, 3.0]
         randomize_base_com = True
-        added_com_range_x = [-0.15, 0.15]
-        added_com_range_y = [-0.15, 0.15]
-        added_com_range_z = [-0.15, 0.15]
+        added_com_range_x = [-0.03, 0.03]
+        added_com_range_y = [-0.03, 0.03]
+        added_com_range_z = [-0.03, 0.03]
         randomize_motor = True
-        leg_motor_strength_range = [0.7, 1.3]
-        arm_motor_strength_range = [0.7, 1.3]
+        leg_motor_strength_range = [0.9, 1.1]
+        arm_motor_strength_range = [0.9, 1.1]
         randomize_gripper_mass = True
-        gripper_added_mass_range = [0, 0.1]
+        gripper_added_mass_range = [0.0, 0.03]
         push_robots = True
-        push_interval_s = 8
-        max_push_vel_xy = 0.5
+        push_interval_s = 10
+        max_push_vel_xy = 0.15
 
     class rewards:
         reward_container_name = "maniploco_rewards"
         only_positive_rewards = False
         tracking_sigma = 0.2
-        tracking_ee_sigma = 0.5
+        tracking_ee_sigma = 1.0
         soft_dof_pos_limit = 1.
         soft_dof_vel_limit = 1.
         soft_torque_limit = 0.4
@@ -223,14 +235,15 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
         kappa_gait_probs = 0.07
-        feet_height_target = 0.10
+        feet_height_target = 0.12
 
         feet_aritime_allfeet = False
         feet_height_allfeet = False
         foot_lateral_min = 0.06
         min_body_height = 0.15        # Minimum crouching height (~full knee bend)
-        low_goal_height_thresh = 0.30 # Only trigger posture shaping when EE goal is low
+        low_goal_height_thresh = 0.35 # Only trigger posture shaping when EE goal is low
         low_goal_hind_force_ratio_target = 0.30  # For low goals, hind legs should still carry a meaningful fraction of load
+        pitch_soft_limit = 0.35
 
         class scales:
             # -------Gait control rewards ---------
@@ -254,34 +267,34 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             dof_default_pos = 0.0
             dof_error = 0.0 
             alive = 1.0
-            lin_vel_z = -1.5
-            roll = -2
+            lin_vel_z = -2.0
+            roll = -2.5
 
             # common rewards
-            ang_vel_xy = -0.2 
-            dof_acc = -7.5e-7 
-            collision = -10.
+            ang_vel_xy = -0.3
+            dof_acc = -7.5e-7
+            collision = -12.0
             action_rate = -0.015
             dof_pos_limits = -10.0
             delta_torques = -1.0e-7
             hip_pos = -0.3
             work = -0.003
             feet_jerk = -0.0002
-            feet_drag = -0.08
-            foot_lateral_spacing = 0.0
+            feet_drag = -0.10
+            foot_lateral_spacing = -0.5
             feet_contact_forces = -0.001
-            height_adaptation = 0.0
-            low_goal_front_leg_bend = 0.0
-            low_goal_posture_asymmetry = 0.0
-            low_goal_hind_leg_extension = 0.0
-            low_goal_hind_support_force = 0.0
-            feet_contact_standing = 0.0
-            hind_feet_contact_standing = 0.0
-            pitch_soft_limit_standing = 0.0
+            height_adaptation = -1.0
+            low_goal_front_leg_bend = 0.15
+            low_goal_posture_asymmetry = 0.03
+            low_goal_hind_leg_extension = 0.15
+            low_goal_hind_support_force = 0.20
+            feet_contact_standing = -0.5
+            hind_feet_contact_standing = -1.0
+            pitch_soft_limit_standing = -1.0
             orientation = 0.0
             orientation_walking = 0.0
             orientation_standing = 0.0
-            base_height = -1.5
+            base_height = -3.5
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0

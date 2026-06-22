@@ -150,6 +150,44 @@ def test_low_level_action_interfaces_keep_b1z1_full_dim():
     assert "self._reindex_all(self.action_history_buf[:, -1])[:, :12]" in manip_loco
 
 
+def test_go2x5_joint_and_foot_reindexing_is_self_inverse():
+    spec = load_robot_spec()
+    manip_loco = (ROOT / "low-level/legged_gym/envs/manip_loco/manip_loco.py").read_text(encoding="utf-8")
+    b1z1_base = (ROOT / "high-level/envs/b1z1_base.py").read_text(encoding="utf-8")
+
+    leg_perm = [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
+    foot_perm = [1, 0, 3, 2]
+
+    assert [spec.URDF_LEG_JOINT_NAMES[i] for i in leg_perm] == spec.POLICY_LEG_JOINT_NAMES
+    assert [spec.POLICY_LEG_JOINT_NAMES[i] for i in leg_perm] == spec.URDF_LEG_JOINT_NAMES
+    assert [spec.URDF_FOOT_BODY_NAMES[i] for i in foot_perm] == spec.FOOT_BODY_NAMES
+    assert [spec.FOOT_BODY_NAMES[i] for i in foot_perm] == spec.URDF_FOOT_BODY_NAMES
+
+    assert "actions = self._reindex_all(actions)" in manip_loco
+    assert "low_actions = self._reindex_low_all(low_actions)" in b1z1_base
+    assert "low_action_obs = self._reindex_low_all(self.last_low_actions)[:, :12]" in b1z1_base
+
+
+def test_go2x5_default_joint_angles_cover_all_dofs_and_respect_limits():
+    spec = load_robot_spec()
+    urdf = load_urdf_root()
+    joints = {
+        joint.attrib["name"]: joint
+        for joint in urdf.findall("joint")
+        if joint.attrib.get("type") != "fixed"
+    }
+
+    assert set(spec.DEFAULT_JOINT_ANGLES) == set(spec.MOVABLE_JOINT_NAMES)
+    assert len(spec.LOW_ACTION_SCALE) == spec.ACTION_DIM
+
+    for joint_name, default_angle in spec.DEFAULT_JOINT_ANGLES.items():
+        limit = joints[joint_name].find("limit")
+        assert limit is not None
+        lower = float(limit.attrib["lower"])
+        upper = float(limit.attrib["upper"])
+        assert lower <= default_angle <= upper, (joint_name, lower, default_angle, upper)
+
+
 def test_configs_do_not_fall_back_to_old_go2x5_names():
     go2x5_pickmulti = (ROOT / "high-level/envs/go2x5_pickmulti.py").read_text(encoding="utf-8")
     b1z1_base = (ROOT / "high-level/envs/b1z1_base.py").read_text(encoding="utf-8")
@@ -168,8 +206,13 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert 'control_cfg.get("armPositionDriveDamping", 40.0)' in b1z1_base
     assert "robot_spec.ACTION_DIM" in go2x5_config
     assert "reorder_dofs = True" in go2x5_config
-    assert "x_offset = 0.0" in go2x5_config
-    assert "z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + 0.20" in go2x5_config
+    assert "command_mode = 'cart'" in go2x5_config
+    assert "center_mode = 'terrain_invariant'" in go2x5_config
+    assert "x_offset = robot_spec.ARM_BASE_OFFSET[0]" in go2x5_config
+    assert "z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + robot_spec.ARM_BASE_OFFSET[2]" in go2x5_config
+    assert "pos_x = [0.05, 0.60]" in go2x5_config
+    assert "pos_y_cart = [-0.30, 0.30]" in go2x5_config
+    assert "pos_z = [-0.40, 0.42]" in go2x5_config
     assert "pos_l = [0.20, 0.56]" in go2x5_config
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
@@ -179,15 +222,55 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "stages = []" in go2x5_config
     assert "S0_stand_sanity" not in go2x5_config
     assert "S4_robustness" not in go2x5_config
-    assert "feet_height_target = 0.10" in go2x5_config
-    assert "base_height = -1.5" in go2x5_config
+    assert "feet_height_target = 0.12" in go2x5_config
+    assert "base_height = -3.5" in go2x5_config
     assert "tracking_contacts_shaped_force = -2.0" in go2x5_config
     assert "tracking_lin_vel_max = 2.0" in go2x5_config
     assert "collision_force_threshold = 5.0" in go2x5_config
+    assert "friction_range = [0.8, 1.5]" in go2x5_config
+    assert "added_mass_range = [0.0, 3.0]" in go2x5_config
+    assert "added_com_range_x = [-0.03, 0.03]" in go2x5_config
+    assert "leg_motor_strength_range = [0.9, 1.1]" in go2x5_config
+    assert "max_push_vel_xy = 0.15" in go2x5_config
+    assert "tracking_ee_sigma = 1.0" in go2x5_config
     assert "def _reward_foot_lateral_spacing" in (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
     assert "if not self.cfg.env.reorder_dofs:" in manip_loco
     assert "self.ee_jacobian_idx = self.gripper_idx - 1" in manip_loco
     assert '"reorder_dofs": self.cfg.env.reorder_dofs' in manip_loco
+    assert 'if self.cfg.goal_ee.command_mode == "cart":' in manip_loco
+    assert "def _resample_ee_goal_cart_once" in manip_loco
+    assert 'getattr(self.cfg.goal_ee, "center_mode", "terrain_invariant") == "arm_base"' in manip_loco
+
+
+def test_go2x5_stability_design_matches_current_training_plan():
+    go2x5_config = (ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_config.py").read_text(encoding="utf-8")
+
+    assert "actor_hidden_dims = [128]" in go2x5_config
+    assert "critic_hidden_dims = [128]" in go2x5_config
+    assert "leg_control_head_hidden_dims = [128, 128]" in go2x5_config
+    assert "arm_control_head_hidden_dims = [128, 128]" in go2x5_config
+    assert "priv_encoder_dims = [64, 20]" in go2x5_config
+    assert "num_leg_actions = 12" in go2x5_config
+    assert "num_arm_actions = 0" in go2x5_config
+
+    assert "feet_height_target = 0.12" in go2x5_config
+    assert "low_goal_height_thresh = 0.35" in go2x5_config
+    assert "height_adaptation = -1.0" in go2x5_config
+    assert "low_goal_front_leg_bend = 0.15" in go2x5_config
+    assert "low_goal_posture_asymmetry = 0.03" in go2x5_config
+    assert "low_goal_hind_leg_extension = 0.15" in go2x5_config
+    assert "low_goal_hind_support_force = 0.20" in go2x5_config
+    assert "feet_contact_standing = -0.5" in go2x5_config
+    assert "hind_feet_contact_standing = -1.0" in go2x5_config
+    assert "pitch_soft_limit_standing = -1.0" in go2x5_config
+
+    assert "base_height = -3.5" in go2x5_config
+    assert "lin_vel_z = -2.0" in go2x5_config
+    assert "roll = -2.5" in go2x5_config
+    assert "ang_vel_xy = -0.3" in go2x5_config
+    assert "collision = -12.0" in go2x5_config
+    assert "feet_drag = -0.10" in go2x5_config
+    assert "foot_lateral_spacing = -0.5" in go2x5_config
 
 
 if __name__ == "__main__":
