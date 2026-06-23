@@ -217,21 +217,24 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = False" in go2x5_config
-    assert 'profile_name = "go2x5_b1z1_unified_v1"' in go2x5_config
+    assert 'profile_name = "go2x5_stability_first_unified_v1"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert "stages = []" in go2x5_config
     assert "S0_stand_sanity" not in go2x5_config
     assert "S4_robustness" not in go2x5_config
     assert "feet_height_target = 0.12" in go2x5_config
-    assert "base_height = -3.5" in go2x5_config
-    assert "tracking_contacts_shaped_force = -2.0" in go2x5_config
-    assert "tracking_lin_vel_max = 2.0" in go2x5_config
+    assert "base_height = -6.0" in go2x5_config
+    assert "termination = -50.0" in go2x5_config
+    assert "tracking_contacts_shaped_force = -0.5" in go2x5_config
+    assert "tracking_lin_vel_max = 1.0" in go2x5_config
     assert "collision_force_threshold = 5.0" in go2x5_config
-    assert "friction_range = [0.8, 1.5]" in go2x5_config
-    assert "added_mass_range = [0.0, 3.0]" in go2x5_config
-    assert "added_com_range_x = [-0.03, 0.03]" in go2x5_config
-    assert "leg_motor_strength_range = [0.9, 1.1]" in go2x5_config
-    assert "max_push_vel_xy = 0.15" in go2x5_config
+    assert "randomize_friction = False" in go2x5_config
+    assert "friction_range = [1.0, 1.0]" in go2x5_config
+    assert "added_mass_range = [0.0, 0.0]" in go2x5_config
+    assert "added_com_range_x = [0.0, 0.0]" in go2x5_config
+    assert "leg_motor_strength_range = [1.0, 1.0]" in go2x5_config
+    assert "push_robots = False" in go2x5_config
+    assert "max_push_vel_xy = 0.0" in go2x5_config
     assert "tracking_ee_sigma = 1.0" in go2x5_config
     assert "ik_gain = 0.25" in go2x5_config
     assert "track_ee_orientation = False" in go2x5_config
@@ -239,6 +242,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "if not self.cfg.env.reorder_dofs:" in manip_loco
     assert "self.ee_jacobian_idx = self.gripper_idx - 1" in manip_loco
     assert 'getattr(self.cfg.arm, "track_ee_orientation", True)' in manip_loco
+    assert "def _reward_termination(self):" in manip_loco
     assert '"reorder_dofs": self.cfg.env.reorder_dofs' in manip_loco
     assert 'if self.cfg.goal_ee.command_mode == "cart":' in manip_loco
     assert "def _resample_ee_goal_cart_once" in manip_loco
@@ -258,21 +262,22 @@ def test_go2x5_stability_design_matches_current_training_plan():
 
     assert "feet_height_target = 0.12" in go2x5_config
     assert "low_goal_height_thresh = 0.35" in go2x5_config
-    assert "height_adaptation = -1.0" in go2x5_config
-    assert "low_goal_front_leg_bend = 0.15" in go2x5_config
-    assert "low_goal_posture_asymmetry = 0.03" in go2x5_config
-    assert "low_goal_hind_leg_extension = 0.15" in go2x5_config
-    assert "low_goal_hind_support_force = 0.20" in go2x5_config
-    assert "feet_contact_standing = -0.5" in go2x5_config
-    assert "hind_feet_contact_standing = -1.0" in go2x5_config
-    assert "pitch_soft_limit_standing = -1.0" in go2x5_config
+    assert "height_adaptation = 0.0" in go2x5_config
+    assert "low_goal_front_leg_bend = 0.0" in go2x5_config
+    assert "low_goal_posture_asymmetry = 0.0" in go2x5_config
+    assert "low_goal_hind_leg_extension = 0.0" in go2x5_config
+    assert "low_goal_hind_support_force = 0.0" in go2x5_config
+    assert "feet_contact_standing = -1.0" in go2x5_config
+    assert "hind_feet_contact_standing = -2.0" in go2x5_config
+    assert "pitch_soft_limit_standing = -2.0" in go2x5_config
 
-    assert "base_height = -3.5" in go2x5_config
-    assert "lin_vel_z = -2.0" in go2x5_config
-    assert "roll = -2.5" in go2x5_config
-    assert "ang_vel_xy = -0.3" in go2x5_config
-    assert "collision = -12.0" in go2x5_config
-    assert "feet_drag = -0.10" in go2x5_config
+    assert "base_height = -6.0" in go2x5_config
+    assert "termination = -50.0" in go2x5_config
+    assert "lin_vel_z = -4.0" in go2x5_config
+    assert "roll = -5.0" in go2x5_config
+    assert "ang_vel_xy = -1.0" in go2x5_config
+    assert "collision = -20.0" in go2x5_config
+    assert "feet_drag = -0.20" in go2x5_config
     assert "foot_lateral_spacing = -0.5" in go2x5_config
 
 

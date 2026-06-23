@@ -516,6 +516,11 @@ class ManipLoco(LeggedRobot):
         # self.reset_buf = termination_contact_buf | self.time_out_buf | r_term | p_term | z_term | ik_fail
         self.reset_buf = termination_contact_buf | self.time_out_buf | r_term | p_term | z_term
 
+    def _reward_termination(self):
+        """Terminal penalty for non-timeout resets, matching ManipLoco's reward tuple API."""
+        terminal = (self.reset_buf & ~self.time_out_buf).float()
+        return terminal, terminal
+
     def create_sim(self):
         """ Creates simulation, terrain and evironments
         """

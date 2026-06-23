@@ -37,8 +37,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     
     class goal_ee:
         num_commands = 3
-        traj_time = [1, 3]
-        hold_time = [0.5, 2]
+        traj_time = [2.5, 4.0]
+        hold_time = [1.0, 2.5]
         collision_upper_limits = [0.1, 0.2, -0.05]
         collision_lower_limits = [-0.8, -0.2, -0.7]
         underground_limit = -0.6  # local cartesian z; keeps sampled EE goals from spending too much time below the terrain.
@@ -87,20 +87,20 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             height_measurements = 0.1
 
     class commands:
-        curriculum = True
+        curriculum = False
         num_commands = 3
         resampling_time = 3.
 
-        lin_vel_x_schedule = [0, 0.5]
-        ang_vel_yaw_schedule = [0, 1]
-        tracking_ang_vel_yaw_schedule = [0, 1]
+        lin_vel_x_schedule = [0, 0.2]
+        ang_vel_yaw_schedule = [0, 0.3]
+        tracking_ang_vel_yaw_schedule = [0, 0.3]
 
-        ang_vel_yaw_clip = 0.5
-        lin_vel_x_clip = 0.2
+        ang_vel_yaw_clip = 0.05
+        lin_vel_x_clip = 0.05
 
         class ranges:
-            lin_vel_x = [-0.8, 0.8]
-            ang_vel_yaw = [-1.0, 1.0]
+            lin_vel_x = [-0.2, 0.2]
+            ang_vel_yaw = [-0.3, 0.3]
 
     class normalization:
         class obs_scales:
@@ -148,13 +148,13 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class init_state( LeggedRobotCfg.init_state ):
         pos = [0.0, 0.0, robot_spec.BASE_INIT_HEIGHT]  # Go2-X5 canonical screening stance height.
-        leg_reset_ratio_range = [0.98, 1.02]
-        arm_reset_noise_range = [-0.05, 0.05]
+        leg_reset_ratio_range = [1.0, 1.0]
+        arm_reset_noise_range = [0.0, 0.0]
         # Go2 leg joints and X5 arm joints
         default_joint_angles = robot_spec.DEFAULT_JOINT_ANGLES.copy()
-        rand_yaw_range = np.pi/2
-        origin_perturb_range = 0.5
-        init_vel_perturb_range = 0.1
+        rand_yaw_range = 0.0
+        origin_perturb_range = 0.0
+        init_vel_perturb_range = 0.0
 
     class control:
         stiffness = {'hip': robot_spec.LEG_STIFFNESS, 'thigh': robot_spec.LEG_STIFFNESS, 'calf': robot_spec.LEG_STIFFNESS, 'arm': 5}  # [N*m/rad]
@@ -202,25 +202,24 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class domain_rand:
         observe_priv = True
-        randomize_friction = True
-        # Start Go2-X5 from a learnable unified low-level task. The B1Z1
-        # randomization range is too aggressive before the migrated robot can
-        # reliably stand, walk, and absorb X5 arm motion.
-        friction_range = [0.8, 1.5]
-        randomize_base_mass = True
-        added_mass_range = [0.0, 3.0]
-        randomize_base_com = True
-        added_com_range_x = [-0.03, 0.03]
-        added_com_range_y = [-0.03, 0.03]
-        added_com_range_z = [-0.03, 0.03]
-        randomize_motor = True
-        leg_motor_strength_range = [0.9, 1.1]
-        arm_motor_strength_range = [0.9, 1.1]
-        randomize_gripper_mass = True
-        gripper_added_mass_range = [0.0, 0.03]
-        push_robots = True
+        # Stability-first low-level training: first learn to survive and track
+        # small commands before reintroducing B1Z1-style randomization.
+        randomize_friction = False
+        friction_range = [1.0, 1.0]
+        randomize_base_mass = False
+        added_mass_range = [0.0, 0.0]
+        randomize_base_com = False
+        added_com_range_x = [0.0, 0.0]
+        added_com_range_y = [0.0, 0.0]
+        added_com_range_z = [0.0, 0.0]
+        randomize_motor = False
+        leg_motor_strength_range = [1.0, 1.0]
+        arm_motor_strength_range = [1.0, 1.0]
+        randomize_gripper_mass = False
+        gripper_added_mass_range = [0.0, 0.0]
+        push_robots = False
         push_interval_s = 10
-        max_push_vel_xy = 0.15
+        max_push_vel_xy = 0.0
 
     class rewards:
         reward_container_name = "maniploco_rewards"
@@ -251,54 +250,55 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
         class scales:
             # -------Gait control rewards ---------
-            tracking_contacts_shaped_force = -2.0
-            tracking_contacts_shaped_vel = -2.0
-            feet_air_time = 2.0
-            feet_height = 1.0
+            tracking_contacts_shaped_force = -0.5
+            tracking_contacts_shaped_vel = -0.5
+            feet_air_time = 0.5
+            feet_height = 0.2
 
             # -------Tracking rewards ----------
-            tracking_lin_vel_max = 2.0
+            tracking_lin_vel_max = 1.0
             tracking_lin_vel_x_l1 = 0.
             tracking_lin_vel_x_exp = 0
-            tracking_ang_vel = 0.5
+            tracking_ang_vel = 0.25
 
             delta_torques = -1.0e-7/4.0
             work = 0
             energy_square = 0.0
             torques = -2.5e-5 
-            stand_still = 1.0
-            walking_dof = 1.5
+            stand_still = 1.5
+            walking_dof = 1.0
             dof_default_pos = 0.0
-            dof_error = 0.0 
-            alive = 1.0
-            lin_vel_z = -2.0
-            roll = -2.5
+            dof_error = 0.0
+            alive = 2.0
+            termination = -50.0
+            lin_vel_z = -4.0
+            roll = -5.0
 
             # common rewards
-            ang_vel_xy = -0.3
-            dof_acc = -7.5e-7
-            collision = -12.0
-            action_rate = -0.015
+            ang_vel_xy = -1.0
+            dof_acc = -1.0e-6
+            collision = -20.0
+            action_rate = -0.02
             dof_pos_limits = -10.0
             delta_torques = -1.0e-7
-            hip_pos = -0.3
+            hip_pos = -0.5
             work = -0.003
             feet_jerk = -0.0002
-            feet_drag = -0.10
+            feet_drag = -0.20
             foot_lateral_spacing = -0.5
             feet_contact_forces = -0.001
-            height_adaptation = -1.0
-            low_goal_front_leg_bend = 0.15
-            low_goal_posture_asymmetry = 0.03
-            low_goal_hind_leg_extension = 0.15
-            low_goal_hind_support_force = 0.20
-            feet_contact_standing = -0.5
-            hind_feet_contact_standing = -1.0
-            pitch_soft_limit_standing = -1.0
+            height_adaptation = 0.0
+            low_goal_front_leg_bend = 0.0
+            low_goal_posture_asymmetry = 0.0
+            low_goal_hind_leg_extension = 0.0
+            low_goal_hind_support_force = 0.0
+            feet_contact_standing = -1.0
+            hind_feet_contact_standing = -2.0
+            pitch_soft_limit_standing = -2.0
             orientation = 0.0
             orientation_walking = 0.0
             orientation_standing = 0.0
-            base_height = -3.5
+            base_height = -6.0
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -311,7 +311,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         class arm_scales:
             arm_termination = None
             tracking_ee_sphere = 0.
-            tracking_ee_world = 0.8
+            tracking_ee_world = 0.5
             tracking_ee_sphere_walking = 0.0
             tracking_ee_sphere_standing = 0.0
             tracking_ee_cart = None
@@ -336,14 +336,14 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         horizontal_scale = 0.05
         vertical_scale = 0.005
         border_size = 25
-        height = [0.00, 0.1]
+        height = [0.00, 0.02]
         gap_size = [0.02, 0.1]
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
         curriculum = False
 
         all_vertical = False
-        no_flat = True
+        no_flat = False
         
         static_friction = 1.0
         dynamic_friction = 1.0
@@ -355,7 +355,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         
         selected = False
         terrain_kwargs = None
-        max_init_terrain_level = 5
+        max_init_terrain_level = 0
         terrain_length = 8.
         terrain_width = 8.
         num_rows = 10
@@ -378,7 +378,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class auto_curriculum:
         enabled = False
-        profile_name = "go2x5_b1z1_unified_v1"
+        profile_name = "go2x5_stability_first_unified_v1"
         metric_window = 200
         log_stage = False
         save_stage_metadata = True
@@ -390,7 +390,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        init_std = [[0.8, 1.0, 1.0] * 4]
+        init_std = [[0.25, 0.35, 0.35] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'
@@ -421,7 +421,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         lam = 0.95
         desired_kl = None
         max_grad_norm = 1.
-        min_policy_std = [[0.15, 0.25, 0.25] * 4]
+        min_policy_std = [[0.08, 0.12, 0.12] * 4]
 
         mixing_schedule = [1.0, 0, 3000]
         torque_supervision = Go2X5RoughCfg.control.torque_supervision
