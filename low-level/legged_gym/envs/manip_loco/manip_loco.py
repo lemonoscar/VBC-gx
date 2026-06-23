@@ -509,6 +509,11 @@ class ManipLoco(LeggedRobot):
         z_term = z < self.cfg.termination.z_threshold
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
 
+        self.reset_contact_buf = termination_contact_buf
+        self.reset_roll_buf = r_term
+        self.reset_pitch_buf = p_term
+        self.reset_z_buf = z_term
+
         # arm_base_local = torch.tensor([0.3, 0.0, 0.09], device=self.device).repeat(self.num_envs, 1)
         # arm_base = quat_apply(self.base_quat, arm_base_local) + self.root_states[:, :3]
         # curr_ee_pos_local = quat_rotate_inverse(self.root_states[:, 3:7], self.ee_pos - arm_base)
@@ -578,6 +583,17 @@ class ManipLoco(LeggedRobot):
         for key in self.episode_metric_sums.keys():
             self.extras["episode"]['metric_' + key] = torch.mean(self.episode_metric_sums[key][env_ids]) / self.max_episode_length_s
             self.episode_metric_sums[key][env_ids] = 0.
+
+        reset_cause_buffers = {
+            "contact": getattr(self, "reset_contact_buf", None),
+            "roll": getattr(self, "reset_roll_buf", None),
+            "pitch": getattr(self, "reset_pitch_buf", None),
+            "z": getattr(self, "reset_z_buf", None),
+            "timeout": getattr(self, "time_out_buf", None),
+        }
+        for name, buf in reset_cause_buffers.items():
+            if torch.is_tensor(buf):
+                self.extras["episode"]["reset_" + name] = torch.mean(buf[env_ids].float())
 
         # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
