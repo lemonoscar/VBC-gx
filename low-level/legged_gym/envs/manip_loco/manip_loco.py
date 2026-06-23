@@ -111,10 +111,22 @@ class ManipLoco(LeggedRobot):
             cfg.commands.lin_vel_x_clip = stage_cfg["lin_vel_x_clip"]
         if "ang_vel_yaw_clip" in stage_cfg:
             cfg.commands.ang_vel_yaw_clip = stage_cfg["ang_vel_yaw_clip"]
+        if "action_scale" in stage_cfg:
+            cfg.control.action_scale = stage_cfg["action_scale"]
+        if "goal_pos_x" in stage_cfg:
+            cfg.goal_ee.ranges.pos_x = stage_cfg["goal_pos_x"]
+        if "goal_pos_y_cart" in stage_cfg:
+            cfg.goal_ee.ranges.pos_y_cart = stage_cfg["goal_pos_y_cart"]
+        if "goal_pos_z" in stage_cfg:
+            cfg.goal_ee.ranges.pos_z = stage_cfg["goal_pos_z"]
         if "goal_pos_l" in stage_cfg:
             cfg.goal_ee.ranges.pos_l = stage_cfg["goal_pos_l"]
         if "goal_pos_p" in stage_cfg:
             cfg.goal_ee.ranges.pos_p = stage_cfg["goal_pos_p"]
+        if "traj_time" in stage_cfg:
+            cfg.goal_ee.traj_time = stage_cfg["traj_time"]
+        if "hold_time" in stage_cfg:
+            cfg.goal_ee.hold_time = stage_cfg["hold_time"]
         if "collision_force_threshold" in stage_cfg:
             rewards.collision_force_threshold = stage_cfg["collision_force_threshold"]
         if "terrain" in stage_cfg:
@@ -127,9 +139,17 @@ class ManipLoco(LeggedRobot):
             "hip_pos_scale": ("scales", "hip_pos"),
             "base_height_scale": ("scales", "base_height"),
             "roll_scale": ("scales", "roll"),
+            "orientation_scale": ("scales", "orientation"),
             "feet_drag_scale": ("scales", "feet_drag"),
+            "feet_contact_standing_scale": ("scales", "feet_contact_standing"),
+            "hind_feet_contact_standing_scale": ("scales", "hind_feet_contact_standing"),
+            "foot_support_standing_scale": ("scales", "foot_support_standing"),
             "foot_lateral_spacing_scale": ("scales", "foot_lateral_spacing"),
+            "dof_error_deadzone_scale": ("scales", "dof_error_deadzone"),
+            "leg_action_l2_deadzone_scale": ("scales", "leg_action_l2_deadzone"),
+            "stability_safety_scale": ("scales", "stability_safety"),
             "tracking_lin_vel_max_scale": ("scales", "tracking_lin_vel_max"),
+            "tracking_ang_vel_scale": ("scales", "tracking_ang_vel"),
             "walking_dof_scale": ("scales", "walking_dof"),
             "tracking_contacts_shaped_force_scale": ("scales", "tracking_contacts_shaped_force"),
             "tracking_contacts_shaped_vel_scale": ("scales", "tracking_contacts_shaped_vel"),
@@ -138,10 +158,37 @@ class ManipLoco(LeggedRobot):
             "torques_scale": ("scales", "torques"),
             "work_scale": ("scales", "work"),
             "ee_tracking_weight": ("arm_scales", "tracking_ee_world"),
+            "ee_tracking_stable_weight": ("arm_scales", "tracking_ee_world_stable"),
         }
         for stage_key, (container_name, reward_name) in reward_scale_map.items():
             if stage_key in stage_cfg:
                 setattr(getattr(rewards, container_name), reward_name, stage_cfg[stage_key])
+
+    def _sync_reward_functions_and_sums(self):
+        self.reward_functions = []
+        self.reward_names = []
+        for name in self.reward_scales.keys():
+            if name == "termination":
+                continue
+            self.reward_names.append(name)
+            self.reward_functions.append(getattr(self.reward_container, "_reward_" + name))
+
+        self.arm_reward_functions = []
+        self.arm_reward_names = []
+        for name in self.arm_reward_scales.keys():
+            if name == "termination":
+                continue
+            self.arm_reward_names.append(name)
+            self.arm_reward_functions.append(getattr(self.reward_container, "_reward_" + name))
+
+        active_names = set(self.reward_scales.keys()) | set(self.arm_reward_scales.keys())
+        for sums in (self.episode_sums, self.episode_metric_sums):
+            for name in list(sums.keys()):
+                if name not in active_names:
+                    del sums[name]
+            for name in active_names:
+                if name not in sums:
+                    sums[name] = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
 
     def set_training_stage(self, stage_index, stage_cfg, iteration=None):
         stage_index = int(stage_index)
@@ -160,6 +207,8 @@ class ManipLoco(LeggedRobot):
         self.reward_scales = {k: v for k, v in self.reward_scales.items() if v is not None and v != 0}
         self.arm_reward_scales.update(class_to_dict(self.cfg.rewards.arm_scales))
         self.arm_reward_scales = {k: v for k, v in self.arm_reward_scales.items() if v is not None and v != 0}
+        self.action_scale = torch.tensor(self.cfg.control.action_scale, device=self.device)
+        self._sync_reward_functions_and_sums()
         self.push_interval = np.ceil(self.cfg.domain_rand.push_interval_s / self.dt)
         if "max_terrain_level" in stage_cfg and hasattr(self, "terrain_levels"):
             self.max_terrain_level = max(1, min(int(stage_cfg["max_terrain_level"]), self.cfg.terrain.num_rows))
@@ -228,6 +277,10 @@ class ManipLoco(LeggedRobot):
             "Curriculum/stage_min_iterations": self.curriculum_stage_cfg.get("min_iterations", 0),
             "Curriculum/max_terrain_level": self.curriculum_stage_cfg.get("max_terrain_level", 0),
             "Curriculum/collision_force_threshold": getattr(self.cfg.rewards, "collision_force_threshold", 0.0),
+            "Curriculum/action_scale_hip": float(self.cfg.control.action_scale[0]),
+            "Curriculum/action_scale_thigh": float(self.cfg.control.action_scale[1]),
+            "Curriculum/ee_tracking_stable_weight": float(getattr(self.cfg.rewards.arm_scales, "tracking_ee_world_stable", 0.0)),
+            "Curriculum/lin_vel_x_max": float(self.command_ranges.get("lin_vel_x", [0.0, 0.0])[1]),
         }
 
     def _asset_sha256(self):

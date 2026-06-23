@@ -19,6 +19,48 @@ class ManipLoco_rewards:
         rew = torch.exp(-ee_pos_error/self.env.cfg.rewards.tracking_ee_sigma * 2)
         return rew, ee_pos_error
 
+    def _stability_safety(self):
+        body_rpy = self.env._get_body_orientation()
+        roll_abs = torch.abs(body_rpy[:, 0])
+        pitch_abs = torch.abs(body_rpy[:, 1])
+        base_height = self._base_height_relative_to_terrain()
+
+        def linear_margin(value, start, end):
+            return torch.clamp((end - value) / max(end - start, 1e-6), min=0.0, max=1.0)
+
+        roll_safety = linear_margin(
+            roll_abs,
+            getattr(self.env.cfg.rewards, "safety_roll_soft", 0.25),
+            getattr(self.env.cfg.rewards, "safety_roll_hard", 0.55),
+        )
+        pitch_safety = linear_margin(
+            pitch_abs,
+            getattr(self.env.cfg.rewards, "safety_pitch_soft", 0.25),
+            getattr(self.env.cfg.rewards, "safety_pitch_hard", 0.55),
+        )
+        height_safety = torch.clamp(
+            (base_height - getattr(self.env.cfg.rewards, "safety_base_height_floor", 0.20))
+            / max(getattr(self.env.cfg.rewards, "safety_base_height_min", 0.26)
+                  - getattr(self.env.cfg.rewards, "safety_base_height_floor", 0.20), 1e-6),
+            min=0.0,
+            max=1.0,
+        )
+
+        foot_contacts = self.env.foot_contacts_from_sensor.float()
+        contact_count = torch.sum(foot_contacts, dim=1)
+        min_feet = getattr(self.env.cfg.rewards, "safety_min_feet_contacts", 3.0)
+        foot_safety = torch.clamp((contact_count - (min_feet - 1.0)) / 1.0, min=0.0, max=1.0)
+
+        return roll_safety * pitch_safety * height_safety * foot_safety
+
+    def _reward_tracking_ee_world_stable(self):
+        reward, metric = self._reward_tracking_ee_world()
+        return reward * self._stability_safety(), metric
+
+    def _reward_stability_safety(self):
+        safety = self._stability_safety()
+        return safety, safety
+
     def _reward_tracking_ee_sphere_walking(self):
         reward, metric = self.env._reward_tracking_ee_sphere()
         walking_mask = self.env._get_walking_cmd_mask()
@@ -69,6 +111,12 @@ class ManipLoco_rewards:
     def _reward_leg_action_l2(self):
         action_l2 = torch.sum(self.env.actions[:, :12] ** 2, dim=1)
         return action_l2, action_l2
+
+    def _reward_leg_action_l2_deadzone(self):
+        deadzone = getattr(self.env.cfg.rewards, "leg_action_deadzone", 0.20)
+        excess = torch.clamp(torch.abs(self.env.actions[:, :12]) - deadzone, min=0.0)
+        penalty = torch.sum(excess ** 2, dim=1)
+        return penalty, penalty
 
     def _reward_leg_energy(self):
         energy = torch.sum(self.env.torques[:, :12] * self.env.dof_vel[:, :12], dim = 1)
@@ -248,6 +296,13 @@ class ManipLoco_rewards:
         walking_mask = self.env._get_walking_cmd_mask()
         rew[walking_mask] = 0.
         return rew, rew
+
+    def _reward_foot_support_standing(self):
+        min_feet = getattr(self.env.cfg.rewards, "min_stance_feet", 3.0)
+        contact_count = torch.sum(self.env.foot_contacts_from_sensor.float(), dim=1)
+        missing_support = torch.clamp(min_feet - contact_count, min=0.0)
+        missing_support[self.env._get_walking_cmd_mask()] = 0.
+        return missing_support, missing_support
 
     def _reward_low_goal_front_leg_bend(self):
         # For low EE goals, encourage front legs to crouch instead of solving reach only with body pitch.
@@ -446,6 +501,12 @@ class ManipLoco_rewards:
     def _reward_dof_error(self):
         dof_error = torch.sum(torch.square(self.env.dof_pos - self.env.default_dof_pos)[:, :12], dim=1)
         return dof_error, dof_error
+
+    def _reward_dof_error_deadzone(self):
+        deadzone = getattr(self.env.cfg.rewards, "dof_error_deadzone", 0.12)
+        dof_error = torch.clamp(torch.abs(self.env.dof_pos - self.env.default_dof_pos)[:, :12] - deadzone, min=0.0)
+        penalty = torch.sum(dof_error ** 2, dim=1)
+        return penalty, penalty
 
     def _reward_tracking_lin_vel_max(self):
         rew = torch.where(self.env.commands[:, 0] > 0, torch.minimum(self.env.base_lin_vel[:, 0], self.env.commands[:, 0]) / (self.env.commands[:, 0] + 1e-5), \

@@ -224,6 +224,8 @@ class OnPolicyRunner:
                     wandb_dict['Episode_rew/' + key] = value
                 elif "metric" in key:
                     wandb_dict['Episode_metric/' + key] = value
+                else:
+                    wandb_dict['Episode/' + key] = value
                 ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
         leg_mean_std = self.alg.actor_critic.std[:, :12].mean()
         if self.alg.actor_critic.std.shape[1] > 12:

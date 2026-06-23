@@ -216,12 +216,13 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_l = [0.20, 0.56]" in go2x5_config
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
-    assert "enabled = False" in go2x5_config
-    assert 'profile_name = "go2x5_stand_first_unified_v1"' in go2x5_config
+    assert "enabled = True" in go2x5_config
+    assert 'profile_name = "go2x5_stable_reach_curriculum_v1"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
-    assert "stages = []" in go2x5_config
-    assert "S0_stand_sanity" not in go2x5_config
-    assert "S4_robustness" not in go2x5_config
+    assert '"name": "S0_safe_small_reach"' in go2x5_config
+    assert '"name": "S1_mid_reach_compensation"' in go2x5_config
+    assert '"name": "S2_full_reach_compensation"' in go2x5_config
+    assert '"name": "S3_small_locomotion_reach"' in go2x5_config
     assert "feet_height_target = 0.12" in go2x5_config
     assert "lin_vel_x = [0.0, 0.0]" in go2x5_config
     assert "ang_vel_yaw = [0.0, 0.0]" in go2x5_config
@@ -229,6 +230,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "termination = -100.0" in go2x5_config
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
     assert "tracking_lin_vel_max = 0.0" in go2x5_config
+    assert "tracking_ee_world_stable = 0.2" in go2x5_config
     assert "collision_force_threshold = 5.0" in go2x5_config
     assert "randomize_friction = False" in go2x5_config
     assert "friction_range = [1.0, 1.0]" in go2x5_config
@@ -240,13 +242,24 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "tracking_ee_sigma = 1.0" in go2x5_config
     assert "ik_gain = 0.25" in go2x5_config
     assert "track_ee_orientation = False" in go2x5_config
-    assert "def _reward_foot_lateral_spacing" in (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
+    reward_file = (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
+    runner = (ROOT / "third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py").read_text(encoding="utf-8")
+
+    assert "def _reward_foot_lateral_spacing" in reward_file
+    assert "def _reward_tracking_ee_world_stable" in reward_file
+    assert "def _reward_dof_error_deadzone" in reward_file
+    assert "def _reward_leg_action_l2_deadzone" in reward_file
+    assert "def _reward_foot_support_standing" in reward_file
     assert "if not self.cfg.env.reorder_dofs:" in manip_loco
     assert "self.ee_jacobian_idx = self.gripper_idx - 1" in manip_loco
     assert 'getattr(self.cfg.arm, "track_ee_orientation", True)' in manip_loco
     assert "def _reward_termination(self):" in manip_loco
     assert '"reset_roll_buf"' in manip_loco
     assert 'self.extras["episode"]["reset_" + name]' in manip_loco
+    assert 'wandb_dict[\'Episode/\' + key] = value' in runner
+    assert 'if "action_scale" in stage_cfg:' in manip_loco
+    assert "self.action_scale = torch.tensor(self.cfg.control.action_scale, device=self.device)" in manip_loco
+    assert "def _sync_reward_functions_and_sums" in manip_loco
     assert '"reorder_dofs": self.cfg.env.reorder_dofs' in manip_loco
     assert 'if self.cfg.goal_ee.command_mode == "cart":' in manip_loco
     assert "def _resample_ee_goal_cart_once" in manip_loco
@@ -271,8 +284,9 @@ def test_go2x5_stability_design_matches_current_training_plan():
     assert "low_goal_posture_asymmetry = 0.0" in go2x5_config
     assert "low_goal_hind_leg_extension = 0.0" in go2x5_config
     assert "low_goal_hind_support_force = 0.0" in go2x5_config
-    assert "feet_contact_standing = -1.0" in go2x5_config
-    assert "hind_feet_contact_standing = -2.0" in go2x5_config
+    assert "feet_contact_standing = -2.0" in go2x5_config
+    assert "hind_feet_contact_standing = -2.5" in go2x5_config
+    assert "foot_support_standing = -2.0" in go2x5_config
     assert "pitch_soft_limit_standing = -2.0" in go2x5_config
 
     assert "base_height = -6.0" in go2x5_config
@@ -280,9 +294,15 @@ def test_go2x5_stability_design_matches_current_training_plan():
     assert "lin_vel_z = -5.0" in go2x5_config
     assert "roll = -8.0" in go2x5_config
     assert "ang_vel_xy = -2.0" in go2x5_config
-    assert "collision = -25.0" in go2x5_config
+    assert "collision = -8.0" in go2x5_config
     assert "feet_drag = -0.25" in go2x5_config
-    assert "foot_lateral_spacing = -0.5" in go2x5_config
+    assert "foot_lateral_spacing = -2.0" in go2x5_config
+    assert "orientation = -3.0" in go2x5_config
+    assert "stability_safety = 1.0" in go2x5_config
+    assert "dof_error_deadzone = -1.0" in go2x5_config
+    assert "leg_action_l2_deadzone = -0.1" in go2x5_config
+    assert "action_scale = [0.10, 0.16, 0.16] * 4" in go2x5_config
+    assert '"action_scale": robot_spec.LOW_ACTION_SCALE' in go2x5_config
     assert "init_std = [[0.08, 0.10, 0.10] * 4]" in go2x5_config
     assert "min_policy_std = [[0.04, 0.05, 0.05] * 4]" in go2x5_config
 
