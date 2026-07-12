@@ -116,7 +116,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         num_envs = 4096
         num_actions = robot_spec.ACTION_DIM  # low-level policy controls legs only; arm is driven by IK position targets
         num_torques = robot_spec.NUM_TORQUES
-        action_delay = 3
+        action_delay = 0  # deterministic parity first; reintroduce measured delay through a shared contract
         num_gripper_joints = robot_spec.NUM_PHYSICAL_GRIPPER_DOFS  # Isaac Gym loads the mirrored finger sliders as physical DOFs.
         # Observation breakdown:
         # - body_orientation: 2
@@ -170,6 +170,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class asset( LeggedRobotCfg.asset ):
         file = robot_spec.LOW_LEVEL_ASSET_FILE
+        base_body_name = "base"
         foot_name = "foot"  # Go2 foot links are named *_foot
         gripper_name = robot_spec.EE_BODY_NAME  # End-effector frame from the Go2-X5-lab URDF
         # Note: Go2 has no "trunk" like B1, use "thigh" instead for penalization

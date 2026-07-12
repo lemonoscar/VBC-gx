@@ -32,6 +32,7 @@ import time
 import numpy as np
 import os
 import hashlib
+import json
 from collections import defaultdict, deque
 
 from isaacgym.torch_utils import *
@@ -293,9 +294,57 @@ class ManipLoco(LeggedRobot):
 
     def get_training_metadata(self):
         asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
+        control_contract = {
+            "action_scale": list(self.cfg.control.action_scale),
+            "leg_stiffness": float(self.cfg.control.stiffness["hip"]),
+            "leg_damping": float(self.cfg.control.damping["hip"]),
+            "arm_position_stiffness": float(self.cfg.control.arm_pos_stiffness),
+            "arm_position_damping": float(self.cfg.control.arm_pos_damping),
+            "sim_dt": float(self.cfg.sim.dt),
+            "physics_decimation": int(self.cfg.control.decimation),
+            "physx": {
+                "num_position_iterations": int(self.cfg.sim.physx.num_position_iterations),
+                "num_velocity_iterations": int(self.cfg.sim.physx.num_velocity_iterations),
+                "contact_offset": float(self.cfg.sim.physx.contact_offset),
+                "rest_offset": float(self.cfg.sim.physx.rest_offset),
+                "bounce_threshold_velocity": float(self.cfg.sim.physx.bounce_threshold_velocity),
+                "max_depenetration_velocity": float(self.cfg.sim.physx.max_depenetration_velocity),
+                "default_buffer_size_multiplier": float(self.cfg.sim.physx.default_buffer_size_multiplier),
+            },
+            "action_delay_steps": int(self.cfg.env.action_delay),
+            "command_ranges": {
+                "lin_vel_x": list(self.cfg.commands.ranges.lin_vel_x),
+                "ang_vel_yaw": list(self.cfg.commands.ranges.ang_vel_yaw),
+            },
+            "command_dead_zone": {
+                "lin_vel_x": float(self.cfg.commands.lin_vel_x_clip),
+                "ang_vel_yaw": float(self.cfg.commands.ang_vel_yaw_clip),
+            },
+            "gait_frequency": float(self.cfg.env.frequencies),
+            "foot_contact_threshold": 1.5,
+            "ee_frame": "TERRAIN_INVARIANT_YAW"
+            if self.cfg.goal_ee.center_mode == "terrain_invariant" else "ARM_BASE_YAW",
+            "ik_gain": float(self.cfg.arm.ik_gain),
+            "ik_damping": 0.05,
+            "track_ee_orientation": bool(self.cfg.arm.track_ee_orientation),
+            "arm_target_update_period": int(self.cfg.control.decimation),
+            "domain_randomization": {
+                "friction": list(self.cfg.domain_rand.friction_range),
+                "motor_strength": list(self.cfg.domain_rand.leg_motor_strength_range),
+                "added_base_mass_kg": list(self.cfg.domain_rand.added_mass_range),
+                "base_com_offset_m": [
+                    list(self.cfg.domain_rand.added_com_range_x),
+                    list(self.cfg.domain_rand.added_com_range_y),
+                    list(self.cfg.domain_rand.added_com_range_z),
+                ],
+            },
+        }
+        control_contract_hash = hashlib.sha256(
+            json.dumps(control_contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         return {
             "go2x5_alignment": {
-                "schema_version": 1,
+                "schema_version": 2,
                 "asset_file": asset_path,
                 "asset_sha256": self._asset_sha256(),
                 "action_dim": self.cfg.env.num_actions,
@@ -317,6 +366,8 @@ class ManipLoco(LeggedRobot):
                 "arm_base_offset": list(self.cfg.arm.base_offset),
                 "spec_action_dim": go2x5_robot_spec.ACTION_DIM,
                 "spec_proprio_without_gait": go2x5_robot_spec.PROPRIO_DIM_WITHOUT_GAIT,
+                "control_contract": control_contract,
+                "control_contract_sha256": control_contract_hash,
                 "curriculum": {
                     "enabled": getattr(self, "auto_curriculum_enabled", False),
                     "profile_name": getattr(self, "curriculum_profile_name", ""),
@@ -352,11 +403,7 @@ class ManipLoco(LeggedRobot):
         self.render()
         if self.action_delay != -1:
             self.action_history_buf = torch.cat([self.action_history_buf[:, 1:], actions[:, None, :]], dim=1)
-            # actions = self.action_history_buf[:, -self.action_delay - 1] # delay for 1/50=20ms
-        if self.global_steps < 10000 * 24:
-            actions = self.action_history_buf[:, -1]
-        else:
-            actions = self.action_history_buf[:, -2]
+            actions = self.action_history_buf[:, -(self.action_delay + 1)]
 
         self.actions = actions.clone()
 
@@ -514,7 +561,7 @@ class ManipLoco(LeggedRobot):
                         self.base_ang_vel * self.obs_scales.ang_vel,  # dim 3
                         dof_pos_obs,  # dim 18 (for 20 dof with 2 gripper joints)
                         dof_vel_obs,  # dim 18 (for 20 dof with 2 gripper joints)
-                        self._reindex_all(self.action_history_buf[:, -1])[:, :12],  # dim 12 leg actions only
+                        self._reindex_all(self.actions)[:, :12],  # dim 12 actually applied leg actions
                                     self._reindex_feet(self.foot_contacts_from_sensor),  # dim 4
                                     self.commands[:, :3] * self.commands_scale,  # dim 3
                                     # self.curr_ee_goal_sphere,  # dim 3 position
@@ -973,10 +1020,14 @@ class ManipLoco(LeggedRobot):
                 self.gym.set_camera_location(camera_handle, self.envs[i], gymapi.Vec3(*cam_pos), gymapi.Vec3(*0*cam_pos))
 
     def _process_rigid_body_props(self, props, env_id):
+        base_body_name = getattr(self.cfg.asset, "base_body_name", "trunk")
+        if base_body_name not in self.body_names_to_idx:
+            raise KeyError(f"Configured base body '{base_body_name}' not found in {self.body_names}")
+        base_idx = self.body_names_to_idx[base_body_name]
         if self.cfg.domain_rand.randomize_base_mass:
             rng_mass = self.cfg.domain_rand.added_mass_range
             rand_mass = np.random.uniform(rng_mass[0], rng_mass[1], size=(1, ))
-            props[1].mass += rand_mass
+            props[base_idx].mass += rand_mass
         else:
             rand_mass = np.zeros(1)
 
@@ -992,7 +1043,7 @@ class ManipLoco(LeggedRobot):
             rng_com_y = self.cfg.domain_rand.added_com_range_y
             rng_com_z = self.cfg.domain_rand.added_com_range_z
             rand_com = np.random.uniform([rng_com_x[0], rng_com_y[0], rng_com_z[0]], [rng_com_x[1], rng_com_y[1], rng_com_z[1]], size=(3, ))
-            props[1].com += gymapi.Vec3(*rand_com)
+            props[base_idx].com += gymapi.Vec3(*rand_com)
         else:
             rand_com = np.zeros(3)
 

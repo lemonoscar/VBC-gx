@@ -28,26 +28,76 @@ env:
   lowPolicyObserveGaitCommands: True
   lowPolicyReorderDofs: True
   lowActionScale: [0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35]
-  lowLevelLinVelClip: 0.15
-  lowLevelAngVelYawClip: 0.35
+  lowLevelLinVelClip: 0.05
+  lowLevelAngVelYawClip: 0.05
   lowLevelAngVelPitchClip: 0.25
+  lowFootContactThreshold: 1.5
+  lowEeGoalRanges: [[0.05, 0.60], [-0.30, 0.30], [-0.40, 0.42]]
   robotStartPose: [-0.75, 0.0, 0.33]
   evalRobotStartPose: [-0.70, 0.0, 0.33]
   initialEEGoalCart: [0.30, 0.0, 0.20]
   initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
   maskArmGoalCart: [0.34, 0.0, 0.24]
   armBaseOffset: [0.085, 0.0, 0.094]
+  eeFrame: "TERRAIN_INVARIANT_YAW"
+  armIkGain: 0.25
+  trackEeOrientation: False
+  armTargetUpdatePeriod: 4
   baseHeightClip: [0.2, 0.42]
   eeBodyName: "arm_eef_link"
   wristBodyName: "arm_link6"
   flangeBodyName: "arm_link6"
   fingerBodyNames: ["arm_link7", "arm_link8"]
 
+  domainRandomization:
+    profile: "go2x5_deterministic_v1"
+    friction: [1.0, 1.0]
+    motorStrength: [1.0, 1.0]
+    addedBaseMassKg: [0.0, 0.0]
+    baseComOffsetM: [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+
+  lowPolicyContract:
+    action_scale: [0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35]
+    leg_stiffness: 60.0
+    leg_damping: 1.5
+    arm_position_stiffness: 110.0
+    arm_position_damping: 7.5
+    sim_dt: 0.005
+    physics_decimation: 4
+    physx:
+      num_position_iterations: 4
+      num_velocity_iterations: 0
+      contact_offset: 0.01
+      rest_offset: 0.0
+      bounce_threshold_velocity: 0.5
+      max_depenetration_velocity: 1.0
+      default_buffer_size_multiplier: 5.0
+    action_delay_steps: 0
+    command_ranges:
+      lin_vel_x: [-0.2, 0.2]
+      ang_vel_yaw: [-0.3, 0.3]
+    command_dead_zone:
+      lin_vel_x: 0.05
+      ang_vel_yaw: 0.05
+    gait_frequency: 2.0
+    foot_contact_threshold: 1.5
+    ee_frame: "TERRAIN_INVARIANT_YAW"
+    ik_gain: 0.25
+    ik_damping: 0.05
+    track_ee_orientation: false
+    arm_target_update_period: 4
+    domain_randomization:
+      friction: [1.0, 1.0]
+      motor_strength: [1.0, 1.0]
+      added_base_mass_kg: [0.0, 0.0]
+      base_com_offset_m: [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+
   asset:
     assetRoot: "data/asset"
     robotAssetRoot: "../low-level/resources/robots"
     objectAssetRoot: "data/asset"
     assetFileRobot: "go2x5/go2_x5.urdf"
+    baseBodyName: "base"
     assetFileObj: "obj_set/"
 
     asset_multi:
@@ -241,13 +291,13 @@ sim:
     use_gpu: True
     num_threads: 4
     solver_type: 1
-    num_position_iterations: 8
+    num_position_iterations: 4
     num_velocity_iterations: 0
-    contact_offset: 0.04
+    contact_offset: 0.01
     rest_offset: 0.0
-    bounce_threshold_velocity: 0.2
-    max_depenetration_velocity: 50.0
-    default_buffer_size_multiplier: 300.0
+    bounce_threshold_velocity: 0.5
+    max_depenetration_velocity: 1.0
+    default_buffer_size_multiplier: 5.0
     max_gpu_contact_pairs: 16777216
 
 reward:
