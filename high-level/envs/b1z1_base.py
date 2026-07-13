@@ -136,7 +136,7 @@ class B1Z1Base(RewardVecTask):
             if self.camera_mode == "seperate":
                 self.cfg["env"]["numEnvs"] = 240
             
-        self.robot_start_pose = robot_start_pose
+        self.robot_start_pose = tuple(self.cfg["env"].get("robotStartPose", robot_start_pose))
 
         self._extra_env_settings()
         
@@ -367,10 +367,10 @@ class B1Z1Base(RewardVecTask):
         
         # self.motor_strength = torch.ones(self.num_envs, self.low_policy_num_actions, device=self.device, dtype=torch.float32)
         motor_range = self.cfg["env"].get("domainRandomization", {}).get("motorStrength", [0.7, 1.3])
-        self.motor_strength = torch.cat([
-                    torch_rand_float(motor_range[0], motor_range[1], (self.num_envs, 12), device=self.device),
-                    torch_rand_float(motor_range[0], motor_range[1], (self.num_envs, max(self.low_policy_num_actions - 12, 0)), device=self.device)
-                ], dim=1)
+        self.motor_strength = torch_rand_float(
+            motor_range[0], motor_range[1],
+            (self.num_envs, self.low_policy_num_actions), device=self.device,
+        )
 
         if not self.floating_base:
             default_low_action_scale = [0.4, 0.45, 0.45] * 2 + [0.4, 0.45, 0.45] * 2
@@ -783,24 +783,22 @@ class B1Z1Base(RewardVecTask):
         control_cfg = self.cfg["env"]["asset"].get("control", {})
         arm_kp = float(control_cfg.get("armPositionDriveStiffness", 400.0))
         arm_kd = float(control_cfg.get("armPositionDriveDamping", 40.0))
+        gripper_kp = float(control_cfg.get("gripperPositionDriveStiffness", arm_kp))
+        gripper_kd = float(control_cfg.get("gripperPositionDriveDamping", arm_kd))
 
         for i in range(self.num_envs):
-            gripper_kp = np.random.uniform(2,5)
-
             if self.floating_base:
                 dof_props_asset['driveMode'][:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
                 dof_props_asset['stiffness'][:-self.num_physical_gripper_dof].fill(arm_kp)
                 dof_props_asset['damping'][:-self.num_physical_gripper_dof].fill(arm_kd)
-                # TODO: find proper gripper kp and kd
                 dof_props_asset['stiffness'][-self.num_physical_gripper_dof:].fill(gripper_kp)
-                dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(2.5)
+                dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(gripper_kd)
             else:
                 dof_props_asset['driveMode'][12:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
                 dof_props_asset['stiffness'][12:-self.num_physical_gripper_dof].fill(arm_kp)
                 dof_props_asset['damping'][12:-self.num_physical_gripper_dof].fill(arm_kd)
-                # TODO: find proper gripper kp and kd
                 dof_props_asset['stiffness'][-self.num_physical_gripper_dof:].fill(gripper_kp)
-                dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(2.5)
+                dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(gripper_kd)
         
             env_ptr = self.gym.create_env(self.sim, lower, upper, num_per_row)
             self.envs.append(env_ptr)

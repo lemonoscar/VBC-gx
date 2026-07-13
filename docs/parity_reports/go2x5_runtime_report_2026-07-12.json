@@ -1,0 +1,8 @@
+{
+  "atol": 1e-06,
+  "high": "/tmp/go2x5-high-runtime.json",
+  "low": "/tmp/go2x5-low-runtime.json",
+  "mismatch_count": 0,
+  "mismatches": [],
+  "passed": true
+}

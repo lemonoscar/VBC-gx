@@ -105,6 +105,8 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["maskArmGoalCart"] == [0.34, 0.0, 0.24]
     assert asset_cfg["control"]["armPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
     assert asset_cfg["control"]["armPositionDriveDamping"] == spec.ARM_POS_DAMPING
+    assert asset_cfg["control"]["gripperPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
+    assert asset_cfg["control"]["gripperPositionDriveDamping"] == spec.ARM_POS_DAMPING
     assert env_cfg["armBaseOffset"] == spec.ARM_BASE_OFFSET
     assert env_cfg["eeBodyName"] == spec.EE_BODY_NAME
     assert env_cfg["wristBodyName"] == spec.WRIST_BODY_NAME
@@ -338,12 +340,16 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert env_cfg["trackEeOrientation"] is contract["track_ee_orientation"] is False
     assert env_cfg["armTargetUpdatePeriod"] == contract["arm_target_update_period"] == 4
     assert env_cfg["lowFootContactThreshold"] == contract["foot_contact_threshold"] == 1.5
+    assert contract["gripper_position_stiffness"] == 110.0
+    assert contract["gripper_position_damping"] == 7.5
 
     assert 'actions = self.action_history_buf[:, -(self.action_delay + 1)]' in low_level
     assert "self._reindex_all(self.actions)[:, :12]" in low_level
     assert "self.gait_indices[~is_walking] = 0" in high_level
     assert '"control_contract_sha256": control_contract_hash' in low_level
     assert "Low-level checkpoint control contract mismatch" in high_level
+    assert 'self.robot_start_pose = tuple(self.cfg["env"].get("robotStartPose", robot_start_pose))' in high_level
+    assert "(self.num_envs, self.low_policy_num_actions)" in high_level
 
 
 if __name__ == "__main__":

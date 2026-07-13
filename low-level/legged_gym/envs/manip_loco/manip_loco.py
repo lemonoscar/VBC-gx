@@ -300,6 +300,8 @@ class ManipLoco(LeggedRobot):
             "leg_damping": float(self.cfg.control.damping["hip"]),
             "arm_position_stiffness": float(self.cfg.control.arm_pos_stiffness),
             "arm_position_damping": float(self.cfg.control.arm_pos_damping),
+            "gripper_position_stiffness": float(self.cfg.control.arm_pos_stiffness),
+            "gripper_position_damping": float(self.cfg.control.arm_pos_damping),
             "sim_dt": float(self.cfg.sim.dt),
             "physics_decimation": int(self.cfg.control.decimation),
             "physx": {
@@ -421,6 +423,9 @@ class ManipLoco(LeggedRobot):
         dpose = torch.cat([dpos, drot], -1).unsqueeze(-1)
         ik_gain = getattr(self.cfg.arm, "ik_gain", 0.5)  # Scale IK delta per step to prevent overshoot
         arm_pos_targets = ik_gain * self._control_ik(dpose) + self.dof_pos[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints]
+        arm_lower = self.dof_pos_limits[-(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints, 0]
+        arm_upper = self.dof_pos_limits[-(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints, 1]
+        arm_pos_targets = torch.clamp(arm_pos_targets, arm_lower, arm_upper)
         all_pos_targets = torch.zeros_like(self.dof_pos)
         all_pos_targets[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints] = arm_pos_targets
 
