@@ -348,7 +348,10 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert "self.gait_indices[~is_walking] = 0" in high_level
     assert '"control_contract_sha256": control_contract_hash' in low_level
     assert "Low-level checkpoint control contract mismatch" in high_level
-    assert 'self.robot_start_pose = tuple(self.cfg["env"].get("robotStartPose", robot_start_pose))' in high_level
+    assert "resolve_robot_start_pose(" in high_level
+    assert "robot_start_pose=None" in high_level
+    assert '"num_arm_actions": max(int(self.cfg.env.num_actions) - 12, 0)' in low_level
+    assert "torch.nan_to_num" not in low_level
     assert "(self.num_envs, self.low_policy_num_actions)" in high_level
 
 

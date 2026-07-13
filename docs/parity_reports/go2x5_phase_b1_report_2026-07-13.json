@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "phase": "Go2-X5 Dynamic Runtime Parity Phase B.1",
+  "runtime_contract_hash": "004cae99f31530d3001a01a7b01fd29d2b5ef1f33bfa4f61ab19158236d2264f",
+  "runtime_properties": {
+    "atol": 1e-06,
+    "mismatch_count": 0,
+    "passed": true
+  },
+  "canonical_controller": {
+    "C0": {"policy_mode": "zero", "mismatch_count": 0, "oracle_failures": 0, "nonfinite_count": 0, "passed": true},
+    "C1": {"policy_mode": "constant_probe", "mismatch_count": 0, "oracle_failures": 0, "nonfinite_count": 0, "passed": true},
+    "C2": {"policy_mode": "constant_probe", "mismatch_count": 0, "oracle_failures": 0, "nonfinite_count": 0, "passed": true},
+    "C3": {"policy_mode": "linear_probe", "mismatch_count": 0, "oracle_failures": 0, "nonfinite_count": 0, "passed": true},
+    "C4": {"policy_mode": "linear_probe", "mismatch_count": 0, "oracle_failures": 0, "nonfinite_count": 0, "clamped_arm_joints": ["arm_joint3"], "passed": true}
+  },
+  "checkpoint_output": {
+    "production_loader_passed": true,
+    "contract_hash_passed": true,
+    "action_dim": 12,
+    "num_arm_actions": 0,
+    "policy_output_max_abs": 0.10181860625743866,
+    "policy_output_max_error": 0.0,
+    "applied_action_max_error": 0.0,
+    "scaled_q_target_max_error": 0.0,
+    "leg_torque_max_error": 0.0,
+    "nonfinite_count": 0,
+    "passed": true
+  },
+  "gait_sequence": {"mismatch_count": 0, "nonfinite_count": 0, "passed": true},
+  "natural_reset": {
+    "sample_steps": [0, 1, 4, 10],
+    "policy_observation_shape": 781,
+    "low_nonfinite_count": 0,
+    "high_nonfinite_count": 0,
+    "immediate_reset_count": 0,
+    "passed": true
+  },
+  "passed": true
+}

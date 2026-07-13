@@ -10,7 +10,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def make_low_env():
+def make_low_env(state_mode="canonical_injected", case="C0", policy_mode=None, checkpoint=""):
     low_root = REPO_ROOT / "low-level"
     for path in (low_root, REPO_ROOT / "third_party/isaacgym/python", REPO_ROOT / "third_party/rsl_rl"):
         if str(path) not in sys.path:
@@ -38,7 +38,8 @@ def make_low_env():
     env_cfg.env.action_delay = 0
     env_cfg.env.record_video = False
     env_cfg.env.teleop_mode = False
-    env_cfg.sim.gravity = [0.0, 0.0, 0.0]
+    if state_mode == "canonical_injected":
+        env_cfg.sim.gravity = [0.0, 0.0, 0.0]
     env_cfg.terrain.num_rows = 2
     env_cfg.terrain.num_cols = 2
     env_cfg.terrain.height = [0.0, 0.0]
@@ -49,22 +50,40 @@ def make_low_env():
     env_cfg.domain_rand.randomize_motor = False
     env_cfg.domain_rand.randomize_gripper_mass = False
     env_cfg.domain_rand.push_robots = False
-    env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
-    env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
+    env_cfg.commands.ranges.lin_vel_x = [-0.2, 0.2]
+    env_cfg.commands.ranges.ang_vel_yaw = [-0.3, 0.3]
+    from legged_gym.envs.manip_loco import go2x5_robot_spec
+    env_cfg.control.action_scale = list(go2x5_robot_spec.LOW_ACTION_SCALE)
     env_cfg.auto_curriculum.enabled = False
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
-    _set_canonical_state(env, "low")
     import torch
-    env.foot_contacts_from_sensor = torch.zeros(env.num_envs, 4, device=env.device, dtype=torch.bool)
-    env.compute_observations()
-    current = env.obs_buf[:, :env.cfg.env.num_proprio].clone()
-    env.obs_history_buf[:] = current[:, None, :]
-    env.compute_observations()
-    env.torques = env._compute_torques(env.actions)
+    if state_mode == "canonical_injected":
+        _set_canonical_state(env, "low", case)
+        env.foot_contacts_from_sensor = torch.zeros(env.num_envs, 4, device=env.device, dtype=torch.bool)
+        env._step_contact_targets()
+        env.compute_observations()
+        current = env.obs_buf[:, :env.cfg.env.num_proprio].clone()
+        env.obs_history_buf[:] = current[:, None, :]
+        env.compute_observations()
+    else:
+        env.reset()
+    policy_mode = _resolve_policy_mode(case, policy_mode)
+    policy, metadata = _make_policy(policy_mode, env.cfg.env.num_proprio * (env.cfg.env.history_len + 1), env.device, checkpoint)
+    with torch.no_grad():
+        policy_action = policy(env.obs_buf.detach(), hist_encoding=True)
+    env.parity_policy_action = policy_action
+    env.parity_policy = policy
+    env.parity_policy_metadata = metadata
+    env.parity_policy_mode = policy_mode
+    env.parity_case = case
+    env.parity_state_mode = state_mode
+    if state_mode == "canonical_injected":
+        env.actions[:] = env._reindex_all(policy_action)
+        env.torques = env._compute_torques(env.actions)
     return env
 
 
-def make_high_env():
+def make_high_env(state_mode="canonical_injected", case="C0", policy_mode=None, checkpoint=""):
     high_root = REPO_ROOT / "high-level"
     for path in (high_root, REPO_ROOT / "third_party/isaacgym/python"):
         if str(path) not in sys.path:
@@ -85,9 +104,14 @@ def make_high_env():
         cfg["env"]["obj_move_prob"] = 0.0
         cfg["env"]["cameraMode"] = "full"
         cfg["env"]["enableDebugVis"] = False
-        cfg["env"]["requireLowPolicyMetadata"] = False
         cfg["sensor"]["enableCamera"] = False
-        cfg["sim"]["gravity"] = [0.0, 0.0, 0.0]
+        if state_mode == "canonical_injected":
+            cfg["sim"]["gravity"] = [0.0, 0.0, 0.0]
+        policy_mode = _resolve_policy_mode(case, policy_mode)
+        if policy_mode == "checkpoint":
+            if not checkpoint:
+                raise ValueError("--checkpoint is required for policy_mode=checkpoint")
+            cfg["env"]["low_policy_path"] = str(Path(checkpoint).resolve())
         original_loader = Go2X5PickMulti._load_low_level_model
 
         def diagnostic_policy_loader(instance, *args, **kwargs):
@@ -96,15 +120,15 @@ def make_high_env():
             instance.num_proprio = 71
             instance.history_len = 10
 
-            def zero_policy(observations, hist_encoding=True):
-                return torch.zeros(
-                    observations.shape[0], instance.low_policy_num_actions,
-                    device=observations.device, dtype=observations.dtype,
-                )
+            policy, metadata = _make_policy(
+                policy_mode, instance.num_proprio * (instance.history_len + 1),
+                instance.device, checkpoint,
+            )
+            instance.parity_policy_metadata = metadata
+            return policy
 
-            return zero_policy
-
-        Go2X5PickMulti._load_low_level_model = diagnostic_policy_loader
+        if policy_mode != "checkpoint":
+            Go2X5PickMulti._load_low_level_model = diagnostic_policy_loader
         try:
             env = Go2X5PickMulti(
                 cfg=cfg,
@@ -119,18 +143,69 @@ def make_high_env():
             )
         finally:
             Go2X5PickMulti._load_low_level_model = original_loader
-        _set_canonical_state(env, "high")
-        env._compute_low_level_observations()
-        current = env.low_obs_buf[:, :env.num_proprio].clone()
-        env.low_obs_history_buf[:] = current[:, None, :]
-        env._compute_low_level_observations()
-        env.torques = env._compute_torques(env.last_low_actions)
+        if state_mode == "canonical_injected":
+            _set_canonical_state(env, "high", case)
+            env._compute_low_level_observations()
+            current = env.low_obs_buf[:, :env.num_proprio].clone()
+            env.low_obs_history_buf[:] = current[:, None, :]
+            env.gait_indices[:] = 0.0
+            env.clock_inputs[:] = 0.0
+            env._compute_low_level_observations()
+        else:
+            env.reset()
+            env._compute_low_level_observations()
+        with torch.no_grad():
+            policy_action = env.low_level_policy(env.low_obs_buf.detach(), hist_encoding=True)
+        env.parity_policy_action = policy_action
+        env.parity_policy = env.low_level_policy
+        if policy_mode == "checkpoint":
+            loaded = torch.load(checkpoint, map_location="cpu")
+            env.parity_policy_metadata = {
+                "mode": "checkpoint", "checkpoint": str(Path(checkpoint).resolve()),
+                "purpose": (loaded.get("metadata") or {}).get("purpose"),
+            }
+        else:
+            env.parity_policy_metadata = getattr(env, "parity_policy_metadata")
+        env.parity_policy_mode = policy_mode
+        env.parity_case = case
+        env.parity_state_mode = state_mode
+        if state_mode == "canonical_injected":
+            env.last_low_actions[:] = env._reindex_low_all(policy_action)
+            env.torques = env._compute_torques(env.last_low_actions)
         return env
     finally:
         os.chdir(original_cwd)
 
 
-def _set_canonical_state(env, side):
+def _resolve_policy_mode(case, policy_mode):
+    from tools.go2x5_runtime_parity import CONTROLLER_CASES
+    if case not in CONTROLLER_CASES:
+        raise ValueError(f"Unknown controller case: {case}")
+    return policy_mode or CONTROLLER_CASES[case]["policy_mode"]
+
+
+def _make_policy(policy_mode, obs_dim, device, checkpoint):
+    from tools.go2x5_runtime_parity import (
+        build_smoke_actor_critic, make_diagnostic_policy, validate_schema_v2_checkpoint,
+    )
+    if policy_mode != "checkpoint":
+        return make_diagnostic_policy(policy_mode, obs_dim, device=device)
+    if not checkpoint:
+        raise ValueError("checkpoint path is required")
+    import torch
+    from rsl_rl.modules import ActorCritic
+    loaded = torch.load(checkpoint, map_location=device)
+    validate_schema_v2_checkpoint(loaded)
+    model = build_smoke_actor_critic(ActorCritic).to(device)
+    model.load_state_dict(loaded["model_state_dict"])
+    model.eval()
+    return model.act_inference, {
+        "mode": "checkpoint", "checkpoint": str(Path(checkpoint).resolve()),
+        "purpose": loaded["metadata"].get("purpose"),
+    }
+
+
+def _set_canonical_state(env, side, case="C0"):
     from isaacgym import gymtorch
     import torch
 
@@ -140,6 +215,13 @@ def _set_canonical_state(env, side):
     # kinematic refresh; controller inputs are injected explicitly below.
     root[:, 2] = 1.0
     root[:, 6] = 1.0
+    if case == "C3":
+        from isaacgym.torch_utils import quat_from_euler_xyz
+        root[:, 3:7] = quat_from_euler_xyz(
+            torch.full((env.num_envs,), 0.08, device=env.device),
+            torch.full((env.num_envs,), -0.06, device=env.device),
+            torch.full((env.num_envs,), 0.25, device=env.device),
+        )
     if side == "low":
         env.dof_pos[:] = env.default_dof_pos
         env.dof_vel[:] = 0.0
@@ -152,6 +234,23 @@ def _set_canonical_state(env, side):
         root_tensor = env._root_states
         dof_state_tensor = env._dof_state
         dof_pos = env._dof_pos
+
+    if case == "C2":
+        from tools.go2x5_runtime_parity import (
+            LEG_QD_POLICY_ORDER, LEG_Q_OFFSET_POLICY_ORDER, policy_to_urdf_oracle,
+        )
+        q_offset = torch.tensor(policy_to_urdf_oracle(LEG_Q_OFFSET_POLICY_ORDER), device=env.device)
+        qd = torch.tensor(policy_to_urdf_oracle(LEG_QD_POLICY_ORDER), device=env.device)
+        dof_pos[:, :12] += q_offset
+        velocities = env.dof_vel if side == "low" else env._dof_vel
+        velocities[:, :12] = qd
+        arm_delta = torch.tensor([0.015, -0.010, 0.020, -0.012, 0.008, -0.006], device=env.device)
+        num_gripper = env.cfg.env.num_gripper_joints if side == "low" else env.num_gripper_joints
+        dof_pos[:, -(6 + num_gripper):-num_gripper] += arm_delta
+
+    desired_root = root.clone()
+    desired_dof_pos = dof_pos.clone()
+    desired_dof_vel = (env.dof_vel if side == "low" else env._dof_vel).clone()
 
     env.gym.set_actor_root_state_tensor(env.sim, gymtorch.unwrap_tensor(root_tensor))
     env.gym.set_dof_state_tensor(env.sim, gymtorch.unwrap_tensor(dof_state_tensor))
@@ -169,30 +268,36 @@ def _set_canonical_state(env, side):
         env.gym.refresh_actor_root_state_tensor(env.sim)
         env.gym.refresh_rigid_body_state_tensor(env.sim)
         env.gym.refresh_jacobian_tensors(env.sim)
+        from isaacgym.torch_utils import euler_from_quat, quat_from_euler_xyz, quat_rotate_inverse
+        env.root_states[:, :13] = desired_root
+        env.dof_pos[:] = desired_dof_pos
+        env.dof_vel[:] = desired_dof_vel
+        env.base_quat[:] = desired_root[:, 3:7]
         env.base_lin_vel[:] = 0.0
         env.base_ang_vel[:] = 0.0
-        env.projected_gravity[:] = torch.tensor([0.0, 0.0, -1.0], device=env.device)
-        env.base_yaw_quat[:] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device)
-        env.root_states[:, :13] = 0.0
-        env.root_states[:, 2] = 1.0
-        env.root_states[:, 6] = 1.0
-        env.dof_pos[:] = env.default_dof_pos
-        env.dof_vel[:] = 0.0
+        base_yaw = euler_from_quat(env.base_quat)[2]
+        env.base_yaw_quat[:] = quat_from_euler_xyz(
+            torch.zeros_like(base_yaw), torch.zeros_like(base_yaw), base_yaw
+        )
+        env.projected_gravity[:] = quat_rotate_inverse(env.base_quat, env.gravity_vec)
         env.commands[:] = 0.0
         env.actions[:] = 0.0
         env.action_history_buf[:] = 0.0
         env.gait_indices[:] = 0.0
         env.clock_inputs[:] = 0.0
-        env.curr_ee_goal_cart[:] = torch.tensor([0.30, 0.0, 0.20], device=env.device)
-        center = torch.tensor([0.085, 0.0, 0.424], device=env.device).repeat(env.num_envs, 1)
-        env.curr_ee_goal_cart_world[:] = center + env.curr_ee_goal_cart
+        env.curr_ee_goal_cart[:] = torch.tensor(
+            [0.32, -0.08, 0.18] if case == "C3" else
+            ([0.54, 0.16, 0.34] if case == "C4" else [0.30, 0.0, 0.20]), device=env.device
+        )
+        from isaacgym.torch_utils import quat_apply
+        env.curr_ee_goal_cart_world[:] = env._get_ee_goal_spherical_center() + quat_apply(
+            env.base_yaw_quat, env.curr_ee_goal_cart
+        )
     else:
         env._refresh_sim_tensors()
-        env._robot_root_states[:, :13] = 0.0
-        env._robot_root_states[:, 2] = 1.0
-        env._robot_root_states[:, 6] = 1.0
-        env._dof_pos[:] = env.initial_robo_pos
-        env._dof_vel[:] = 0.0
+        env._robot_root_states[:, :13] = desired_root
+        env._dof_pos[:] = desired_dof_pos
+        env._dof_vel[:] = desired_dof_vel
         env._initial_dof_pos[:] = env.initial_robo_pos
         env._initial_dof_vel[:] = 0.0
         env._update_base_yaw_quat()
@@ -202,5 +307,11 @@ def _set_canonical_state(env, side):
         env.foot_contacts_from_sensor[:] = False
         env.gait_indices[:] = 0.0
         env.clock_inputs[:] = 0.0
-        env.curr_ee_goal_cart[:] = torch.tensor([0.30, 0.0, 0.20], device=env.device)
+        env.curr_ee_goal_cart[:] = torch.tensor(
+            [0.32, -0.08, 0.18] if case == "C3" else
+            ([0.54, 0.16, 0.34] if case == "C4" else [0.30, 0.0, 0.20]), device=env.device
+        )
         env._update_ee_goal_world()
+    if case == "C3":
+        env.commands[:, 0] = 0.10
+        env.commands[:, 2] = 0.15

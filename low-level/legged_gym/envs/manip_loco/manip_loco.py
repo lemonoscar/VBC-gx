@@ -350,6 +350,7 @@ class ManipLoco(LeggedRobot):
                 "asset_file": asset_path,
                 "asset_sha256": self._asset_sha256(),
                 "action_dim": self.cfg.env.num_actions,
+                "num_arm_actions": max(int(self.cfg.env.num_actions) - 12, 0),
                 "num_torques": self.cfg.env.num_torques,
                 "num_gripper_joints": self.cfg.env.num_gripper_joints,
                 "num_proprio": self.cfg.env.num_proprio,
@@ -584,8 +585,6 @@ class ManipLoco(LeggedRobot):
                 self.motor_strength[:, :12] - 1,
             ), dim=-1)
             self.obs_buf = torch.cat([obs_buf, priv_buf, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
-
-        self.obs_buf = torch.nan_to_num(self.obs_buf, nan=0.0)  # safety: replace any NaN with 0
 
         self.obs_history_buf = torch.where(
             (self.episode_length_buf <= 1)[:, None, None],

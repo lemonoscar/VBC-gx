@@ -262,7 +262,7 @@ class B1Z1PickMulti(B1Z1Base):
                 predlift_success_rate = 0 if self.global_step_counter==0 else (self.predlift_success_counter / self.local_step_counter).mean().item()
                 wandb_dict["success_rate"]["SuccessRate / PredLifted"] = predlift_success_rate
             
-            if self.cfg["env"]["wandb"]:
+            if self.cfg["env"].get("wandb", False):
                 self.extras.update(wandb_dict)
                 # wandb.log(wandb_dict, step=self.global_step_counter)
             else:

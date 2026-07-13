@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "sample_steps": [0, 1, 4, 10],
+  "policy_observation_shape": 781,
+  "raw_observation_shapes": {"low": 799, "high": 781},
+  "low": {"nonfinite_count": 0, "immediate_reset_steps": [], "passed": true},
+  "high": {"nonfinite_count": 0, "immediate_reset_steps": [], "passed": true},
+  "ik_solve_errors": 0,
+  "loader_errors": 0,
+  "passed": true
+}

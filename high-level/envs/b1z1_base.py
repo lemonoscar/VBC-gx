@@ -9,6 +9,7 @@ from typing import Dict, Any, Tuple, List, Set
 from collections import defaultdict
 
 from .reward_vec_task import RewardVecTask
+from .runtime_contract import resolve_robot_start_pose
 from utils.low_level_model import ActorCritic
 
 from isaacgym import gymapi
@@ -43,7 +44,7 @@ class B1Z1Base(RewardVecTask):
                  virtual_screen_capture: bool = False, force_render: bool = False, 
                  use_roboinfo: bool = True, observe_gait_commands: bool = True, 
                  no_feature: bool = False, mask_arm: bool = False, depth_random=False,
-                 robot_start_pose: tuple =(-2.00, 0, 0.55), stu_distill=False, 
+                 robot_start_pose=None, stu_distill=False,
                  commands_curriculum=True, pitch_control=False, pred_success=False,
                  rand_control=False, arm_delay=False, num_gripper_dof=1, rand_cmd_scale=False,
                  rand_depth_clip=False, stop_pick=False, eval=False,
@@ -136,7 +137,9 @@ class B1Z1Base(RewardVecTask):
             if self.camera_mode == "seperate":
                 self.cfg["env"]["numEnvs"] = 240
             
-        self.robot_start_pose = tuple(self.cfg["env"].get("robotStartPose", robot_start_pose))
+        self.robot_start_pose = resolve_robot_start_pose(
+            self.cfg["env"], robot_start_pose=robot_start_pose, eval_mode=eval
+        )
 
         self._extra_env_settings()
         
@@ -600,6 +603,7 @@ class B1Z1Base(RewardVecTask):
 
         checks = [
             ("action_dim", alignment.get("action_dim"), self.low_policy_num_actions),
+            ("num_arm_actions", alignment.get("num_arm_actions"), max(self.low_policy_num_actions - 12, 0)),
             ("num_proprio", alignment.get("num_proprio"), self.num_proprio),
             ("num_priv", alignment.get("num_priv"), self.num_priv),
             ("history_len", alignment.get("history_len"), self.history_len),
@@ -1385,6 +1389,14 @@ class B1Z1Base(RewardVecTask):
                             self.gait_indices + offsets,
                             self.gait_indices + bounds,
                             self.gait_indices + phases]
+
+            for idxs in foot_indices:
+                stance_idxs = torch.remainder(idxs, 1) < durations
+                swing_idxs = torch.remainder(idxs, 1) > durations
+                idxs[stance_idxs] = torch.remainder(idxs[stance_idxs], 1) * (0.5 / durations)
+                idxs[swing_idxs] = 0.5 + (torch.remainder(idxs[swing_idxs], 1) - durations) * (
+                    0.5 / (1 - durations)
+                )
 
             self.clock_inputs[:, 0] = torch.sin(2 * np.pi * foot_indices[0])
             self.clock_inputs[:, 1] = torch.sin(2 * np.pi * foot_indices[1])
