@@ -219,7 +219,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v1"' in go2x5_config
+    assert 'profile_name = "go2x5_stable_reach_curriculum_v3_flat_step_metrics"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert '"name": "S0_safe_small_reach"' in go2x5_config
     assert '"name": "S1_mid_reach_compensation"' in go2x5_config

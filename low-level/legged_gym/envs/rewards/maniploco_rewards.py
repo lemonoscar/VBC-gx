@@ -255,10 +255,13 @@ class ManipLoco_rewards:
         return violation, violation
 
     def _reward_feet_jerk(self):
-        if not hasattr(self, "last_contact_forces"):
+        if not hasattr(self.env, "last_contact_forces"):
             result = torch.zeros(self.env.num_envs).to(self.env.device)
         else:
-            result = torch.sum(torch.norm(self.env.force_sensor_tensor - self.env.last_contact_forces, dim=-1), dim=-1)
+            result = torch.sum(
+                torch.norm(self.env.force_sensor_tensor - self.env.last_contact_forces, dim=-1),
+                dim=-1,
+            )
 
         self.env.last_contact_forces = self.env.force_sensor_tensor.clone()
         result[self.env.episode_length_buf<50] = 0.
@@ -533,8 +536,7 @@ class ManipLoco_rewards:
             reward += - (1 - desired_contact[:, i]) * (
                         1 - torch.exp(-1 * foot_forces[:, i] ** 2 / self.env.cfg.rewards.gait_force_sigma))
 
-        # cmd_stop_flag = ~self.env._get_walking_cmd_mask()
-        # reward[cmd_stop_flag] = 0
+        reward[~self.env._get_walking_cmd_mask()] = 0
         return reward / 4, reward / 4
 
     def _reward_tracking_contacts_shaped_vel(self):
@@ -546,23 +548,35 @@ class ManipLoco_rewards:
         for i in range(4):
             reward += - (desired_contact[:, i] * (
                         1 - torch.exp(-1 * foot_velocities[:, i] ** 2 / self.env.cfg.rewards.gait_vel_sigma)))
-        # cmd_stop_flag = ~self.env._get_walking_cmd_mask()
-        # reward[cmd_stop_flag] = 0
+        reward[~self.env._get_walking_cmd_mask()] = 0
 
         return reward / 4, reward / 4
 
     def _reward_feet_height(self):
-        feet_height_tracking = self.env.cfg.rewards.feet_height_target
+        foot_ids = self.env.feet_indices
+        desired_contact = self.env.desired_contact_states
+        if not self.env.cfg.rewards.feet_height_allfeet:
+            foot_ids = foot_ids[:2]
+            desired_contact = desired_contact[:, :2]
 
-        if self.env.cfg.rewards.feet_height_allfeet:
-            feet_height = self.env.rigid_body_state[:, self.env.feet_indices, 2] # All feet
+        measured_heights = getattr(self.env, "measured_heights", None)
+        if torch.is_tensor(measured_heights) and measured_heights.ndim == 2:
+            terrain_height = torch.mean(measured_heights, dim=1, keepdim=True)
         else:
-            feet_height = self.env.rigid_body_state[:, self.env.feet_indices[:2], 2] # Only front feet
+            terrain_height = self.env.env_origins[:, 2:3]
 
-        rew = torch.clamp(torch.norm(feet_height, dim=-1) - feet_height_tracking, max=0)
-        cmd_stop_flag = ~self.env._get_walking_cmd_mask()
-        rew[cmd_stop_flag] = 0
-        return rew, rew
+        foot_height = self.env.rigid_body_state[:, foot_ids, 2] - terrain_height
+        swing_weight = 1.0 - desired_contact
+        clearance_error = torch.clamp(
+            self.env.cfg.rewards.feet_height_target - foot_height,
+            min=0.0,
+        )
+        penalty = torch.sum(swing_weight * clearance_error, dim=1) / torch.clamp(
+            torch.sum(swing_weight, dim=1),
+            min=1.0,
+        )
+        penalty[~self.env._get_walking_cmd_mask()] = 0
+        return -penalty, penalty
 
     def _reward_feet_air_time(self):
         # Reward long steps
@@ -570,10 +584,14 @@ class ManipLoco_rewards:
         first_contact = (self.env.feet_air_time > 0.) * self.env.foot_contacts_from_sensor  #self.env.contact_filt
         self.env.feet_air_time += self.env.dt
 
+        target_air_time = getattr(self.env.cfg.rewards, "feet_air_time_target", 0.5)
         if self.env.cfg.rewards.feet_aritime_allfeet:
-            rew_airTime = torch.sum((self.env.feet_air_time - 0.5) * first_contact, dim=1)
+            rew_airTime = torch.sum((self.env.feet_air_time - target_air_time) * first_contact, dim=1)
         else:
-            rew_airTime = torch.sum((self.env.feet_air_time[:, :2] - 0.5) * first_contact[:, :2], dim=1)
+            rew_airTime = torch.sum(
+                (self.env.feet_air_time[:, :2] - target_air_time) * first_contact[:, :2],
+                dim=1,
+            )
 
         rew_airTime *= self.env._get_walking_cmd_mask()  # reward for stepping for any of the 3 motions
         self.env.feet_air_time *= ~ self.env.foot_contacts_from_sensor  #self.env.contact_filt

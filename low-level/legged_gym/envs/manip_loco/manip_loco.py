@@ -379,20 +379,96 @@ class ManipLoco(LeggedRobot):
                     "stage_iteration": getattr(self, "curriculum_stage_iteration", None),
                     "max_terrain_level": getattr(self, "max_terrain_level", None),
                 },
+                "training_state": {
+                    "global_steps": int(getattr(self, "global_steps", 0)),
+                },
             }
         }
 
     def load_training_metadata(self, metadata):
-        if not metadata or not getattr(self, "auto_curriculum_enabled", False):
+        require_metadata = bool(getattr(self.cfg.env, "require_training_metadata", False))
+        if not metadata:
+            if require_metadata:
+                raise RuntimeError("Go2-X5 training checkpoint has no metadata")
             return
         alignment = metadata.get("go2x5_alignment", metadata)
+        if require_metadata:
+            checks = [
+                ("schema_version", alignment.get("schema_version"), 2),
+                ("action_dim", alignment.get("action_dim"), int(self.cfg.env.num_actions)),
+                ("num_arm_actions", alignment.get("num_arm_actions"), 0),
+                ("num_proprio", alignment.get("num_proprio"), int(self.cfg.env.num_proprio)),
+                ("num_priv", alignment.get("num_priv"), int(self.cfg.env.num_priv)),
+                ("history_len", alignment.get("history_len"), int(self.cfg.env.history_len)),
+                ("num_observations", alignment.get("num_observations"), int(self.cfg.env.num_observations)),
+                ("num_torques", alignment.get("num_torques"), int(self.cfg.env.num_torques)),
+                ("num_gripper_joints", alignment.get("num_gripper_joints"), int(self.cfg.env.num_gripper_joints)),
+                ("observe_gait_commands", alignment.get("observe_gait_commands"), True),
+                ("reorder_dofs", alignment.get("reorder_dofs"), bool(self.cfg.env.reorder_dofs)),
+                ("policy_leg_joint_order", alignment.get("policy_leg_joint_order"), go2x5_robot_spec.POLICY_LEG_JOINT_NAMES),
+                ("foot_order", alignment.get("foot_order"), go2x5_robot_spec.FOOT_BODY_NAMES),
+                ("ee_body_name", alignment.get("ee_body_name"), self.cfg.asset.gripper_name),
+                ("arm_base_offset", alignment.get("arm_base_offset"), list(self.cfg.arm.base_offset)),
+            ]
+            for name, actual, expected in checks:
+                if actual != expected:
+                    raise RuntimeError(
+                        f"Go2-X5 training checkpoint metadata mismatch for {name}: "
+                        f"checkpoint={actual}, current={expected}"
+                    )
+
         curriculum = alignment.get("curriculum", {})
+        if require_metadata:
+            expected_enabled = bool(getattr(self, "auto_curriculum_enabled", False))
+            if bool(curriculum.get("enabled", False)) != expected_enabled:
+                raise RuntimeError("Go2-X5 training checkpoint curriculum enabled state mismatch")
+            if curriculum.get("profile_name") != getattr(self, "curriculum_profile_name", ""):
+                raise RuntimeError(
+                    "Go2-X5 training checkpoint curriculum profile mismatch: "
+                    f"checkpoint={curriculum.get('profile_name')}, "
+                    f"current={getattr(self, 'curriculum_profile_name', '')}"
+                )
+
         stage_index = curriculum.get("stage_index")
-        if stage_index is None:
-            return
-        stage_index = int(stage_index)
-        if 0 <= stage_index < len(self.curriculum_stages):
-            self.set_training_stage(stage_index, self.curriculum_stages[stage_index], iteration=curriculum.get("stage_iteration"))
+        if getattr(self, "auto_curriculum_enabled", False):
+            if stage_index is None:
+                raise RuntimeError("Go2-X5 training checkpoint has no curriculum stage")
+            stage_index = int(stage_index)
+            if not 0 <= stage_index < len(self.curriculum_stages):
+                raise RuntimeError(f"Go2-X5 training checkpoint has invalid curriculum stage {stage_index}")
+            expected_stage_name = self.curriculum_stages[stage_index].get("name", f"stage_{stage_index}")
+            if curriculum.get("stage_name") != expected_stage_name:
+                raise RuntimeError(
+                    "Go2-X5 training checkpoint curriculum stage name mismatch: "
+                    f"checkpoint={curriculum.get('stage_name')}, current={expected_stage_name}"
+                )
+            self.set_training_stage(
+                stage_index,
+                self.curriculum_stages[stage_index],
+                iteration=curriculum.get("stage_iteration"),
+            )
+
+        if require_metadata:
+            expected_alignment = self.get_training_metadata()["go2x5_alignment"]
+            if alignment.get("asset_sha256") != expected_alignment.get("asset_sha256"):
+                raise RuntimeError("Go2-X5 training checkpoint robot asset hash mismatch")
+            contract = alignment.get("control_contract")
+            contract_hash = alignment.get("control_contract_sha256")
+            if not isinstance(contract, dict) or not contract_hash:
+                raise RuntimeError("Go2-X5 training checkpoint has no control contract")
+            actual_hash = hashlib.sha256(
+                json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            if actual_hash != contract_hash:
+                raise RuntimeError("Go2-X5 training checkpoint control contract hash is corrupt")
+            if actual_hash != expected_alignment["control_contract_sha256"]:
+                raise RuntimeError("Go2-X5 training checkpoint control contract mismatch")
+
+        training_state = alignment.get("training_state", {})
+        if require_metadata and "global_steps" not in training_state:
+            raise RuntimeError("Go2-X5 training checkpoint has no global_steps training state")
+        if "global_steps" in training_state:
+            self.global_steps = int(training_state["global_steps"])
 
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
@@ -652,6 +728,9 @@ class ManipLoco(LeggedRobot):
         """
         if len(env_ids) == 0:
             return
+        completed_episode_steps = torch.clamp(
+            self.episode_length_buf[env_ids].float(), min=1.0
+        )
         # update curriculum
         if self.cfg.terrain.curriculum:
             self._update_terrain_curriculum(env_ids)
@@ -668,10 +747,24 @@ class ManipLoco(LeggedRobot):
         self._resample_ee_goal(env_ids, is_init=True)
 
         # reset buffers
+        self.actions[env_ids] = 0.
+        self.torques[env_ids] = 0.
         self.last_torques[env_ids] = 0.
         self.last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
+        self.last_contacts[env_ids] = False
+        self.gait_indices[env_ids] = 0.
+        self.clock_inputs[env_ids] = 0.
+        self.doubletime_clock_inputs[env_ids] = 0.
+        self.halftime_clock_inputs[env_ids] = 0.
+        self.desired_contact_states[env_ids] = 1.
+        if hasattr(self, "foot_contacts_from_sensor"):
+            self.foot_contacts_from_sensor[env_ids] = False
+        if hasattr(self, "contact_filt"):
+            self.contact_filt[env_ids] = False
+        if hasattr(self, "last_contact_forces"):
+            self.last_contact_forces[env_ids] = 0.
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
         self.obs_history_buf[env_ids, :, :] = 0.
@@ -685,7 +778,13 @@ class ManipLoco(LeggedRobot):
             self.episode_sums[key][env_ids] = 0.
 
         for key in self.episode_metric_sums.keys():
-            self.extras["episode"]['metric_' + key] = torch.mean(self.episode_metric_sums[key][env_ids]) / self.max_episode_length_s
+            # Reward diagnostics are per-policy-step means. The previous
+            # division by episode seconds multiplied every metric by 50 Hz,
+            # while curriculum thresholds (for example EE error < 0.50 m)
+            # are expressed in the raw metric's units.
+            self.extras["episode"]['metric_' + key] = torch.mean(
+                self.episode_metric_sums[key][env_ids] / completed_episode_steps
+            )
             self.episode_metric_sums[key][env_ids] = 0.
 
         reset_cause_buffers = {
@@ -1269,6 +1368,9 @@ class ManipLoco(LeggedRobot):
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        if self.cfg.terrain.measure_heights:
+            self.height_points = self._init_height_points()
+        self.measured_heights = 0
 
         # joint positions offsets and PD gains
         self.default_dof_pos = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
@@ -1390,8 +1492,9 @@ class ManipLoco(LeggedRobot):
             offsets = 0
             bounds = 0
             durations = 0.5
+            walking_mask = self._get_walking_cmd_mask()
             self.gait_indices = torch.remainder(self.gait_indices + self.dt * frequencies, 1.0)
-            self.gait_indices[~self._get_walking_cmd_mask()] = 0
+            self.gait_indices[~walking_mask] = 0
 
             foot_indices = [self.gait_indices + phases + offsets + bounds,
                             self.gait_indices + offsets,
@@ -1453,6 +1556,7 @@ class ManipLoco(LeggedRobot):
             self.desired_contact_states[:, 1] = smoothing_multiplier_FR
             self.desired_contact_states[:, 2] = smoothing_multiplier_RL
             self.desired_contact_states[:, 3] = smoothing_multiplier_RR
+            self.desired_contact_states[~walking_mask] = 1.0
 
     def _post_physics_step_callback(self):
         """ Callback called before computing terminations, rewards, and observations
@@ -1461,6 +1565,9 @@ class ManipLoco(LeggedRobot):
         command_env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
         self._resample_commands(command_env_ids)
         self._step_contact_targets()
+
+        if self.cfg.terrain.measure_heights:
+            self.measured_heights = self._get_heights()
 
         if self.cfg.domain_rand.push_robots and (self.common_step_counter % self.push_interval == 0):
             self._push_robots()

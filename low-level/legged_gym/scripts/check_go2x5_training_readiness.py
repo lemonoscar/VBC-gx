@@ -1,0 +1,500 @@
+#!/usr/bin/env python3
+"""Fail-closed Isaac Gym probes for Go2-X5 low-level training readiness."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import sys
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+LOW_LEVEL_ROOT = SCRIPT_DIR.parents[1]
+REPO_ROOT = LOW_LEVEL_ROOT.parent
+ISAACGYM_BINDINGS_DIR = (
+    REPO_ROOT / "third_party/isaacgym/python/isaacgym/_bindings/linux-x86_64"
+)
+ISAACGYM_USD_PLUGIN_DIR = ISAACGYM_BINDINGS_DIR / "usd/plugins"
+
+library_paths = [str(ISAACGYM_BINDINGS_DIR), str(ISAACGYM_USD_PLUGIN_DIR)]
+if os.environ.get("CONDA_PREFIX"):
+    library_paths.append(str(Path(os.environ["CONDA_PREFIX"]) / "lib"))
+existing = os.environ.get("LD_LIBRARY_PATH", "").split(":") if os.environ.get("LD_LIBRARY_PATH") else []
+os.environ["LD_LIBRARY_PATH"] = ":".join(library_paths + [path for path in existing if path])
+if os.environ.get("_ISAACGYM_LIBRARY_PATH_BOOTSTRAPPED") != "1":
+    os.environ["_ISAACGYM_LIBRARY_PATH_BOOTSTRAPPED"] = "1"
+    os.execvpe(sys.executable, [sys.executable] + sys.argv, os.environ)
+
+for path in (LOW_LEVEL_ROOT, REPO_ROOT / "third_party/isaacgym/python", REPO_ROOT / "third_party/rsl_rl"):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+import isaacgym  # noqa: E402,F401
+from isaacgym.torch_utils import orientation_error  # noqa: E402
+import torch  # noqa: E402
+
+from legged_gym.envs import *  # noqa: E402,F401,F403
+from legged_gym.utils import get_args, task_registry  # noqa: E402
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--num-envs", type=int, default=8)
+    parser.add_argument("--steps", type=int, default=200)
+    parser.add_argument(
+        "--rollout-stage",
+        type=int,
+        choices=range(4),
+        default=0,
+        help="Curriculum stage used by the rollout gate (default: S0 training entry).",
+    )
+    parser.add_argument("--seed", type=int, default=20260717)
+    parser.add_argument("--sim-device", default="cuda:0")
+    parser.add_argument("--rl-device", default="cuda:0")
+    parser.add_argument("--graphics-device-id", type=int, default=0)
+    parser.add_argument("--output", type=Path, default=Path("/tmp/go2x5_training_readiness.json"))
+    return parser.parse_args()
+
+
+def make_env_args(cli):
+    original_argv = sys.argv[:]
+    try:
+        sys.argv = [sys.argv[0]]
+        args = get_args(test=True)
+    finally:
+        sys.argv = original_argv
+    args.task = "go2x5"
+    args.headless = True
+    args.num_envs = cli.num_envs
+    args.seed = cli.seed
+    args.sim_device = cli.sim_device
+    args.rl_device = cli.rl_device
+    args.graphics_device_id = cli.graphics_device_id
+    args.observe_gait_commands = True
+    return args
+
+
+def configure_env(cfg, cli):
+    cfg.env.num_envs = cli.num_envs
+    cfg.env.observe_gait_commands = True
+    cfg.env.record_video = False
+    cfg.env.teleop_mode = False
+    cfg.terrain.num_rows = 2
+    cfg.terrain.num_cols = 2
+    cfg.terrain.curriculum = False
+    cfg.terrain.height = [0.0, 0.0]
+    cfg.noise.add_noise = False
+    cfg.domain_rand.randomize_friction = False
+    cfg.domain_rand.randomize_base_mass = False
+    cfg.domain_rand.randomize_base_com = False
+    cfg.domain_rand.randomize_motor = False
+    cfg.domain_rand.randomize_gripper_mass = False
+    cfg.domain_rand.push_robots = False
+    cfg.init_state.rand_yaw_range = 0.0
+    cfg.init_state.origin_perturb_range = 0.0
+    cfg.init_state.init_vel_perturb_range = 0.0
+    cfg.init_state.leg_reset_ratio_range = [1.0, 1.0]
+    cfg.init_state.arm_reset_noise_range = [0.0, 0.0]
+    return cfg
+
+
+class Checks:
+    def __init__(self):
+        self.items = []
+
+    def require(self, name, condition, **details):
+        passed = bool(condition)
+        self.items.append({"name": name, "passed": passed, **details})
+        if not passed:
+            raise AssertionError(f"{name} failed: {details}")
+
+
+def scalar_max_abs(tensor):
+    return float(torch.max(torch.abs(tensor)).item()) if tensor.numel() else 0.0
+
+
+def require_finite(checks, name, tensor):
+    finite = torch.isfinite(tensor)
+    count = int((~finite).sum().item())
+    details = {"nonfinite": count, "shape": list(tensor.shape)}
+    if count:
+        details["first_index"] = torch.nonzero(~finite, as_tuple=False)[0].tolist()
+    checks.require(f"finite/{name}", count == 0, **details)
+
+
+def probe_rewards(env, checks):
+    reward = env.reward_container
+    env.set_training_stage(3, env.curriculum_stages[3], iteration=11000)
+
+    env.commands.zero_()
+    env.commands[:, 0] = 0.10
+    env.desired_contact_states.fill_(1.0)
+    env.desired_contact_states[:, 0] = 0.0
+    env.contact_forces[:, env.feet_indices, :] = 0.0
+    force_best, _ = reward._reward_tracking_contacts_shaped_force()
+    env.contact_forces[:, env.feet_indices[0], 2] = 100.0
+    force_bad, _ = reward._reward_tracking_contacts_shaped_force()
+    checks.require(
+        "reward/off_phase_force_decreases",
+        bool(torch.all(force_bad < force_best)),
+        best=float(force_best.mean().item()),
+        bad=float(force_bad.mean().item()),
+        scale=float(env.reward_scales["tracking_contacts_shaped_force"]),
+    )
+    checks.require(
+        "reward/off_phase_force_weighted_negative",
+        bool(torch.all(force_bad * env.reward_scales["tracking_contacts_shaped_force"] < 0)),
+    )
+    env.commands.zero_()
+    force_stop, _ = reward._reward_tracking_contacts_shaped_force()
+    checks.require("reward/off_phase_force_zero_when_stopped", scalar_max_abs(force_stop) == 0.0)
+
+    env.commands[:, 0] = 0.10
+    env.desired_contact_states.fill_(0.0)
+    env.desired_contact_states[:, 0] = 1.0
+    env.foot_velocities.zero_()
+    vel_best, _ = reward._reward_tracking_contacts_shaped_vel()
+    env.foot_velocities[:, 0, 0] = 1.0
+    vel_bad, _ = reward._reward_tracking_contacts_shaped_vel()
+    checks.require(
+        "reward/stance_velocity_decreases",
+        bool(torch.all(vel_bad < vel_best)),
+        best=float(vel_best.mean().item()),
+        bad=float(vel_bad.mean().item()),
+        scale=float(env.reward_scales["tracking_contacts_shaped_vel"]),
+    )
+    env.commands.zero_()
+    vel_stop, _ = reward._reward_tracking_contacts_shaped_vel()
+    checks.require("reward/stance_velocity_zero_when_stopped", scalar_max_abs(vel_stop) == 0.0)
+
+    env.commands[:, 0] = 0.10
+    env.desired_contact_states.fill_(1.0)
+    env.desired_contact_states[:, 0] = 0.0
+    env.measured_heights.zero_()
+    env.rigid_body_state[:, env.feet_indices, 2] = 0.20
+    env.rigid_body_state[:, env.feet_indices[0], 2] = 0.02
+    height_low, metric_low = reward._reward_feet_height()
+    env.rigid_body_state[:, env.feet_indices[0], 2] = 0.13
+    height_clear, metric_clear = reward._reward_feet_height()
+    checks.require(
+        "reward/per_foot_clearance",
+        bool(torch.all(height_low < height_clear) and torch.all(metric_low > metric_clear)),
+        low=float(height_low.mean().item()),
+        clear=float(height_clear.mean().item()),
+    )
+
+    env.episode_length_buf.fill_(51)
+    env.last_contact_forces = torch.zeros_like(env.force_sensor_tensor)
+    env.force_sensor_tensor.fill_(1.0)
+    jerk_first, _ = reward._reward_feet_jerk()
+    jerk_same, _ = reward._reward_feet_jerk()
+    checks.require(
+        "reward/feet_jerk_tracks_previous_force",
+        bool(torch.all(jerk_first > 0) and torch.all(jerk_same == 0)),
+        first=float(jerk_first.mean().item()),
+        unchanged=float(jerk_same.mean().item()),
+    )
+
+    env.measured_heights.zero_()
+    env.root_states[:, 2] = env.cfg.rewards.base_height_target
+    height_best, _ = reward._reward_base_height()
+    env.root_states[:, 2] += 0.10
+    height_bad, _ = reward._reward_base_height()
+    checks.require(
+        "reward/terrain_relative_base_height",
+        bool(torch.all(height_best < height_bad)),
+        best=float(height_best.mean().item()),
+        bad=float(height_bad.mean().item()),
+    )
+
+    env.root_states[:, 3:7] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device)
+    env.root_states[:, 2] = env.cfg.rewards.base_height_target
+    env.foot_contacts_from_sensor.fill_(True)
+    env.curr_ee_goal_cart_world[:] = env.ee_pos
+    ee_exact, _ = reward._reward_tracking_ee_world_stable()
+    env.curr_ee_goal_cart_world[:, 0] += 0.10
+    ee_offset, _ = reward._reward_tracking_ee_world_stable()
+    checks.require(
+        "reward/stable_ee_tracking_monotonic",
+        bool(torch.all(ee_exact > ee_offset) and torch.all(ee_exact > 0)),
+        exact=float(ee_exact.mean().item()),
+        offset=float(ee_offset.mean().item()),
+    )
+
+
+def probe_ik(env, checks):
+    num_gripper = env.cfg.env.num_gripper_joints
+    arm_slice = slice(-(6 + num_gripper), -num_gripper)
+    dpos = env.curr_ee_goal_cart_world - env.ee_pos
+
+    def target_for(quaternion):
+        drot = orientation_error(quaternion, env.ee_orn / env.ee_orn.norm(dim=-1, keepdim=True).clamp(min=1e-6))
+        if not env.cfg.arm.track_ee_orientation:
+            drot.zero_()
+        dpose = torch.cat([dpos, drot], dim=-1).unsqueeze(-1)
+        target = env.cfg.arm.ik_gain * env._control_ik(dpose) + env.dof_pos[:, arm_slice]
+        lower = env.dof_pos_limits[arm_slice, 0]
+        upper = env.dof_pos_limits[arm_slice, 1]
+        return torch.clamp(target, lower, upper), lower, upper
+
+    identity = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device).repeat(env.num_envs, 1)
+    rotated = torch.tensor([0.0, 0.0, 0.70710678, 0.70710678], device=env.device).repeat(env.num_envs, 1)
+    first, lower, upper = target_for(identity)
+    second, _, _ = target_for(rotated)
+    require_finite(checks, "arm_q_target", first)
+    checks.require(
+        "ik/position_only_orientation_invariant",
+        bool(torch.allclose(first, second, atol=1.0e-7, rtol=0.0)),
+        max_abs_error=scalar_max_abs(first - second),
+    )
+    checks.require(
+        "ik/joint_limits",
+        bool(torch.all(first >= lower - 1.0e-7) and torch.all(first <= upper + 1.0e-7)),
+    )
+
+
+def probe_reset(env, checks):
+    ids = torch.arange(env.num_envs, device=env.device)
+    env.actions.fill_(0.4)
+    env.torques.fill_(2.0)
+    env.last_actions.fill_(0.3)
+    env.last_torques.fill_(1.0)
+    env.gait_indices.fill_(0.6)
+    env.clock_inputs.fill_(0.7)
+    env.obs_history_buf.fill_(0.8)
+    env.action_history_buf.fill_(0.9)
+    env.desired_contact_states.zero_()
+    env.last_contact_forces = torch.ones_like(env.force_sensor_tensor)
+    env.reset_idx(ids, start=True)
+    zero_tensors = {
+        "actions": env.actions,
+        "torques": env.torques,
+        "last_actions": env.last_actions,
+        "last_torques": env.last_torques,
+        "gait_indices": env.gait_indices,
+        "clock_inputs": env.clock_inputs,
+        "history": env.obs_history_buf,
+        "action_history": env.action_history_buf,
+        "last_contact_forces": env.last_contact_forces,
+    }
+    for name, tensor in zero_tensors.items():
+        checks.require(f"reset/{name}_cleared", scalar_max_abs(tensor) == 0.0, max_abs=scalar_max_abs(tensor))
+    checks.require(
+        "reset/desired_contacts_all_stance",
+        bool(torch.all(env.desired_contact_states == 1.0)),
+    )
+
+
+def probe_training_metadata(env, checks):
+    env.global_steps = 123
+    metadata = env.get_training_metadata()
+    env.global_steps = 0
+    env.load_training_metadata(metadata)
+    checks.require("checkpoint/valid_metadata_loads", env.global_steps == 123)
+
+    wrong_action = copy.deepcopy(metadata)
+    wrong_action["go2x5_alignment"]["action_dim"] = 18
+    try:
+        env.load_training_metadata(wrong_action)
+    except RuntimeError as error:
+        checks.require("checkpoint/rejects_wrong_action_dim", "action_dim" in str(error))
+    else:
+        checks.require("checkpoint/rejects_wrong_action_dim", False)
+
+    corrupt_contract = copy.deepcopy(metadata)
+    corrupt_contract["go2x5_alignment"]["control_contract"]["ik_gain"] = 999.0
+    try:
+        env.load_training_metadata(corrupt_contract)
+    except RuntimeError as error:
+        checks.require("checkpoint/rejects_corrupt_contract", "hash is corrupt" in str(error))
+    else:
+        checks.require("checkpoint/rejects_corrupt_contract", False)
+
+    wrong_profile = copy.deepcopy(metadata)
+    wrong_profile["go2x5_alignment"]["curriculum"]["profile_name"] = (
+        "go2x5_stable_reach_curriculum_v2_flat"
+    )
+    try:
+        env.load_training_metadata(wrong_profile)
+    except RuntimeError as error:
+        checks.require("checkpoint/rejects_old_curriculum_profile", "profile mismatch" in str(error))
+    else:
+        checks.require("checkpoint/rejects_old_curriculum_profile", False)
+
+    missing_steps = copy.deepcopy(metadata)
+    del missing_steps["go2x5_alignment"]["training_state"]
+    try:
+        env.load_training_metadata(missing_steps)
+    except RuntimeError as error:
+        checks.require("checkpoint/rejects_missing_global_steps", "global_steps" in str(error))
+    else:
+        checks.require("checkpoint/rejects_missing_global_steps", False)
+    env.load_training_metadata(metadata)
+
+
+def probe_curriculum(env, checks):
+    env.set_training_stage(0, env.curriculum_stages[0], iteration=0)
+    passing_metrics = {
+        "Train/mean_episode_length": 500.0,
+        "Episode/reset_roll": 0.0,
+        "Episode/reset_z": 0.0,
+        "Episode_metric/metric_collision": 0.0,
+        "Episode_metric/metric_tracking_ee_world_stable": 0.15,
+    }
+    env.update_auto_curriculum(999, passing_metrics)
+    checks.require("curriculum/respects_min_iterations", env.curriculum_stage_index == 0)
+    env.update_auto_curriculum(1000, passing_metrics)
+    checks.require(
+        "curriculum/advances_with_physical_unit_metrics",
+        env.curriculum_stage_index == 1,
+        stage=int(env.curriculum_stage_index),
+    )
+
+
+def runtime_tensors(env):
+    return {
+        "observation": env.obs_buf,
+        "history": env.obs_history_buf,
+        "policy_action": env.actions,
+        "leg_torque": env.torques[:, :12],
+        "root_state": env.root_states,
+        "dof_state": env.dof_state,
+        "ee_pose": env.rigid_body_state[:, env.gripper_idx, :7],
+        "ee_target": env.curr_ee_goal_cart_world,
+        "jacobian": env.ee_j_eef,
+        "leg_reward": env.rew_buf,
+        "arm_reward": env.arm_rew_buf,
+        "measured_heights": env.measured_heights,
+    }
+
+
+def probe_rollout(env, checks, steps, stage_index):
+    env.reset()
+    stage_iteration = int(env.curriculum_stages[stage_index].get("min_iterations", 0))
+    env.set_training_stage(
+        stage_index,
+        env.curriculum_stages[stage_index],
+        iteration=stage_iteration,
+    )
+    env.reset()
+    checks.require("runtime/observation_shape", env.obs_buf.shape[1] == 799, shape=list(env.obs_buf.shape))
+    checks.require("runtime/action_shape", env.num_actions == 12, action_dim=int(env.num_actions))
+    checks.require(
+        "runtime/measured_heights_shape",
+        env.measured_heights.ndim == 2 and env.measured_heights.shape[0] == env.num_envs,
+        shape=list(env.measured_heights.shape),
+    )
+
+    probe = torch.tensor(
+        [0.011, -0.007, 0.003, -0.005, 0.009, -0.002, 0.004, -0.008, 0.006, -0.003, 0.010, -0.001],
+        device=env.device,
+    ).repeat(env.num_envs, 1)
+    early_resets = 0
+    reset_causes = {"roll": 0, "pitch": 0, "z": 0, "contact": 0}
+    first_early_reset = None
+    max_abs = {name: 0.0 for name in runtime_tensors(env)}
+    nonfinite = {name: 0 for name in runtime_tensors(env)}
+    for step in range(steps):
+        if step < 20:
+            env.commands.zero_()
+            env.commands[:, 0] = 0.10
+        elif step < 30:
+            env.commands.zero_()
+        actions = probe if step % 2 == 0 else -probe
+        env.step(actions)
+        non_timeout = env.reset_buf.bool() & ~env.time_out_buf.bool()
+        if step < env.max_episode_length:
+            count = int(non_timeout.sum().item())
+            early_resets += count
+            if count and first_early_reset is None:
+                first_early_reset = {
+                    "step": step,
+                    "env": int(torch.nonzero(non_timeout, as_tuple=False)[0].item()),
+                }
+            reset_causes["roll"] += int((non_timeout & env.reset_roll_buf).sum().item())
+            reset_causes["pitch"] += int((non_timeout & env.reset_pitch_buf).sum().item())
+            reset_causes["z"] += int((non_timeout & env.reset_z_buf).sum().item())
+            reset_causes["contact"] += int((non_timeout & env.reset_contact_buf).sum().item())
+        for name, tensor in runtime_tensors(env).items():
+            finite = torch.isfinite(tensor)
+            count = int((~finite).sum().item())
+            nonfinite[name] += count
+            if count:
+                checks.require(
+                    f"finite/rollout/{name}",
+                    False,
+                    step=step,
+                    nonfinite=count,
+                    first_index=torch.nonzero(~finite, as_tuple=False)[0].tolist(),
+                )
+            max_abs[name] = max(max_abs[name], scalar_max_abs(tensor))
+        if step == 19:
+            checks.require("gait/nonzero_command_advances", bool(torch.all(env.gait_indices > 0.0)))
+        if step == 29:
+            checks.require(
+                "gait/stop_resets_phase_and_contacts",
+                bool(torch.all(env.gait_indices == 0.0) and torch.all(env.desired_contact_states == 1.0)),
+            )
+    for name, count in nonfinite.items():
+        checks.require(f"finite/rollout/{name}", count == 0, nonfinite=count)
+    checks.require(
+        "runtime/no_early_reset",
+        early_resets == 0,
+        count=early_resets,
+        causes=reset_causes,
+        first=first_early_reset,
+    )
+    return max_abs, {
+        "curriculum_stage": stage_index,
+        "early_resets": early_resets,
+        "reset_causes": reset_causes,
+        "first_early_reset": first_early_reset,
+    }
+
+
+def run(cli):
+    torch.manual_seed(cli.seed)
+    checks = Checks()
+    args = make_env_args(cli)
+    env_cfg, _ = task_registry.get_cfgs(name="go2x5")
+    env_cfg = configure_env(env_cfg, cli)
+    env, _ = task_registry.make_env(name="go2x5", args=args, env_cfg=env_cfg)
+    env.reset()
+
+    report = {
+        "schema_version": 1,
+        "task": "go2x5_lowlevel_training_readiness",
+        "num_envs": cli.num_envs,
+        "steps": cli.steps,
+        "rollout_stage": cli.rollout_stage,
+        "seed": cli.seed,
+        "checks": checks.items,
+        "passed": False,
+    }
+    try:
+        probe_rewards(env, checks)
+        probe_ik(env, checks)
+        probe_reset(env, checks)
+        probe_training_metadata(env, checks)
+        probe_curriculum(env, checks)
+        report["max_abs"], report["rollout"] = probe_rollout(
+            env,
+            checks,
+            cli.steps,
+            cli.rollout_stage,
+        )
+        report["passed"] = True
+    except Exception as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        cli.output.parent.mkdir(parents=True, exist_ok=True)
+        cli.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(run(parse_args()))

@@ -107,7 +107,17 @@ def train(args):
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
     ppo_runner, train_cfg, _ = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
-    ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
+    remaining_iterations = max(
+        int(train_cfg.runner.max_iterations) - int(ppo_runner.current_learning_iteration),
+        0,
+    )
+    if remaining_iterations == 0:
+        print(
+            f"Training target already reached: current={ppo_runner.current_learning_iteration}, "
+            f"target={train_cfg.runner.max_iterations}"
+        )
+        return
+    ppo_runner.learn(num_learning_iterations=remaining_iterations, init_at_random_ep_len=True)
 
 if __name__ == '__main__':
     args = get_args()

@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-17",
+  "branch": "agent/go2x5-runtime-parity",
+  "head_at_audit_start": "b6ed563",
+  "status": "GO_FOR_S0_LOW_LEVEL_LONG_TRAINING",
+  "passed_for_long_training_start": true,
+  "deployment_ready": false,
+  "contract_profile": "go2x5_stable_reach_curriculum_v3_flat_step_metrics",
+  "training_scope": "flat deterministic Go2-X5 12D low-level base-policy curriculum",
+  "gates": {
+    "cpu_static_and_reward_audit": {
+      "passed": true,
+      "mismatches": 0
+    },
+    "gpu_s0_readiness_10s": {
+      "passed": true,
+      "checks": 47,
+      "failed_checks": 0,
+      "num_envs": 8,
+      "policy_ticks": 500,
+      "early_resets": 0,
+      "nonfinite": 0
+    },
+    "gpu_s3_math_and_runtime_4s": {
+      "passed": true,
+      "checks": 47,
+      "failed_checks": 0,
+      "num_envs": 8,
+      "policy_ticks": 200,
+      "early_resets": 0,
+      "nonfinite": 0
+    },
+    "ppo_smoke_30_iterations": {
+      "passed": true,
+      "num_envs": 256,
+      "transitions": 184320,
+      "tensorboard_scalar_tags": 89,
+      "tensorboard_scalar_points": 2666,
+      "nonfinite_scalar_points": 0,
+      "final_mean_episode_length": 502.0,
+      "final_mean_reward": 32.809566497802734,
+      "final_collision_metric": 0.0,
+      "final_ee_l1_error_m": 0.1432448923587799,
+      "final_reset_roll": 0.0,
+      "final_reset_pitch": 0.0,
+      "final_reset_z": 0.0
+    },
+    "deterministic_checkpoint_rollout_10s": {
+      "passed": true,
+      "num_envs": 128,
+      "policy_ticks": 500,
+      "early_resets": 0,
+      "nonfinite": 0,
+      "mean_collision_raw_per_tick": 0.0,
+      "max_abs_policy_action": 0.2194148451089859,
+      "max_abs_leg_torque_nm": 14.663819313049316
+    },
+    "checkpoint_resume": {
+      "passed": true,
+      "tested_iterations": [30, 32, 33],
+      "final_iteration": 33,
+      "state_restored": [
+        "model",
+        "ppo_optimizer",
+        "history_encoder_optimizer",
+        "ppo_counter",
+        "global_steps",
+        "total_timesteps",
+        "total_time",
+        "curriculum",
+        "control_contract"
+      ],
+      "plain_resume_id_path": true
+    },
+    "default_capacity": {
+      "passed": true,
+      "num_envs": 4096,
+      "iterations": 2,
+      "transitions": 196608,
+      "fps_range": [40767, 44420],
+      "oom": false
+    }
+  },
+  "non_blocking_stress_results": {
+    "untrained_fixed_probe_s3_10s": {
+      "passed_zero_reset_gate": false,
+      "num_envs": 8,
+      "policy_ticks": 500,
+      "early_resets": 3,
+      "reset_roll": 3,
+      "first_reset_step": 402,
+      "nonfinite": 0,
+      "interpretation": "S3 uses the final wide EE range and requires a trained compensating policy; the long run starts in S0 and is metric-gated before later stages."
+    },
+    "iteration30_stochastic_checkpoint_10s": {
+      "passed_zero_reset_gate": false,
+      "num_envs": 128,
+      "policy_ticks": 500,
+      "early_resets": 1,
+      "reset_roll": 1,
+      "nonfinite": 0,
+      "max_abs_leg_torque_nm": 45.43000030517578
+    }
+  },
+  "known_limits": [
+    "No 45000-iteration convergence result exists.",
+    "No formal trained 12D deployment checkpoint exists yet.",
+    "Rough terrain, observation noise, pushes and domain randomization remain disabled.",
+    "The untrained/fixed-action S3 10-second zero-reset stress gate does not pass.",
+    "High-level teacher training and sim-to-real robustness are not authorized by this result."
+  ]
+}

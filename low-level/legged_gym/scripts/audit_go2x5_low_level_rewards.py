@@ -48,7 +48,7 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="feet_indices order, desired_contact_states, observe_gait_commands",
-        migration_risk="If enabled with the current negative scale, bad off-phase contact becomes positive reward.",
+        migration_risk="When enabled, the coefficient must remain positive or bad off-phase contact becomes positive reward.",
         verification="Enable observe_gait_commands in a small probe; inject off-phase foot force and confirm weighted reward decreases.",
     ),
     "tracking_contacts_shaped_vel": RewardAudit(
@@ -56,24 +56,24 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="feet_indices order, foot_velocities, desired_contact_states, observe_gait_commands",
-        migration_risk="If enabled with the current negative scale, moving a stance foot becomes positive reward.",
+        migration_risk="When enabled, the coefficient must remain positive or moving a stance foot becomes positive reward.",
         verification="Enable observe_gait_commands in a small probe; inject stance-foot velocity and confirm weighted reward decreases.",
     ),
     "feet_air_time": RewardAudit(
-        raw_formula="sum((feet_air_time - 0.5) on first contact), front feet only by default",
+        raw_formula="sum((feet_air_time - configured target) on first contact)",
         raw_direction="larger is better",
         expected_scale_sign="+",
-        dependency="force_sensor_tensor order and front-foot selection",
-        migration_risk="Front-foot-only shaping is valid only if force sensors are FL,FR,RL,RR and [:2] means front feet.",
-        verification="Log force_sensor_tensor contacts while manually touching FL/FR/RL/RR; confirm [:2] are FL and FR.",
+        dependency="force_sensor_tensor order, gait frequency, and swing duration",
+        migration_risk="The target must match the configured gait period; all four feet should contribute to a quadruped gait.",
+        verification="At 2 Hz and 50% swing, verify first contact near 0.25 s is neutral and longer air time is positive.",
     ),
     "feet_height": RewardAudit(
-        raw_formula="clamp(norm(front two foot world-z values) - target, max=0); 0 is best",
+        raw_formula="negative mean per-foot swing-clearance shortfall relative to terrain",
         raw_direction="larger is better",
         expected_scale_sign="+",
-        dependency="feet_indices order, front-foot selection, world-z foot height",
-        migration_risk="Uses coupled world-z norm rather than per-foot swing clearance over terrain; one high front foot can mask one low front foot.",
-        verification="Sweep FL/FR z independently on flat and rough terrain; weighted reward should improve toward 0 without masking a low foot.",
+        dependency="feet_indices, desired_contact_states, and measured terrain height",
+        migration_risk="Each desired-swing foot must clear independently; one high foot must not mask another low foot.",
+        verification="Sweep each foot z independently; only the low desired-swing foot should contribute clearance error.",
     ),
     "tracking_lin_vel_max": RewardAudit(
         raw_formula="velocity progress ratio for x command; zero command uses exp(-abs(base_vx))",
@@ -130,6 +130,14 @@ AUDIT: dict[str, RewardAudit] = {
         dependency="episode survival only",
         migration_risk="Sign is correct; this is a survival baseline, not a behavior-specific signal.",
         verification="Confirm the term is constant and termination penalties are handled separately.",
+    ),
+    "termination": RewardAudit(
+        raw_formula="1 on non-timeout reset, otherwise 0",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="reset_buf and time_out_buf after roll/pitch/height/contact checks",
+        migration_risk="A wrong sign rewards falls; counting timeouts would also punish successful full episodes.",
+        verification="Trigger roll, pitch, height, and timeout resets; only non-timeout resets must receive the penalty.",
     ),
     "lin_vel_z": RewardAudit(
         raw_formula="square(base_lin_vel_z)",
@@ -219,6 +227,14 @@ AUDIT: dict[str, RewardAudit] = {
         migration_risk="Sign is correct; requires feet_indices and force_sensor_tensor to describe the same FL,FR,RL,RR order.",
         verification="Slide one contacting foot in sim; raw should increase only for that foot.",
     ),
+    "foot_lateral_spacing": RewardAudit(
+        raw_formula="sum lateral-width shortfall for FL/RL on +y and FR/RR on -y",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="URDF foot order FL,FR,RL,RR and yaw-frame foot positions",
+        migration_risk="An incorrect foot order or side sign would reward crossed legs.",
+        verification="Move each foot toward and across the sagittal centerline; only the corresponding shortfall should increase.",
+    ),
     "feet_contact_forces": RewardAudit(
         raw_formula="sum(max(norm(force_sensor_tensor)-max_contact_force, 0)) after 2 seconds",
         raw_direction="larger is worse",
@@ -226,6 +242,30 @@ AUDIT: dict[str, RewardAudit] = {
         dependency="force_sensor_tensor and max_contact_force",
         migration_risk="Sign is correct; max_contact_force=200 makes it a high-force limiter, not normal contact shaping.",
         verification="Inspect force histograms; raw should be near zero for nominal stance and positive for impacts.",
+    ),
+    "feet_contact_standing": RewardAudit(
+        raw_formula="number of feet off ground while the command is stopped",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="force-sensor contact booleans and walking command mask",
+        migration_risk="A bad contact threshold can penalize a nominal four-foot stance.",
+        verification="At zero command lift one foot at a time; the raw penalty should rise by one and be zero while walking.",
+    ),
+    "hind_feet_contact_standing": RewardAudit(
+        raw_formula="number of RL/RR feet off ground while the command is stopped",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="force-sensor order FL,FR,RL,RR and walking command mask",
+        migration_risk="A migrated foot order could constrain the front pair instead of the rear support pair.",
+        verification="Lift FL, FR, RL, RR independently; only RL/RR should contribute while stopped.",
+    ),
+    "foot_support_standing": RewardAudit(
+        raw_formula="max(min_stance_feet - contact_count, 0) while stopped",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="four force-sensor contact booleans and walking command mask",
+        migration_risk="A flickering contact threshold can create a high-variance standing penalty.",
+        verification="Sweep contact count 4,3,2,1 at zero command; raw penalty should be 0,0,1,2.",
     ),
     "base_height": RewardAudit(
         raw_formula="abs((root_z - mean(measured_heights)) - base_height_target)",
@@ -235,6 +275,46 @@ AUDIT: dict[str, RewardAudit] = {
         migration_risk="Sign is correct for target 0.33; terrain height sampling must be valid under Go2-X5 footprint.",
         verification="Probe flat base z 0.25/0.33/0.42; weighted reward should be best at 0.33.",
     ),
+    "pitch_soft_limit_standing": RewardAudit(
+        raw_formula="max(abs(pitch) - configured soft limit, 0) while stopped",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="full base quaternion and walking command mask",
+        migration_risk="Too tight a limit prevents body compensation needed for low EE targets.",
+        verification="Sweep pitch below and above 0.35 rad; penalty must be zero below it and disabled while walking.",
+    ),
+    "orientation": RewardAudit(
+        raw_formula="sum(square(projected_gravity_xy))",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="base quaternion and gravity vector",
+        migration_risk="This base penalty is independent of the position-only EE orientation setting.",
+        verification="Sweep base roll/pitch around identity; the minimum must occur at level orientation.",
+    ),
+    "stability_safety": RewardAudit(
+        raw_formula="product of roll, pitch, terrain-relative height, and >=3-foot safety margins",
+        raw_direction="larger is better",
+        expected_scale_sign="+",
+        dependency="base attitude, measured heights, and force-sensor contacts",
+        migration_risk="A wrong terrain height or foot contact identity collapses this positive shaping term.",
+        verification="Start level with four contacts, then violate one safety margin at a time; reward must decrease.",
+    ),
+    "dof_error_deadzone": RewardAudit(
+        raw_formula="sum(square(max(abs(leg_q-default_q)-deadzone, 0)))",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="URDF leg joint order and default pose",
+        migration_risk="Wrong default angles or leg slicing penalize the intended nominal stance.",
+        verification="Perturb each leg joint within and beyond the dead zone; only excess displacement should contribute.",
+    ),
+    "leg_action_l2_deadzone": RewardAudit(
+        raw_formula="sum(square(max(abs(applied_leg_action)-deadzone, 0)))",
+        raw_direction="larger is worse",
+        expected_scale_sign="-",
+        dependency="12D applied leg action in URDF order",
+        migration_risk="An overly small dead zone can suppress useful corrective actions during early learning.",
+        verification="Sweep one action around the dead zone; penalty must be zero inside and quadratic outside.",
+    ),
     "tracking_ee_world": RewardAudit(
         raw_formula="exp(-2 * L1(ee_pos - curr_ee_goal_cart_world) / tracking_ee_sigma)",
         raw_direction="larger is better",
@@ -242,6 +322,14 @@ AUDIT: dict[str, RewardAudit] = {
         dependency="gripper_idx=arm_eef_link, ee_pos rigid body state, world-frame EE goal",
         migration_risk="Sign is correct; with num_arm_actions=0 it influences the leg policy through PPO reward mixing, not a separate arm action head.",
         verification="Set goal exactly at arm_eef_link and then offset x/y/z; raw should be highest at zero offset and decay monotonically.",
+    ),
+    "tracking_ee_world_stable": RewardAudit(
+        raw_formula="world-position EE tracking reward multiplied by the stability safety margin",
+        raw_direction="larger is better",
+        expected_scale_sign="+",
+        dependency="arm_eef_link world position, EE world target, attitude, height, and foot contacts",
+        migration_risk="The task can otherwise improve EE error by falling or sacrificing support.",
+        verification="Compare exact EE tracking in stable stance against the same tracking with each safety margin violated.",
     ),
     "tracking_ee_orn": RewardAudit(
         raw_formula="exp(-Euler L1 orientation error / tracking_ee_sigma)",
@@ -261,6 +349,27 @@ OPS = {
     ast.Div: operator.truediv,
 }
 
+STAGE_REWARD_SCALE_KEYS = {
+    "collision_scale": "collision",
+    "orientation_scale": "orientation",
+    "foot_lateral_spacing_scale": "foot_lateral_spacing",
+    "feet_contact_standing_scale": "feet_contact_standing",
+    "hind_feet_contact_standing_scale": "hind_feet_contact_standing",
+    "foot_support_standing_scale": "foot_support_standing",
+    "dof_error_deadzone_scale": "dof_error_deadzone",
+    "leg_action_l2_deadzone_scale": "leg_action_l2_deadzone",
+    "stability_safety_scale": "stability_safety",
+    "tracking_lin_vel_max_scale": "tracking_lin_vel_max",
+    "tracking_ang_vel_scale": "tracking_ang_vel",
+    "walking_dof_scale": "walking_dof",
+    "tracking_contacts_shaped_force_scale": "tracking_contacts_shaped_force",
+    "tracking_contacts_shaped_vel_scale": "tracking_contacts_shaped_vel",
+    "feet_air_time_scale": "feet_air_time",
+    "feet_height_scale": "feet_height",
+    "torques_scale": "torques",
+    "work_scale": "work",
+}
+
 
 def load_module(path: Path, name: str) -> Any:
     spec = importlib.util.spec_from_file_location(name, path)
@@ -278,6 +387,11 @@ def safe_eval(node: ast.AST, names: dict[str, Any]) -> Any:
         return [safe_eval(item, names) for item in node.elts]
     if isinstance(node, ast.Tuple):
         return tuple(safe_eval(item, names) for item in node.elts)
+    if isinstance(node, ast.Dict):
+        return {
+            safe_eval(key, names): safe_eval(value, names)
+            for key, value in zip(node.keys, node.values)
+        }
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return -safe_eval(node.operand, names)
     if isinstance(node, ast.BinOp) and type(node.op) in OPS:
@@ -442,6 +556,34 @@ def audit_rows(
     return rows
 
 
+def curriculum_audit_rows(stages: list[dict[str, Any]], env_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for stage in stages:
+        for stage_key, reward_name in STAGE_REWARD_SCALE_KEYS.items():
+            if stage_key not in stage:
+                continue
+            scale = stage[stage_key]
+            meta = AUDIT.get(reward_name)
+            if meta is None or not isinstance(scale, (int, float)):
+                continue
+            sign = "DISABLED" if scale == 0 else sign_status(
+                reward_name,
+                float(scale),
+                meta.expected_scale_sign,
+                env_cfg,
+            )
+            rows.append(
+                {
+                    "stage": stage.get("name", "unnamed"),
+                    "term": reward_name,
+                    "scale": float(scale),
+                    "expected": meta.expected_scale_sign,
+                    "sign": sign,
+                }
+            )
+    return rows
+
+
 def build_report() -> str:
     robot_spec = load_module(SPEC_PATH, "go2x5_robot_spec_for_reward_audit")
     names = {"robot_spec": robot_spec}
@@ -453,12 +595,14 @@ def build_report() -> str:
     asset_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfg", "asset"], names))
     ppo_policy_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfgPPO", "policy"], names))
     ppo_algorithm_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfgPPO", "algorithm"], names))
+    auto_curriculum_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfg", "auto_curriculum"], names))
     function_lines = reward_function_lines(REWARD_PATH)
     urdf = parse_urdf(URDF_PATH)
 
     leg_active = active_scales(scales)
     arm_active = active_scales(arm_scales)
     rows = audit_rows(leg_active, arm_active, function_lines, env_cfg)
+    stage_rows = curriculum_audit_rows(auto_curriculum_cfg.get("stages", []), env_cfg)
 
     foot_names = [name for name in urdf["links"] if asset_cfg["foot_name"] in name]
     preferred_feet = list(robot_spec.URDF_FOOT_BODY_NAMES)
@@ -471,6 +615,8 @@ def build_report() -> str:
         termination_names.extend([name for name in urdf["links"] if token in name])
 
     mismatches = [row for row in rows if row["sign"].startswith("MISMATCH")]
+    unreviewed = [row for row in rows if row["sign"].startswith("CHECK")]
+    stage_mismatches = [row for row in stage_rows if row["sign"].startswith("MISMATCH")]
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()
@@ -515,6 +661,7 @@ def build_report() -> str:
     lines.append("")
     lines.append("- Leg rewards are summed into `rew_buf` and divided by 100.")
     lines.append("- Arm rewards are summed into `arm_rew_buf` and divided by 100.")
+    lines.append("- Episode reward summaries remain per-second totals; `Episode_metric/*` summaries are raw per-policy-step means so curriculum thresholds keep their physical units.")
     lines.append("- PPO stores `[rew_buf, arm_rew_buf]` as a two-channel reward/value/advantage signal.")
     lines.append("- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `value_mixing_ratio` ramps from 0 to 1 over the first 3000 PPO updates.")
     lines.append("")
@@ -531,17 +678,25 @@ def build_report() -> str:
     lines.append("")
     lines.append("## Main Findings")
     lines.append("")
-    if mismatches:
+    if mismatches or stage_mismatches:
         lines.append("1. Sign mismatches found:")
         for row in mismatches:
             lines.append(
                 f"   - `{row['term']}` has scale `{row['scale']}` but raw direction is `{row['raw_direction']}` and expected sign is `{row['expected']}`. {row['sign']}."
             )
+        for row in stage_mismatches:
+            lines.append(
+                f"   - `{row['stage']}/{row['term']}` has scale `{row['scale']}` "
+                f"but expected sign is `{row['expected']}`. {row['sign']}."
+            )
     else:
-        lines.append("1. No active sign mismatch was found by the static table.")
-    lines.append("2. `tracking_contacts_shaped_force` and `tracking_contacts_shaped_vel` are configured with nonzero negative scales, but currently return zero because `observe_gait_commands=False`. If gait commands are enabled later, their signs should be fixed or their raw functions should be rewritten.")
-    lines.append("3. `feet_air_time` and `feet_height` are front-feet-only by default. In the current runtime order, `feet_indices[:2]` means `FL,FR`, so the front-foot semantics are consistent even though policy observations are reindexed to `FR,FL,RR,RL`. `feet_height` is still geometrically weak because it uses a coupled world-z norm over the two front feet.")
-    lines.append("4. `tracking_ee_world` uses `arm_eef_link` world position and is an active PPO reward channel. With `num_arm_actions=0`, its effect on the low-level 12D leg policy comes through PPO advantage mixing, ramped by `mixing_schedule=[1.0, 0, 3000]`. Its sign is correct, but it still needs a runtime monotonicity probe and an orientation sweep because IK uses `ee_goal_orn_quat` even when `tracking_ee_orn=0`.")
+        lines.append("1. No active or curriculum-stage sign mismatch was found by the static table.")
+    if unreviewed:
+        terms = ", ".join(f"`{row['term']}`" for row in unreviewed)
+        lines.append(f"   - `{len(unreviewed)}` active terms still lack reviewed semantics: {terms}.")
+    lines.append("2. Gait contact shaping is zero for stopped commands and uses positive coefficients because its raw values are non-positive penalties.")
+    lines.append("3. Air-time uses the configured 0.25 s target for the 2 Hz/50% swing gait, and air-time/clearance shaping covers all four feet.")
+    lines.append("4. `tracking_ee_world` uses `arm_eef_link` world position and is an active PPO reward channel. With `num_arm_actions=0`, its effect on the low-level 12D leg policy comes through PPO advantage mixing, ramped by `mixing_schedule=[1.0, 0, 3000]`.")
     lines.append("5. `collision` sign is correct, but the resolved penalized set is thigh/calf only. Base, arm, wrist, and finger contacts are not penalized by this term.")
     lines.append("")
     lines.append("## Active Reward Audit Table")
@@ -549,7 +704,10 @@ def build_report() -> str:
     lines.append("| term | channel | scale | raw meaning | expected sign | sign check | source | dependency | Go2-X5 migration risk | verification |")
     lines.append("|---|---:|---:|---|---:|---|---|---|---|---|")
     for row in rows:
-        source = source_ref(REWARD_PATH, row["line"]) if row["line"] else source_ref(REWARD_PATH)
+        if row["term"] == "termination":
+            source = source_ref(ENV_PATH, 689)
+        else:
+            source = source_ref(REWARD_PATH, row["line"]) if row["line"] else source_ref(REWARD_PATH)
         lines.append(
             "| "
             + " | ".join(
@@ -568,6 +726,16 @@ def build_report() -> str:
                 ]
             )
             + " |"
+        )
+    lines.append("")
+    lines.append("## Curriculum Reward Overrides")
+    lines.append("")
+    lines.append("| stage | term | scale | expected sign | sign check |")
+    lines.append("|---|---|---:|---:|---|")
+    for row in stage_rows:
+        lines.append(
+            f"| `{row['stage']}` | `{row['term']}` | {row['scale']} | "
+            f"{row['expected']} | {row['sign']} |"
         )
     lines.append("")
     lines.append("## Disabled But Migration-Relevant Terms")
@@ -602,15 +770,15 @@ def build_report() -> str:
     lines.append("2. Contact identity: touch `FL_foot, FR_foot, RL_foot, RR_foot` one at a time and confirm `force_sensor_tensor` order is `FL,FR,RL,RR`, while policy observation order is `FR,FL,RR,RL`.")
     lines.append("3. Collision identity: create contact on a thigh, calf, base, arm link, and finger link; only thigh/calf should affect current `collision`.")
     lines.append("4. EE position monotonicity: set `curr_ee_goal_cart_world` equal to `arm_eef_link` position, then offset x/y/z; `tracking_ee_world` raw value must decay monotonically.")
-    lines.append("5. EE orientation sweep: because IK uses `ee_goal_orn_quat`, sweep rpy around the verified `arm_eef_link` +x grasp direction even while `tracking_ee_orn=0`.")
+    lines.append("5. Position-only IK invariant: vary `ee_goal_orn_quat` while holding the position target fixed; arm q-targets must not change when `track_ee_orientation=False`.")
     lines.append("")
     lines.append("## Interpretation")
     lines.append("")
     lines.append(textwrap.dedent(
         """
-        The current Go2-X5 low-level reward set is mostly sign-consistent for the active locomotion and EE-position terms.
-        The two important exceptions are conditional: gait contact shaping has inverted signs if `observe_gait_commands` is enabled, and EE orientation is not a reward term but still affects IK-driven arm motion.
-        For the next low-level training attempt, the most important checks are therefore runtime monotonicity and identity probes, not immediate reward-weight reduction.
+        The current Go2-X5 low-level reward set is sign-consistent for the active locomotion, gait, and EE-position terms.
+        Static signs do not prove simulator tensor identity, terrain-relative height semantics, or reset behavior.
+        The remaining pre-training checks are therefore the listed runtime monotonicity and identity probes.
         """
     ).strip())
     lines.append("")
@@ -625,6 +793,11 @@ def main() -> None:
         default=None,
         help=f"Write Markdown report to this path. Default stdout. Suggested: {DEFAULT_OUTPUT}",
     )
+    parser.add_argument(
+        "--fail-on-mismatch",
+        action="store_true",
+        help="Return non-zero if a reward sign is wrong or an active term is unreviewed.",
+    )
     args = parser.parse_args()
 
     report = build_report()
@@ -634,6 +807,8 @@ def main() -> None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report)
         print(f"Wrote {args.output}")
+    if args.fail_on_mismatch and ("MISMATCH" in report or "No metadata yet" in report):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
