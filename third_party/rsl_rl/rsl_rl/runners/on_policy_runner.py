@@ -190,10 +190,14 @@ class OnPolicyRunner:
             metric_snapshot = {}
             if self.log_dir is not None:
                 metric_snapshot = self.log(locals())
+            completed_iterations = it + 1
             if hasattr(self.env, "update_auto_curriculum"):
-                self.env.update_auto_curriculum(it, metric_snapshot)
-            if it % self.save_interval == 0:
-                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)), it)
+                self.env.update_auto_curriculum(completed_iterations, metric_snapshot)
+            if completed_iterations % self.save_interval == 0:
+                self.save(
+                    os.path.join(self.log_dir, 'model_{}.pt'.format(completed_iterations)),
+                    completed_iterations,
+                )
             ep_infos.clear()
 
         self.current_learning_iteration += num_learning_iterations
@@ -302,8 +306,8 @@ class OnPolicyRunner:
                        f"""{'Total timesteps:':>{pad}} {self.tot_timesteps}\n"""
                        f"""{'Iteration time:':>{pad}} {iteration_time:.2f}s\n"""
                        f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
-                       f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
-                               locs['num_learning_iterations'] - locs['it']):.1f}s\n""")
+                       f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * max(
+                               locs['tot_iter'] - locs['it'] - 1, 0):.1f}s\n""")
         print(log_string)
         return wandb_dict
 
@@ -336,6 +340,12 @@ class OnPolicyRunner:
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
+            'hist_encoder_optimizer_state_dict': self.alg.hist_encoder_optimizer.state_dict(),
+            'algorithm_counter': self.alg.counter,
+            'runner_state': {
+                'tot_timesteps': self.tot_timesteps,
+                'tot_time': self.tot_time,
+            },
             'iter': it,
             'infos': infos,
             'metadata': metadata,
@@ -343,12 +353,28 @@ class OnPolicyRunner:
 
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path, map_location=self.device)
+        require_full_training_state = bool(
+            getattr(getattr(self.env.cfg, 'env', None), 'require_training_metadata', False)
+        )
+        if hasattr(self.env, "load_training_metadata"):
+            self.env.load_training_metadata(loaded_dict.get('metadata'))
         self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
+            hist_optimizer_state = loaded_dict.get('hist_encoder_optimizer_state_dict')
+            if require_full_training_state and hist_optimizer_state is None:
+                raise RuntimeError("Go2-X5 training checkpoint has no history encoder optimizer state")
+            if hist_optimizer_state is not None:
+                self.alg.hist_encoder_optimizer.load_state_dict(hist_optimizer_state)
         self.current_learning_iteration = loaded_dict['iter']
-        if hasattr(self.env, "load_training_metadata"):
-            self.env.load_training_metadata(loaded_dict.get('metadata'))
+        if require_full_training_state and 'algorithm_counter' not in loaded_dict:
+            raise RuntimeError("Go2-X5 training checkpoint has no PPO algorithm counter")
+        if require_full_training_state and 'runner_state' not in loaded_dict:
+            raise RuntimeError("Go2-X5 training checkpoint has no runner state")
+        self.alg.counter = int(loaded_dict.get('algorithm_counter', loaded_dict['iter']))
+        runner_state = loaded_dict.get('runner_state') or {}
+        self.tot_timesteps = int(runner_state.get('tot_timesteps', 0))
+        self.tot_time = float(runner_state.get('tot_time', 0.0))
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None, stochastic=False):

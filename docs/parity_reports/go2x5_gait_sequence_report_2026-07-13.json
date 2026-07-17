@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "tick_hz": 50,
+  "duration_s": 7.0,
+  "ticks": 350,
+  "atol": 1e-07,
+  "walking_mask_mismatch": 0,
+  "gait_index_max_abs_error": 0.0,
+  "clock_input_max_abs_error": 0.0,
+  "observation_gait_field_max_abs_error": 0.0,
+  "command_after_dead_zone_mismatch": 0,
+  "transitions": [
+    {"time_s": 0.0, "walking": false, "gait_index": 0.0},
+    {"time_s": 1.0, "walking": true, "gait_index": 0.03999999910593033},
+    {"time_s": 3.0, "walking": false, "gait_index": 0.0},
+    {"time_s": 4.0, "walking": true, "gait_index": 0.03999999910593033},
+    {"time_s": 6.0, "walking": false, "gait_index": 0.0}
+  ],
+  "nonfinite_count": 0,
+  "passed": true
+}

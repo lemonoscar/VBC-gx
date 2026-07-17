@@ -112,7 +112,17 @@ class PPO:
     def train_mode(self):
         self.actor_critic.train()
 
+    @staticmethod
+    def _require_finite(name, tensor):
+        finite = torch.isfinite(tensor)
+        if bool(torch.all(finite)):
+            return
+        first = torch.nonzero(~finite, as_tuple=False)[0].tolist()
+        raise FloatingPointError(f"Non-finite {name} at index {first}")
+
     def act(self, obs, critic_obs, hist_encoding=False):
+        self._require_finite("actor observations", obs)
+        self._require_finite("critic observations", critic_obs)
         if self.actor_critic.is_recurrent:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
         # Compute the actions and values
@@ -121,6 +131,11 @@ class PPO:
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.actor_critic.action_mean.detach()
         self.transition.action_sigma = self.actor_critic.action_std.detach()
+        self._require_finite("sampled actions", self.transition.actions)
+        self._require_finite("critic values", self.transition.values)
+        self._require_finite("action log probabilities", self.transition.actions_log_prob)
+        self._require_finite("action means", self.transition.action_mean)
+        self._require_finite("action standard deviations", self.transition.action_sigma)
         # need to record obs and critic_obs before env.step()
         self.transition.observations = obs
         self.transition.critic_observations = critic_obs
@@ -146,8 +161,16 @@ class PPO:
         self.actor_critic.reset(dones)
     
     def compute_returns(self, last_critic_obs):
+        self._require_finite("rollout observations", self.storage.observations)
+        self._require_finite("rollout actions", self.storage.actions)
+        self._require_finite("rollout rewards", self.storage.rewards)
+        self._require_finite("rollout values", self.storage.values)
+        self._require_finite("last critic observation", last_critic_obs)
         last_values= self.actor_critic.evaluate(last_critic_obs).detach()
+        self._require_finite("last values", last_values)
         self.storage.compute_returns(last_values, self.gamma, self.lam)
+        self._require_finite("rollout returns", self.storage.returns)
+        self._require_finite("rollout advantages", self.storage.advantages)
 
     def update(self):
         mean_value_loss = 0
@@ -199,20 +222,28 @@ class PPO:
                 only_train_leg = False
 
                 mixing_advantages_batch = torch.zeros_like(advantages_batch)
-                if only_train_leg == True:
+                if only_train_leg:
                     mixing_advantages_batch[..., 0] = advantages_batch[..., 0]
                     mixing_advantages_batch[..., 1] = advantages_batch[..., 1]
                 else:
                     mixing_advantages_batch[..., 0] = advantages_batch[..., 0] + value_mixing_ratio * advantages_batch[..., 1]
                     mixing_advantages_batch[..., 1] = advantages_batch[..., 1] + value_mixing_ratio * advantages_batch[..., 0]
-                ratio = torch.exp(actions_log_prob_batch - old_actions_log_prob_batch)
-                surrogate = - mixing_advantages_batch * ratio
-                surrogate_clipped = - mixing_advantages_batch * torch.clamp(ratio, 1.0 - self.clip_param,
-                                                                                1.0 + self.clip_param)
-                if only_train_leg == True:
-                    surrogate_loss = torch.max(surrogate, surrogate_clipped)[:, 0].mean()
-                else:
-                    surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
+
+                # A 12D Go2-X5 policy has one stochastic action distribution:
+                # the arm is driven by IK and contributes only a reward/value
+                # channel. Do not average a constant, empty arm-action ratio
+                # into the policy loss; it silently halves the useful gradient.
+                policy_channels = 1 if self.actor_critic.num_arm_actions == 0 else 2
+                ratio = torch.exp(
+                    actions_log_prob_batch[..., :policy_channels]
+                    - old_actions_log_prob_batch[..., :policy_channels]
+                )
+                policy_advantages = mixing_advantages_batch[..., :policy_channels]
+                surrogate = -policy_advantages * ratio
+                surrogate_clipped = -policy_advantages * torch.clamp(
+                    ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
+                )
+                surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
                 # Value function loss
                 if self.use_clipped_value_loss:
                     value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(-self.clip_param,
@@ -227,6 +258,8 @@ class PPO:
                        + self.value_loss_coef * value_loss \
                        - self.entropy_coef * entropy_batch.mean() \
                        + priv_reg_coef * priv_reg_loss
+
+                self._require_finite("PPO loss", loss)
 
 
                 # adaptive arm gains
@@ -250,7 +283,8 @@ class PPO:
                 # Gradient step
                 self.optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                grad_norm = nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                self._require_finite("PPO gradient norm", grad_norm)
                 self.optimizer.step()
 
                 mean_value_loss += value_loss.item()
@@ -286,9 +320,14 @@ class PPO:
                     priv_latent_batch = self.actor_critic.actor.infer_priv_latent(obs_batch)
                 hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_batch)
                 hist_latent_loss = (priv_latent_batch.detach() - hist_latent_batch).norm(p=2, dim=1).mean()
+                self._require_finite("history latent loss", hist_latent_loss)
                 self.hist_encoder_optimizer.zero_grad()
                 hist_latent_loss.backward()
-                nn.utils.clip_grad_norm_(self.actor_critic.actor.history_encoder.parameters(), self.max_grad_norm)
+                grad_norm = nn.utils.clip_grad_norm_(
+                    self.actor_critic.actor.history_encoder.parameters(),
+                    self.max_grad_norm,
+                )
+                self._require_finite("history encoder gradient norm", grad_norm)
                 self.hist_encoder_optimizer.step()
                 
                 mean_hist_latent_loss += hist_latent_loss.item()
@@ -300,6 +339,7 @@ class PPO:
 
     def enforce_min_std(self):
         current_std = self.actor_critic.std.detach()
+        self._require_finite("policy std", current_std)
         new_std = torch.max(current_std, self.min_policy_std).detach()
         self.actor_critic.std.data = new_std
     

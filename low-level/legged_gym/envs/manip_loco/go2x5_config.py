@@ -116,7 +116,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         num_envs = 4096
         num_actions = robot_spec.ACTION_DIM  # low-level policy controls legs only; arm is driven by IK position targets
         num_torques = robot_spec.NUM_TORQUES
-        action_delay = 3
+        action_delay = 0  # deterministic parity first; reintroduce measured delay through a shared contract
         num_gripper_joints = robot_spec.NUM_PHYSICAL_GRIPPER_DOFS  # Isaac Gym loads the mirrored finger sliders as physical DOFs.
         # Observation breakdown:
         # - body_orientation: 2
@@ -135,7 +135,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # - motor_strength (legs only, hardcoded in code): 12
         num_priv = robot_spec.PRIV_DIM
         history_len = robot_spec.HISTORY_LEN
-        num_observations = robot_spec.observation_dim(False)
+        num_observations = robot_spec.observation_dim(True)
         num_privileged_obs = None
         send_timeouts = True
         episode_length_s = 10
@@ -143,7 +143,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         teleop_mode = False
         record_video = False
         stand_by = False
-        observe_gait_commands = False
+        # Go2-X5 deployment always consumes the five gait fields.  Keep this
+        # enabled in the task itself so a missing CLI flag cannot silently
+        # produce an incompatible checkpoint.
+        observe_gait_commands = True
+        require_training_metadata = True
         frequencies = 2
 
     class init_state( LeggedRobotCfg.init_state ):
@@ -170,6 +174,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class asset( LeggedRobotCfg.asset ):
         file = robot_spec.LOW_LEVEL_ASSET_FILE
+        base_body_name = "base"
         foot_name = "foot"  # Go2 foot links are named *_foot
         gripper_name = robot_spec.EE_BODY_NAME  # End-effector frame from the Go2-X5-lab URDF
         # Note: Go2 has no "trunk" like B1, use "thigh" instead for penalization
@@ -240,8 +245,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         kappa_gait_probs = 0.07
         feet_height_target = 0.12
 
-        feet_aritime_allfeet = False
-        feet_height_allfeet = False
+        feet_aritime_allfeet = True
+        feet_height_allfeet = True
+        feet_air_time_target = 0.25  # 2 Hz gait with a 50% swing phase.
         foot_lateral_min = 0.06
         min_stance_feet = 3.0
         safety_min_feet_contacts = 3.0
@@ -271,10 +277,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             tracking_lin_vel_x_exp = 0
             tracking_ang_vel = 0.0
 
-            delta_torques = -1.0e-7/4.0
-            work = 0
-            energy_square = 0.0
-            torques = -2.5e-5 
+            torques = -2.5e-5
             stand_still = 3.0
             walking_dof = 0.0
             dof_default_pos = 0.0
@@ -351,7 +354,12 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         horizontal_scale = 0.05
         vertical_scale = 0.005
         border_size = 25
-        height = [0.00, 0.02]
+        # The stability/reach curriculum is intentionally flat. Runtime probes
+        # showed that even the zero policy makes calf contact on the previous
+        # 0--2 cm rough-flat mesh, making the S0 collision gate impossible to
+        # satisfy. Rough terrain belongs in a later, explicitly versioned
+        # robustness curriculum after flat closed-loop parity is established.
+        height = [0.00, 0.00]
         gap_size = [0.02, 0.1]
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
@@ -393,7 +401,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class auto_curriculum:
         enabled = True
-        profile_name = "go2x5_stable_reach_curriculum_v1"
+        # v3 invalidates pre-fix checkpoints whose episode metrics were logged
+        # in frequency-scaled units and therefore could not satisfy the stage gates.
+        profile_name = "go2x5_stable_reach_curriculum_v3_flat_step_metrics"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -514,8 +524,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
                 "ee_tracking_stable_weight": 0.8,
                 "tracking_lin_vel_max_scale": 1.0,
                 "tracking_ang_vel_scale": 0.25,
-                "tracking_contacts_shaped_force_scale": -0.5,
-                "tracking_contacts_shaped_vel_scale": -0.5,
+                # The raw shaped-contact rewards are zero at the target and
+                # negative on error, so their coefficients must be positive.
+                "tracking_contacts_shaped_force_scale": 0.5,
+                "tracking_contacts_shaped_vel_scale": 0.5,
                 "walking_dof_scale": 1.0,
                 "feet_air_time_scale": 0.5,
                 "feet_height_scale": 0.2,

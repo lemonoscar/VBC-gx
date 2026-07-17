@@ -105,6 +105,8 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["maskArmGoalCart"] == [0.34, 0.0, 0.24]
     assert asset_cfg["control"]["armPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
     assert asset_cfg["control"]["armPositionDriveDamping"] == spec.ARM_POS_DAMPING
+    assert asset_cfg["control"]["gripperPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
+    assert asset_cfg["control"]["gripperPositionDriveDamping"] == spec.ARM_POS_DAMPING
     assert env_cfg["armBaseOffset"] == spec.ARM_BASE_OFFSET
     assert env_cfg["eeBodyName"] == spec.EE_BODY_NAME
     assert env_cfg["wristBodyName"] == spec.WRIST_BODY_NAME
@@ -147,7 +149,7 @@ def test_low_level_action_interfaces_keep_b1z1_full_dim():
     assert "if actions.shape[1] == 12 and self.num_torques == 12:" in manip_loco
     assert "elif actions.shape[1] == self.num_torques:" in manip_loco
     assert "default_torques[:, 12:] = 0." in manip_loco
-    assert "self._reindex_all(self.action_history_buf[:, -1])[:, :12]" in manip_loco
+    assert "self._reindex_all(self.actions)[:, :12]" in manip_loco
 
 
 def test_go2x5_joint_and_foot_reindexing_is_self_inverse():
@@ -217,7 +219,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v1"' in go2x5_config
+    assert 'profile_name = "go2x5_stable_reach_curriculum_v3_flat_step_metrics"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert '"name": "S0_safe_small_reach"' in go2x5_config
     assert '"name": "S1_mid_reach_compensation"' in go2x5_config
@@ -305,6 +307,52 @@ def test_go2x5_stability_design_matches_current_training_plan():
     assert '"action_scale": robot_spec.LOW_ACTION_SCALE' in go2x5_config
     assert "init_std = [[0.08, 0.10, 0.10] * 4]" in go2x5_config
     assert "min_policy_std = [[0.04, 0.05, 0.05] * 4]" in go2x5_config
+
+
+def test_go2x5_runtime_contract_is_deterministic_and_name_based():
+    cfg = load_high_level_cfg()
+    env_cfg = cfg["env"]
+    high_level = (ROOT / "high-level/envs/b1z1_base.py").read_text(encoding="utf-8")
+    low_level = (ROOT / "low-level/legged_gym/envs/manip_loco/manip_loco.py").read_text(encoding="utf-8")
+    go2x5_config = (ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_config.py").read_text(encoding="utf-8")
+
+    assert env_cfg["asset"]["baseBodyName"] == "base"
+    assert "props[1]" not in high_level
+    assert "props[1]" not in low_level
+    assert 'base_body_name = "base"' in go2x5_config
+
+    dr = env_cfg["domainRandomization"]
+    assert dr["friction"] == [1.0, 1.0]
+    assert dr["motorStrength"] == [1.0, 1.0]
+    assert dr["addedBaseMassKg"] == [0.0, 0.0]
+    assert dr["baseComOffsetM"] == [[0.0, 0.0]] * 3
+
+    physx = cfg["sim"]["physx"]
+    contract = env_cfg["lowPolicyContract"]
+    assert physx["num_position_iterations"] == contract["physx"]["num_position_iterations"] == 4
+    assert physx["contact_offset"] == contract["physx"]["contact_offset"] == 0.01
+    assert physx["bounce_threshold_velocity"] == contract["physx"]["bounce_threshold_velocity"] == 0.5
+    assert physx["max_depenetration_velocity"] == contract["physx"]["max_depenetration_velocity"] == 1.0
+    assert physx["default_buffer_size_multiplier"] == contract["physx"]["default_buffer_size_multiplier"] == 5.0
+
+    assert env_cfg["eeFrame"] == contract["ee_frame"] == "TERRAIN_INVARIANT_YAW"
+    assert env_cfg["armIkGain"] == contract["ik_gain"] == 0.25
+    assert env_cfg["trackEeOrientation"] is contract["track_ee_orientation"] is False
+    assert env_cfg["armTargetUpdatePeriod"] == contract["arm_target_update_period"] == 4
+    assert env_cfg["lowFootContactThreshold"] == contract["foot_contact_threshold"] == 1.5
+    assert contract["gripper_position_stiffness"] == 110.0
+    assert contract["gripper_position_damping"] == 7.5
+
+    assert 'actions = self.action_history_buf[:, -(self.action_delay + 1)]' in low_level
+    assert "self._reindex_all(self.actions)[:, :12]" in low_level
+    assert "self.gait_indices[~is_walking] = 0" in high_level
+    assert '"control_contract_sha256": control_contract_hash' in low_level
+    assert "Low-level checkpoint control contract mismatch" in high_level
+    assert "resolve_robot_start_pose(" in high_level
+    assert "robot_start_pose=None" in high_level
+    assert '"num_arm_actions": max(int(self.cfg.env.num_actions) - 12, 0)' in low_level
+    assert "torch.nan_to_num" not in low_level
+    assert "(self.num_envs, self.low_policy_num_actions)" in high_level
 
 
 if __name__ == "__main__":
