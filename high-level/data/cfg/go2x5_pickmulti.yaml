@@ -33,8 +33,8 @@ env:
   lowLevelAngVelPitchClip: 0.25
   lowFootContactThreshold: 1.5
   lowEeGoalRanges: [[0.05, 0.60], [-0.30, 0.30], [-0.40, 0.42]]
-  robotStartPose: [-0.75, 0.0, 0.33]
-  evalRobotStartPose: [-0.70, 0.0, 0.33]
+  robotStartPose: [-0.75, 0.0, 0.32]
+  evalRobotStartPose: [-0.70, 0.0, 0.32]
   initialEEGoalCart: [0.30, 0.0, 0.20]
   initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
   maskArmGoalCart: [0.34, 0.0, 0.24]
@@ -305,7 +305,7 @@ sim:
     max_gpu_contact_pairs: 16777216
 
 reward:
-  base_height_target: 0.33
+  base_height_target: 0.32
   only_positive_rewards: False
   scales:
     approaching: 0.5

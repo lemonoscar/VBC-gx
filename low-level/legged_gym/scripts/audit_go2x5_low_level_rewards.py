@@ -55,9 +55,9 @@ AUDIT: dict[str, RewardAudit] = {
         raw_formula="0 is best; negative when a desired-stance foot has velocity",
         raw_direction="larger is better",
         expected_scale_sign="+",
-        dependency="feet_indices order, foot_velocities, desired_contact_states, observe_gait_commands",
-        migration_risk="When enabled, the coefficient must remain positive or moving a stance foot becomes positive reward.",
-        verification="Enable observe_gait_commands in a small probe; inject stance-foot velocity and confirm weighted reward decreases.",
+        dependency="feet_indices order, live rigid_body_state velocity, desired_contact_states, observe_gait_commands",
+        migration_risk="When enabled, the coefficient must remain positive and must not read an advanced-indexed cache that is never refreshed.",
+        verification="Inject stance-foot velocity into live rigid_body_state, refresh the cache, and confirm both the raw reward and cache value change.",
     ),
     "feet_air_time": RewardAudit(
         raw_formula="sum((feet_air_time - configured target) on first contact)",
@@ -120,8 +120,8 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="default_dof_pos, walking command mask",
-        migration_risk="Sign is correct but it biases walking toward the default crouch; verify it does not suppress gait amplitude.",
-        verification="Compare reward at nominal trot-like deviations vs exact default under nonzero command.",
+        migration_risk="It biases walking toward the default crouch and is intentionally disabled in Go2-X5 S3 after the v3 no-step failure.",
+        verification="Keep the S3 scale at zero unless a gait-amplitude ablation proves the term cannot dominate swing rewards.",
     ),
     "alive": RewardAudit(
         raw_formula="constant 1",
@@ -272,8 +272,8 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is worse",
         expected_scale_sign="-",
         dependency="root_states[:,2], measured_heights, base_height_target",
-        migration_risk="Sign is correct for target 0.33; terrain height sampling must be valid under Go2-X5 footprint.",
-        verification="Probe flat base z 0.25/0.33/0.42; weighted reward should be best at 0.33.",
+        migration_risk="Sign is correct for target 0.32; terrain height sampling must be valid under Go2-X5 footprint.",
+        verification="Probe flat base z 0.24/0.32/0.41; weighted reward should be best at 0.32.",
     ),
     "pitch_soft_limit_standing": RewardAudit(
         raw_formula="max(abs(pitch) - configured soft limit, 0) while stopped",
@@ -698,6 +698,8 @@ def build_report() -> str:
     lines.append("3. Air-time uses the configured 0.25 s target for the 2 Hz/50% swing gait, and air-time/clearance shaping covers all four feet.")
     lines.append("4. `tracking_ee_world` uses `arm_eef_link` world position and is an active PPO reward channel. With `num_arm_actions=0`, its effect on the low-level 12D leg policy comes through PPO advantage mixing, ramped by `mixing_schedule=[1.0, 0, 3000]`.")
     lines.append("5. `collision` sign is correct, but the resolved penalized set is thigh/calf only. Base, arm, wrist, and finger contacts are not penalized by this term.")
+    lines.append("6. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.")
+    lines.append("7. Go2-X5 S3 disables `walking_dof`: rewarding the default pose while commanding motion previously dominated the swing/contact terms and admitted a no-step optimum.")
     lines.append("")
     lines.append("## Active Reward Audit Table")
     lines.append("")
@@ -766,7 +768,7 @@ def build_report() -> str:
     lines.append("")
     lines.append("Static analysis can verify sign consistency and dependency wiring, but it cannot prove that Isaac Gym rigid-body/contact tensors have the expected values at runtime. Before launching a long low-level run, run these probes:")
     lines.append("")
-    lines.append("1. Base-height monotonicity: set flat-terrain root z near `0.25, 0.33, 0.42`; `base_height` weighted contribution must be best at `0.33`.")
+    lines.append("1. Base-height monotonicity: set flat-terrain root z near `0.24, 0.32, 0.41`; `base_height` weighted contribution must be best at `0.32`.")
     lines.append("2. Contact identity: touch `FL_foot, FR_foot, RL_foot, RR_foot` one at a time and confirm `force_sensor_tensor` order is `FL,FR,RL,RR`, while policy observation order is `FR,FL,RR,RL`.")
     lines.append("3. Collision identity: create contact on a thigh, calf, base, arm link, and finger link; only thigh/calf should affect current `collision`.")
     lines.append("4. EE position monotonicity: set `curr_ee_goal_cart_world` equal to `arm_eef_link` position, then offset x/y/z; `tracking_ee_world` raw value must decay monotonically.")
@@ -778,7 +780,7 @@ def build_report() -> str:
         """
         The current Go2-X5 low-level reward set is sign-consistent for the active locomotion, gait, and EE-position terms.
         Static signs do not prove simulator tensor identity, terrain-relative height semantics, or reset behavior.
-        The remaining pre-training checks are therefore the listed runtime monotonicity and identity probes.
+        Runtime acceptance therefore also requires the listed monotonicity and identity probes; their executed status is recorded in the dated training-readiness report.
         """
     ).strip())
     lines.append("")

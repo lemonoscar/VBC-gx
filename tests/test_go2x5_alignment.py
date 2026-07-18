@@ -101,6 +101,9 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["gripperOpenAtUpper"] is True
     assert env_cfg["lowActionScale"] == spec.LOW_ACTION_SCALE
     assert len(env_cfg["lowActionScale"]) == env_cfg["lowPolicyNumActions"]
+    assert env_cfg["robotStartPose"][2] == spec.BASE_INIT_HEIGHT
+    assert env_cfg["evalRobotStartPose"][2] == spec.BASE_INIT_HEIGHT
+    assert cfg["reward"]["base_height_target"] == spec.BASE_HEIGHT_TARGET
     assert env_cfg["initialEEGoalCart"] == [0.30, 0.0, 0.20]
     assert env_cfg["maskArmGoalCart"] == [0.34, 0.0, 0.24]
     assert asset_cfg["control"]["armPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
@@ -131,7 +134,8 @@ def test_low_level_observation_dimensions_are_explicit():
     assert spec.HISTORY_LEN == 10
     assert spec.observation_dim(False) == 744
     assert spec.observation_dim(True) == 799
-    assert spec.BASE_HEIGHT_TARGET == 0.33
+    assert spec.BASE_HEIGHT_TARGET == 0.32
+    assert spec.BASE_INIT_HEIGHT == 0.32
     assert spec.DEFAULT_JOINT_ANGLES["arm_joint2"] == 0.3
     assert spec.DEFAULT_JOINT_ANGLES["arm_joint3"] == 0.5
     assert spec.DEFAULT_JOINT_ANGLES["RR_thigh_joint"] == 1.0
@@ -219,7 +223,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v3_flat_step_metrics"' in go2x5_config
+    assert 'profile_name = "go2x5_stable_reach_curriculum_v4_live_foot_gait_h032"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert '"name": "S0_safe_small_reach"' in go2x5_config
     assert '"name": "S1_mid_reach_compensation"' in go2x5_config

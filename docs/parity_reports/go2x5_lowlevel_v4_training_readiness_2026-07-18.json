@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-18",
+  "task": "go2x5_lowlevel_v4_training_readiness",
+  "verdict": "GO_FOR_V4_FROM_SCRATCH_ONLY",
+  "training_release": {
+    "code_ready_for_long_training": true,
+    "required_initial_stage": "S0_safe_small_reach",
+    "required_initialization": "random",
+    "resume_model_12000": false,
+    "trained_v4_checkpoint_available": false,
+    "deployment_ready": false
+  },
+  "old_checkpoint": {
+    "path": "low-level/logs/go2x5-low/go2x5_v3_flat_seed1/model_12000.pt",
+    "sha256": "54aa569090ebf40e2bff3e030ffa5fb32111c47113a1d1affe53cdae31cbfd1a",
+    "action_dimension": 12,
+    "curriculum_profile": "go2x5_stable_reach_curriculum_v3_flat_step_metrics",
+    "compatible_with_v4": false,
+    "production_loader_result": "rejected",
+    "production_loader_error": "curriculum profile mismatch",
+    "measured_failure": {
+      "forward_command_mps": 0.1,
+      "forward_velocity_mps": -0.000861,
+      "forward_swing_contact_fraction": 0.9751,
+      "forward_swing_height_m": 0.02281,
+      "backward_command_mps": -0.1,
+      "backward_velocity_mps": -0.03318,
+      "turn_command_rad_s": 0.15,
+      "turn_velocity_rad_s": 0.03216,
+      "foot_velocity_cache_mean_abs_error_mps_range": [
+        0.0396,
+        0.0458
+      ]
+    }
+  },
+  "fixes": {
+    "base_initial_height_m": 0.32,
+    "base_reward_target_m": 0.32,
+    "foot_kinematics_refreshed_each_policy_tick": true,
+    "stance_velocity_reward_reads_live_rigid_body_state": true,
+    "s3_walking_dof_scale": 0.0,
+    "s3_tracking_contacts_shaped_force_scale": 1.0,
+    "s3_tracking_contacts_shaped_vel_scale": 0.5,
+    "s3_feet_height_scale": 1.0,
+    "curriculum_profile": "go2x5_stable_reach_curriculum_v4_live_foot_gait_h032",
+    "fixed_command_gate_is_fail_closed": true
+  },
+  "validation": {
+    "local_unit_tests": {
+      "test_go2x5_training_readiness": "passed",
+      "test_go2x5_alignment": "passed",
+      "test_low_high_runtime_parity": "passed",
+      "reward_audit_mismatch_count": 0,
+      "diff_check": "passed"
+    },
+    "low_high_runtime_parity_gpu": {
+      "atol": 1e-06,
+      "mismatch_count": 0,
+      "oracle_failures": 0,
+      "nonfinite_count": 0,
+      "passed": true
+    },
+    "s0_readiness_gpu": {
+      "num_envs": 8,
+      "policy_ticks": 500,
+      "duration_s": 10.0,
+      "checks_passed": 51,
+      "checks_total": 51,
+      "early_resets": 0,
+      "nonfinite_count": 0,
+      "foot_position_cache_max_error": 0.0,
+      "foot_velocity_cache_max_error": 0.0,
+      "passed": true
+    },
+    "s0_ppo_smoke_gpu": {
+      "num_envs": 256,
+      "iterations": 30,
+      "transitions": 184320,
+      "tensorboard_scalar_tags": 89,
+      "tensorboard_scalar_points": 2666,
+      "nonfinite_scalar_points": 0,
+      "final_mean_reward": 33.51970672607422,
+      "final_mean_episode_length": 502.0,
+      "passed": true
+    },
+    "s0_model30_rollout_gpu": {
+      "num_envs": 128,
+      "policy_ticks": 500,
+      "early_resets": 0,
+      "nonfinite_count": 0,
+      "mean_collision_raw_per_tick": 0.0,
+      "max_abs_policy_action": 0.13046804070472717,
+      "max_abs_leg_torque": 10.998509407043457,
+      "passed": true
+    },
+    "fixed_command_gate_self_test": {
+      "checkpoint": "temporary_randomly_initialized_v4_model30",
+      "safety_passed": true,
+      "forward_translation_progress_ratio": 0.10597126377979293,
+      "forward_swing_contact_fraction": 1.0,
+      "forward_swing_height_m": 0.023263307529187018,
+      "moving_behavior_passed": false,
+      "full_gate_exit_code": 1,
+      "passed": true
+    },
+    "direct_s3_stress_diagnostic": {
+      "purpose": "signal_wiring_diagnostic_only",
+      "num_envs": 256,
+      "iterations": 200,
+      "transitions": 1228800,
+      "nonfinite_scalar_points": 0,
+      "final_live_stance_velocity_reward_raw": -0.016339367255568504,
+      "final_roll_reset_fraction": 0.4166666865348816,
+      "passed": false,
+      "gate_interpretation": "not_a_training_entry_gate; production must learn S0-S2 before S3"
+    }
+  },
+  "required_follow_up": {
+    "during_training": "run fixed-command gait evaluation after S3 has matured",
+    "acceptance": "all stand, forward, backward, and turn cases must pass",
+    "not_proven": [
+      "a converged v4 locomotion policy",
+      "1-second final closed-loop parity",
+      "10-second final closed-loop parity",
+      "deployment readiness"
+    ]
+  }
+}

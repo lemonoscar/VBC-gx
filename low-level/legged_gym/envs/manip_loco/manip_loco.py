@@ -537,6 +537,7 @@ class ManipLoco(LeggedRobot):
         self.gym.refresh_force_sensor_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_jacobian_tensors(self.sim)
+        self._refresh_foot_kinematics()
         self.episode_length_buf += 1
         self.common_step_counter += 1
 
@@ -1193,6 +1194,15 @@ class ManipLoco(LeggedRobot):
 
         return props
 
+    def _refresh_foot_kinematics(self):
+        """Refresh advanced-indexed foot state copies from the live rigid-body tensor."""
+        self.foot_positions = torch.index_select(
+            self.rigid_body_state[:, :, 0:3], 1, self.feet_indices
+        )
+        self.foot_velocities = torch.index_select(
+            self.rigid_body_state[:, :, 7:10], 1, self.feet_indices
+        )
+
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
         """
@@ -1244,11 +1254,7 @@ class ManipLoco(LeggedRobot):
         self.box_rigid_body_state = self._rigid_body_state[:, -1, :]
 
         self.jacobian_whole = gymtorch.wrap_tensor(jacobian_tensor)
-        self.foot_velocities = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:,
-                               self.feet_indices,
-                               7:10]
-        self.foot_positions = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices,
-                              0:3]
+        self._refresh_foot_kinematics()
 
         # ee info (only if gripper exists)
         if self.gripper_idx >= 0:
@@ -1464,6 +1470,7 @@ class ManipLoco(LeggedRobot):
 
         self.gym.set_dof_state_tensor(self.sim, gymtorch.unwrap_tensor(self.dof_state))
         self.gym.refresh_rigid_body_state_tensor(self.sim)
+        self._refresh_foot_kinematics()
 
     def _resample_commands(self, env_ids):
         """ Randommly select commands of some environments

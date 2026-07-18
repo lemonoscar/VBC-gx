@@ -401,9 +401,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class auto_curriculum:
         enabled = True
-        # v3 invalidates pre-fix checkpoints whose episode metrics were logged
-        # in frequency-scaled units and therefore could not satisfy the stage gates.
-        profile_name = "go2x5_stable_reach_curriculum_v3_flat_step_metrics"
+        # v4 invalidates checkpoints trained with stale foot velocity copies,
+        # the S3 default-pose exploit, and the old 0.33 m body-height contract.
+        profile_name = "go2x5_stable_reach_curriculum_v4_live_foot_gait_h032"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -526,11 +526,17 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
                 "tracking_ang_vel_scale": 0.25,
                 # The raw shaped-contact rewards are zero at the target and
                 # negative on error, so their coefficients must be positive.
-                "tracking_contacts_shaped_force_scale": 0.5,
+                # In the observed v3 no-step state, the roughly -0.47 raw
+                # contact error must cancel its roughly +0.46 velocity score;
+                # clearance and drag then make that behavior net-negative.
+                "tracking_contacts_shaped_force_scale": 1.0,
                 "tracking_contacts_shaped_vel_scale": 0.5,
-                "walking_dof_scale": 1.0,
+                # Rewarding the default pose while walking produced +44/s in
+                # the v3 run and suppressed the gait amplitude. Keep the term
+                # for B1 compatibility, but disable it for Go2-X5 S3.
+                "walking_dof_scale": 0.0,
                 "feet_air_time_scale": 0.5,
-                "feet_height_scale": 0.2,
+                "feet_height_scale": 1.0,
                 "advance": {},
             },
         ]

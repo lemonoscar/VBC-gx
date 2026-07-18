@@ -128,6 +128,24 @@ def require_finite(checks, name, tensor):
 def probe_rewards(env, checks):
     reward = env.reward_container
     env.set_training_stage(3, env.curriculum_stages[3], iteration=11000)
+    checks.require(
+        "contract/base_height_0p32",
+        abs(float(env.cfg.init_state.pos[2]) - 0.32) <= 1e-9
+        and abs(float(env.cfg.rewards.base_height_target) - 0.32) <= 1e-9,
+        initial=float(env.cfg.init_state.pos[2]),
+        target=float(env.cfg.rewards.base_height_target),
+    )
+    checks.require(
+        "reward/s3_gait_weights",
+        "walking_dof" not in env.reward_scales
+        and abs(float(env.reward_scales["tracking_contacts_shaped_force"]) - 1.0) <= 1e-9
+        and abs(float(env.reward_scales["tracking_contacts_shaped_vel"]) - 0.5) <= 1e-9
+        and abs(float(env.reward_scales["feet_height"]) - 1.0) <= 1e-9,
+        walking_dof=float(env.reward_scales.get("walking_dof", 0.0)),
+        shaped_force=float(env.reward_scales["tracking_contacts_shaped_force"]),
+        shaped_vel=float(env.reward_scales["tracking_contacts_shaped_vel"]),
+        feet_height=float(env.reward_scales["feet_height"]),
+    )
 
     env.commands.zero_()
     env.commands[:, 0] = 0.10
@@ -155,10 +173,20 @@ def probe_rewards(env, checks):
     env.commands[:, 0] = 0.10
     env.desired_contact_states.fill_(0.0)
     env.desired_contact_states[:, 0] = 1.0
-    env.foot_velocities.zero_()
+    env.rigid_body_state[:, env.feet_indices, 7:10] = 0.0
+    env._refresh_foot_kinematics()
     vel_best, _ = reward._reward_tracking_contacts_shaped_vel()
-    env.foot_velocities[:, 0, 0] = 1.0
+    env.rigid_body_state[:, env.feet_indices[0], 7] = 1.0
+    env._refresh_foot_kinematics()
     vel_bad, _ = reward._reward_tracking_contacts_shaped_vel()
+    live_foot_velocity = torch.index_select(
+        env.rigid_body_state[:, :, 7:10], 1, env.feet_indices
+    )
+    checks.require(
+        "runtime/foot_velocity_cache_is_live",
+        bool(torch.equal(env.foot_velocities, live_foot_velocity)),
+        max_error=scalar_max_abs(env.foot_velocities - live_foot_velocity),
+    )
     checks.require(
         "reward/stance_velocity_decreases",
         bool(torch.all(vel_bad < vel_best)),
@@ -315,7 +343,7 @@ def probe_training_metadata(env, checks):
 
     wrong_profile = copy.deepcopy(metadata)
     wrong_profile["go2x5_alignment"]["curriculum"]["profile_name"] = (
-        "go2x5_stable_reach_curriculum_v2_flat"
+        "go2x5_stable_reach_curriculum_v3_flat_step_metrics"
     )
     try:
         env.load_training_metadata(wrong_profile)
@@ -397,6 +425,8 @@ def probe_rollout(env, checks, steps, stage_index):
     first_early_reset = None
     max_abs = {name: 0.0 for name in runtime_tensors(env)}
     nonfinite = {name: 0 for name in runtime_tensors(env)}
+    max_foot_velocity_cache_error = 0.0
+    max_foot_position_cache_error = 0.0
     for step in range(steps):
         if step < 20:
             env.commands.zero_()
@@ -405,6 +435,20 @@ def probe_rollout(env, checks, steps, stage_index):
             env.commands.zero_()
         actions = probe if step % 2 == 0 else -probe
         env.step(actions)
+        live_foot_positions = torch.index_select(
+            env.rigid_body_state[:, :, 0:3], 1, env.feet_indices
+        )
+        live_foot_velocities = torch.index_select(
+            env.rigid_body_state[:, :, 7:10], 1, env.feet_indices
+        )
+        max_foot_position_cache_error = max(
+            max_foot_position_cache_error,
+            scalar_max_abs(env.foot_positions - live_foot_positions),
+        )
+        max_foot_velocity_cache_error = max(
+            max_foot_velocity_cache_error,
+            scalar_max_abs(env.foot_velocities - live_foot_velocities),
+        )
         non_timeout = env.reset_buf.bool() & ~env.time_out_buf.bool()
         if step < env.max_episode_length:
             count = int(non_timeout.sum().item())
@@ -441,6 +485,12 @@ def probe_rollout(env, checks, steps, stage_index):
     for name, count in nonfinite.items():
         checks.require(f"finite/rollout/{name}", count == 0, nonfinite=count)
     checks.require(
+        "runtime/foot_kinematics_refreshed_each_tick",
+        max_foot_position_cache_error == 0.0 and max_foot_velocity_cache_error == 0.0,
+        position_max_error=max_foot_position_cache_error,
+        velocity_max_error=max_foot_velocity_cache_error,
+    )
+    checks.require(
         "runtime/no_early_reset",
         early_resets == 0,
         count=early_resets,
@@ -452,6 +502,8 @@ def probe_rollout(env, checks, steps, stage_index):
         "early_resets": early_resets,
         "reset_causes": reset_causes,
         "first_early_reset": first_early_reset,
+        "foot_position_cache_max_error": max_foot_position_cache_error,
+        "foot_velocity_cache_max_error": max_foot_velocity_cache_error,
     }
 
 

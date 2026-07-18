@@ -542,7 +542,12 @@ class ManipLoco_rewards:
     def _reward_tracking_contacts_shaped_vel(self):
         if not self.env.cfg.env.observe_gait_commands:
             return 0,0
-        foot_velocities = torch.norm(self.env.foot_velocities, dim=2).view(self.env.num_envs, -1)
+        # Read the freshly refreshed simulator tensor directly. The foot cache
+        # is advanced-indexed and therefore cannot be treated as a persistent
+        # view into rigid_body_state.
+        foot_velocities = torch.norm(
+            self.env.rigid_body_state[:, self.env.feet_indices, 7:10], dim=2
+        )
         desired_contact = self.env.desired_contact_states
         reward = 0
         for i in range(4):

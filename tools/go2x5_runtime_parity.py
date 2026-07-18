@@ -393,7 +393,7 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         kp, kd, limits = env.p_gains[:12], env.d_gains[:12], env.torque_limits[:12]
         arm_lower = env.dof_pos_limits[-(6 + env.cfg.env.num_gripper_joints):-env.cfg.env.num_gripper_joints, 0]
         arm_upper = env.dof_pos_limits[-(6 + env.cfg.env.num_gripper_joints):-env.cfg.env.num_gripper_joints, 1]
-        robot_start_z = float(getattr(env.cfg.init_state, "pos", [0, 0, 0.33])[2])
+        robot_start_z = float(getattr(env.cfg.init_state, "pos", [0, 0, 0.32])[2])
     else:
         from isaacgym.torch_utils import quat_apply
 

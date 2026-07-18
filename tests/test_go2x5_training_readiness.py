@@ -13,6 +13,7 @@ TASK_REGISTRY = ROOT / "low-level/legged_gym/utils/task_registry.py"
 TRAIN = ROOT / "low-level/legged_gym/scripts/train.py"
 AUDIT = ROOT / "low-level/legged_gym/scripts/audit_go2x5_low_level_rewards.py"
 CHECKPOINT_ROLLOUT = ROOT / "low-level/legged_gym/scripts/check_go2x5_checkpoint_rollout.py"
+FIXED_COMMAND_GAIT = ROOT / "low-level/legged_gym/scripts/check_go2x5_fixed_command_gait.py"
 READINESS = ROOT / "low-level/legged_gym/scripts/check_go2x5_training_readiness.py"
 
 
@@ -31,7 +32,7 @@ def test_reward_audit_is_complete_and_fail_closed():
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MISMATCH" not in result.stdout
     assert "No metadata yet" not in result.stdout
-    assert "tracking_contacts_shaped_force` | 0.5 | + | OK" in result.stdout
+    assert "tracking_contacts_shaped_force` | 1.0 | + | OK" in result.stdout
     assert "tracking_contacts_shaped_vel` | 0.5 | + | OK" in result.stdout
 
 
@@ -43,10 +44,12 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "feet_air_time_target = 0.25" in config
     assert "feet_aritime_allfeet = True" in config
     assert "feet_height_allfeet = True" in config
-    assert '"tracking_contacts_shaped_force_scale": 0.5' in config
+    assert '"tracking_contacts_shaped_force_scale": 1.0' in config
     assert '"tracking_contacts_shaped_vel_scale": 0.5' in config
+    assert '"walking_dof_scale": 0.0' in config
+    assert '"feet_height_scale": 1.0' in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v3_flat_step_metrics"' in config
+    assert 'profile_name = "go2x5_stable_reach_curriculum_v4_live_foot_gait_h032"' in config
 
 
 def test_reward_implementations_cover_stop_mask_height_and_jerk_state():
@@ -57,6 +60,19 @@ def test_reward_implementations_cover_stop_mask_height_and_jerk_state():
     assert "clearance_error = torch.clamp(" in rewards
     assert "swing_weight * clearance_error" in rewards
     assert 'getattr(self.env.cfg.rewards, "feet_air_time_target", 0.5)' in rewards
+
+
+def test_foot_kinematics_are_refreshed_from_live_rigid_body_state():
+    env = read(ENV)
+    assert "def _refresh_foot_kinematics(self):" in env
+    assert "torch.index_select(" in env
+    assert "self.rigid_body_state[:, :, 7:10], 1, self.feet_indices" in env
+    rewards = read(REWARDS)
+    assert "self.env.rigid_body_state[:, self.env.feet_indices, 7:10]" in rewards
+    assert "torch.norm(self.env.foot_velocities" not in rewards
+    post_step = env[env.index("def post_physics_step(self):"):env.index("def check_termination(self):")]
+    assert "self.gym.refresh_rigid_body_state_tensor(self.sim)" in post_step
+    assert "self._refresh_foot_kinematics()" in post_step
 
 
 def test_reset_and_height_sampling_clear_cross_episode_state():
@@ -131,6 +147,24 @@ def test_checkpoint_rollout_fails_closed_on_early_resets():
     rollout = read(CHECKPOINT_ROLLOUT)
     assert '"--max-early-resets"' in rollout
     assert 'report["early_resets"] <= report["max_early_resets"]' in rollout
+
+
+def test_fixed_command_gait_gate_detects_no_step_policies():
+    gait = read(FIXED_COMMAND_GAIT)
+    for option in (
+        '"--min-translation-progress-ratio"',
+        '"--min-yaw-progress-ratio"',
+        '"--max-swing-contact-fraction"',
+        '"--min-swing-height"',
+        '"--max-stand-vx-error"',
+        '"--max-stand-yaw-error"',
+    ):
+        assert option in gait
+    assert "vx_abs_error_mean <= cli.max_stand_vx_error" in gait
+    assert "yaw_abs_error_mean <= cli.max_stand_yaw_error" in gait
+    assert "foot_cache_max_error <= 1.0e-7" in gait
+    assert '"behavior_passed": behavior_passed' in gait
+    assert 'return 0 if report["passed"] else 1' in gait
 
 
 def test_training_readiness_separates_s0_gate_from_later_stage_stress():
