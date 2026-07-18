@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-19",
+  "task": "go2x5_lowlevel_v5_reward_training_readiness",
+  "verdict": "GO_FOR_V5_FROM_SCRATCH_ONLY",
+  "root_cause": {
+    "summary": "A fixed three-foot stability gate invalidated the intended two-foot diagonal trot and gated both stability and end-effector tracking reward, making all-four-foot shuffling locally preferable.",
+    "standing_min_contacts": 3,
+    "walking_min_contacts_before": 3,
+    "walking_min_contacts_after": 2
+  },
+  "training_release": {
+    "code_ready_for_long_training": true,
+    "required_initial_stage": "S0_safe_small_reach",
+    "required_initialization": "random",
+    "resume_v3_or_v4_checkpoint": false,
+    "trained_v5_checkpoint_available": false,
+    "deployment_ready": false
+  },
+  "fixes": {
+    "curriculum_profile": "go2x5_stable_reach_curriculum_v5_gait_aware_h032",
+    "gait_aware_support_safety": true,
+    "forward_only_gait_initiation_stage": true,
+    "bidirectional_locomotion_stage": true,
+    "vertical_velocity_reward_uses_only_base_z_velocity": true,
+    "reward_wrapper_dispatch_fixed": true,
+    "all_reward_outputs_are_per_environment_tensors": true,
+    "zero_gripper_arm_energy_slice_fixed": true,
+    "terrain_relative_height_terms": true,
+    "base_height_target_m": 0.32
+  },
+  "validation": {
+    "static_and_cpu": {
+      "reward_implementations_reviewed": 74,
+      "reward_implementations_total": 74,
+      "reward_audit_mismatch_count": 0,
+      "reward_semantics_tests": "passed",
+      "training_readiness_tests": "passed",
+      "alignment_tests": "passed",
+      "runtime_parity_tests": "passed",
+      "python_compile": "passed",
+      "diff_check": "passed"
+    },
+    "gpu_readiness": {
+      "S0": {
+        "policy_ticks": 200,
+        "early_resets": 0,
+        "nonfinite_count": 0,
+        "all_74_reward_shapes_valid": true,
+        "passed": true
+      },
+      "S3": {
+        "policy_ticks": 200,
+        "early_resets": 0,
+        "nonfinite_count": 0,
+        "passed": true
+      },
+      "S4": {
+        "policy_ticks": 200,
+        "early_resets": 0,
+        "nonfinite_count": 0,
+        "passed": true
+      },
+      "support_oracle": {
+        "standing_two_contacts": 0.0,
+        "standing_three_contacts": 1.0,
+        "walking_correct_diagonal_stability": 1.0,
+        "walking_all_four_stability": 1.0,
+        "walking_correct_diagonal_weighted_score": 1.8,
+        "walking_all_four_weighted_score": 1.3,
+        "passed": true
+      }
+    },
+    "ppo_smoke": {
+      "num_envs": 512,
+      "iterations": 200,
+      "transitions": 2457600,
+      "final_mean_reward": 32.91,
+      "final_mean_episode_length": 502.0,
+      "final_reset_contact": 0.0,
+      "final_reset_roll": 0.0,
+      "final_reset_pitch": 0.0,
+      "final_reset_z": 0.0,
+      "checkpoint_parameter_nonfinite_count": 0,
+      "passed": true
+    },
+    "checkpoint": {
+      "iteration": 200,
+      "schema_version": 2,
+      "action_dimension": 12,
+      "num_arm_actions": 0,
+      "curriculum_stage": 0,
+      "curriculum_profile": "go2x5_stable_reach_curriculum_v5_gait_aware_h032",
+      "control_contract_hash_valid": true,
+      "production_runner_load": "passed",
+      "committed_to_git": false
+    },
+    "checkpoint_safety_rollout": {
+      "num_envs": 32,
+      "cases": [
+        "stand",
+        "forward",
+        "backward",
+        "turn_left"
+      ],
+      "warmup_ticks_per_case": 20,
+      "measure_ticks_per_case": 100,
+      "early_resets": 0,
+      "nonfinite_count": 0,
+      "foot_velocity_cache_max_error": 0.0,
+      "safety_passed": true,
+      "locomotion_behavior_passed": false,
+      "behavior_interpretation": "Expected for an S0-only 200-iteration smoke checkpoint; it is not a trained locomotion model."
+    }
+  },
+  "required_follow_up": {
+    "long_run_experiment_id": "go2x5_v5_gaitaware_h032_seed1",
+    "s3_gate": "Run the fail-closed fixed-command gait evaluator after S3 has matured.",
+    "not_proven": [
+      "a converged v5 locomotion policy",
+      "1-second final closed-loop parity",
+      "10-second final closed-loop parity",
+      "deployment readiness",
+      "high-level teacher readiness"
+    ]
+  }
+}

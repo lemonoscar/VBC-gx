@@ -250,7 +250,12 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         feet_air_time_target = 0.25  # 2 Hz gait with a 50% swing phase.
         foot_lateral_min = 0.06
         min_stance_feet = 3.0
-        safety_min_feet_contacts = 3.0
+        # Standing needs a broad support polygon, while the commanded trot is
+        # intentionally a two-foot diagonal gait. A single fixed value of 3
+        # made the correct walking contact state lose both stability and EE
+        # tracking reward.
+        safety_min_feet_contacts_standing = 3.0
+        safety_min_feet_contacts_walking = 2.0
         safety_roll_soft = 0.25
         safety_roll_hard = 0.55
         safety_pitch_soft = 0.25
@@ -401,9 +406,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class auto_curriculum:
         enabled = True
-        # v4 invalidates checkpoints trained with stale foot velocity copies,
-        # the S3 default-pose exploit, and the old 0.33 m body-height contract.
-        profile_name = "go2x5_stable_reach_curriculum_v4_live_foot_gait_h032"
+        # v5 invalidates checkpoints whose fixed three-foot safety gate
+        # rewarded all-four-foot shuffling over the intended diagonal trot.
+        profile_name = "go2x5_stable_reach_curriculum_v5_gait_aware_h032"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -502,8 +507,45 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
                 },
             },
             {
-                "name": "S3_small_locomotion_reach",
+                "name": "S3_forward_gait_initiation",
                 "min_iterations": 11000,
+                "action_scale": robot_spec.LOW_ACTION_SCALE,
+                "lin_vel_x_range": [0.08, 0.16],
+                "ang_vel_yaw_range": [0.0, 0.0],
+                "goal_pos_x": [0.18, 0.35],
+                "goal_pos_y_cart": [-0.10, 0.10],
+                "goal_pos_z": [0.05, 0.25],
+                "traj_time": [2.0, 4.0],
+                "hold_time": [1.0, 2.5],
+                "collision_scale": -12.0,
+                "orientation_scale": -3.0,
+                "foot_lateral_spacing_scale": -1.5,
+                "feet_contact_standing_scale": -1.0,
+                "hind_feet_contact_standing_scale": -1.5,
+                "foot_support_standing_scale": -1.0,
+                "dof_error_deadzone_scale": -0.1,
+                "leg_action_l2_deadzone_scale": -0.01,
+                "stability_safety_scale": 1.0,
+                "ee_tracking_stable_weight": 0.2,
+                "tracking_lin_vel_max_scale": 2.0,
+                "tracking_ang_vel_scale": 0.0,
+                "tracking_contacts_shaped_force_scale": 1.0,
+                "tracking_contacts_shaped_vel_scale": 0.5,
+                "walking_dof_scale": 0.0,
+                "feet_air_time_scale": 0.5,
+                "feet_height_scale": 1.0,
+                "advance": {
+                    "Train/mean_episode_length": [">", 450.0],
+                    "Episode/reset_roll": ["<", 0.05],
+                    "Episode/reset_z": ["<", 0.02],
+                    "Episode_metric/metric_tracking_lin_vel_max": [">", 0.45],
+                    "Episode_metric/metric_tracking_contacts_shaped_force": [">", -0.40],
+                    "Episode_metric/metric_feet_height": ["<", 0.08],
+                },
+            },
+            {
+                "name": "S4_bidirectional_locomotion_reach",
+                "min_iterations": 15000,
                 "action_scale": robot_spec.LOW_ACTION_SCALE,
                 "lin_vel_x_range": [-0.2, 0.2],
                 "ang_vel_yaw_range": [-0.3, 0.3],
@@ -522,18 +564,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
                 "leg_action_l2_deadzone_scale": -0.03,
                 "stability_safety_scale": 1.0,
                 "ee_tracking_stable_weight": 0.8,
-                "tracking_lin_vel_max_scale": 1.0,
-                "tracking_ang_vel_scale": 0.25,
-                # The raw shaped-contact rewards are zero at the target and
-                # negative on error, so their coefficients must be positive.
-                # In the observed v3 no-step state, the roughly -0.47 raw
-                # contact error must cancel its roughly +0.46 velocity score;
-                # clearance and drag then make that behavior net-negative.
+                "tracking_lin_vel_max_scale": 2.0,
+                "tracking_ang_vel_scale": 0.5,
                 "tracking_contacts_shaped_force_scale": 1.0,
                 "tracking_contacts_shaped_vel_scale": 0.5,
-                # Rewarding the default pose while walking produced +44/s in
-                # the v3 run and suppressed the gait amplitude. Keep the term
-                # for B1 compatibility, but disable it for Go2-X5 S3.
                 "walking_dof_scale": 0.0,
                 "feet_air_time_scale": 0.5,
                 "feet_height_scale": 1.0,
@@ -547,7 +581,10 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        init_std = [[0.08, 0.10, 0.10] * 4]
+        # S0 remains safe because its action scales are small, while the wider
+        # distribution preserves enough exploration to discover coordinated
+        # swing after the stand/reach stages.
+        init_std = [[0.15, 0.20, 0.20] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'
@@ -578,7 +615,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         lam = 0.95
         desired_kl = None
         max_grad_norm = 1.
-        min_policy_std = [[0.04, 0.05, 0.05] * 4]
+        min_policy_std = [[0.08, 0.12, 0.12] * 4]
 
         mixing_schedule = [1.0, 0, 3000]
         torque_supervision = Go2X5RoughCfg.control.torque_supervision

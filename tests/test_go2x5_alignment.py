@@ -223,12 +223,15 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v4_live_foot_gait_h032"' in go2x5_config
+    assert 'profile_name = "go2x5_stable_reach_curriculum_v5_gait_aware_h032"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert '"name": "S0_safe_small_reach"' in go2x5_config
     assert '"name": "S1_mid_reach_compensation"' in go2x5_config
     assert '"name": "S2_full_reach_compensation"' in go2x5_config
-    assert '"name": "S3_small_locomotion_reach"' in go2x5_config
+    assert '"name": "S3_forward_gait_initiation"' in go2x5_config
+    assert '"name": "S4_bidirectional_locomotion_reach"' in go2x5_config
+    assert "safety_min_feet_contacts_standing = 3.0" in go2x5_config
+    assert "safety_min_feet_contacts_walking = 2.0" in go2x5_config
     assert "feet_height_target = 0.12" in go2x5_config
     assert "lin_vel_x = [0.0, 0.0]" in go2x5_config
     assert "ang_vel_yaw = [0.0, 0.0]" in go2x5_config
@@ -309,8 +312,8 @@ def test_go2x5_stability_design_matches_current_training_plan():
     assert "leg_action_l2_deadzone = -0.1" in go2x5_config
     assert "action_scale = [0.10, 0.16, 0.16] * 4" in go2x5_config
     assert '"action_scale": robot_spec.LOW_ACTION_SCALE' in go2x5_config
-    assert "init_std = [[0.08, 0.10, 0.10] * 4]" in go2x5_config
-    assert "min_policy_std = [[0.04, 0.05, 0.05] * 4]" in go2x5_config
+    assert "init_std = [[0.15, 0.20, 0.20] * 4]" in go2x5_config
+    assert "min_policy_std = [[0.08, 0.12, 0.12] * 4]" in go2x5_config
 
 
 def test_go2x5_runtime_contract_is_deterministic_and_name_based():

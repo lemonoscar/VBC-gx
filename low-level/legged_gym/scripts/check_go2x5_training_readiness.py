@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument(
         "--rollout-stage",
         type=int,
-        choices=range(4),
+        choices=range(5),
         default=0,
         help="Curriculum stage used by the rollout gate (default: S0 training entry).",
     )
@@ -127,7 +127,12 @@ def require_finite(checks, name, tensor):
 
 def probe_rewards(env, checks):
     reward = env.reward_container
-    env.set_training_stage(3, env.curriculum_stages[3], iteration=11000)
+    final_stage = len(env.curriculum_stages) - 1
+    env.set_training_stage(
+        final_stage,
+        env.curriculum_stages[final_stage],
+        iteration=env.curriculum_stages[final_stage]["min_iterations"],
+    )
     checks.require(
         "contract/base_height_0p32",
         abs(float(env.cfg.init_state.pos[2]) - 0.32) <= 1e-9
@@ -136,15 +141,19 @@ def probe_rewards(env, checks):
         target=float(env.cfg.rewards.base_height_target),
     )
     checks.require(
-        "reward/s3_gait_weights",
+        "reward/final_gait_weights",
         "walking_dof" not in env.reward_scales
         and abs(float(env.reward_scales["tracking_contacts_shaped_force"]) - 1.0) <= 1e-9
         and abs(float(env.reward_scales["tracking_contacts_shaped_vel"]) - 0.5) <= 1e-9
-        and abs(float(env.reward_scales["feet_height"]) - 1.0) <= 1e-9,
+        and abs(float(env.reward_scales["feet_height"]) - 1.0) <= 1e-9
+        and abs(float(env.reward_scales["tracking_lin_vel_max"]) - 2.0) <= 1e-9
+        and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9,
         walking_dof=float(env.reward_scales.get("walking_dof", 0.0)),
         shaped_force=float(env.reward_scales["tracking_contacts_shaped_force"]),
         shaped_vel=float(env.reward_scales["tracking_contacts_shaped_vel"]),
         feet_height=float(env.reward_scales["feet_height"]),
+        tracking_lin_vel=float(env.reward_scales["tracking_lin_vel_max"]),
+        tracking_ang_vel=float(env.reward_scales["tracking_ang_vel"]),
     )
 
     env.commands.zero_()
@@ -251,6 +260,90 @@ def probe_rewards(env, checks):
         exact=float(ee_exact.mean().item()),
         offset=float(ee_offset.mean().item()),
     )
+
+    env.base_quat[:] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device)
+    env.root_states[:, 2] = env.cfg.rewards.base_height_target
+    env.curr_ee_goal_cart_world[:] = env.ee_pos
+    env.commands.zero_()
+    env.foot_contacts_from_sensor.zero_()
+    env.foot_contacts_from_sensor[:, :2] = True
+    standing_two = reward._stability_safety()
+    env.foot_contacts_from_sensor[:, 2] = True
+    standing_three = reward._stability_safety()
+    checks.require(
+        "reward/standing_requires_three_contacts",
+        bool(torch.all(standing_two == 0.0) and torch.all(standing_three > 0.0)),
+        two=float(standing_two.mean().item()),
+        three=float(standing_three.mean().item()),
+    )
+
+    env.commands[:, 0] = 0.10
+    env.desired_contact_states[:] = torch.tensor(
+        [0.0, 1.0, 1.0, 0.0], device=env.device
+    )
+    env.foot_contacts_from_sensor[:] = torch.tensor(
+        [False, True, True, False], device=env.device
+    )
+    env.contact_forces[:, env.feet_indices, :] = 0.0
+    env.contact_forces[:, env.feet_indices[1:3], 2] = 100.0
+    two_stability = reward._stability_safety()
+    two_ee, _ = reward._reward_tracking_ee_world_stable()
+    two_force, _ = reward._reward_tracking_contacts_shaped_force()
+
+    env.foot_contacts_from_sensor.fill_(True)
+    env.contact_forces[:, env.feet_indices, 2] = 100.0
+    four_stability = reward._stability_safety()
+    four_ee, _ = reward._reward_tracking_ee_world_stable()
+    four_force, _ = reward._reward_tracking_contacts_shaped_force()
+    leg_stability_scale = env.reward_scales["stability_safety"]
+    force_scale = env.reward_scales["tracking_contacts_shaped_force"]
+    ee_scale = env.arm_reward_scales["tracking_ee_world_stable"]
+    two_total = two_stability * leg_stability_scale + two_force * force_scale + two_ee * ee_scale
+    four_total = four_stability * leg_stability_scale + four_force * force_scale + four_ee * ee_scale
+    checks.require(
+        "reward/two_contact_trot_keeps_safety_and_beats_four_contact_shuffle",
+        bool(
+            torch.allclose(two_stability, four_stability, atol=1.0e-7, rtol=0.0)
+            and torch.allclose(two_ee, four_ee, atol=1.0e-7, rtol=0.0)
+            and torch.all(two_force > four_force)
+            and torch.all(two_total > four_total)
+        ),
+        two_stability=float(two_stability.mean().item()),
+        four_stability=float(four_stability.mean().item()),
+        two_force=float(two_force.mean().item()),
+        four_force=float(four_force.mean().item()),
+        two_weighted=float(two_total.mean().item()),
+        four_weighted=float(four_total.mean().item()),
+    )
+
+
+def probe_all_reward_functions(env, checks):
+    env.reset()
+    final_stage = len(env.curriculum_stages) - 1
+    env.set_training_stage(
+        final_stage,
+        env.curriculum_stages[final_stage],
+        iteration=env.curriculum_stages[final_stage]["min_iterations"],
+    )
+    env.commands.zero_()
+    env.commands[:, 0] = 0.10
+    for name in sorted(dir(env.reward_container)):
+        if not name.startswith("_reward_"):
+            continue
+        result = getattr(env.reward_container, name)()
+        checks.require(
+            f"reward_contract/{name}/tuple",
+            isinstance(result, tuple) and len(result) == 2,
+            result_type=type(result).__name__,
+        )
+        for channel, tensor in zip(("raw", "metric"), result):
+            checks.require(
+                f"reward_contract/{name}/{channel}_tensor",
+                torch.is_tensor(tensor) and tensor.shape == (env.num_envs,),
+                value_type=type(tensor).__name__,
+                shape=list(tensor.shape) if torch.is_tensor(tensor) else None,
+            )
+            require_finite(checks, f"reward_contract/{name}/{channel}", tensor)
 
 
 def probe_ik(env, checks):
@@ -378,6 +471,37 @@ def probe_curriculum(env, checks):
     checks.require(
         "curriculum/advances_with_physical_unit_metrics",
         env.curriculum_stage_index == 1,
+        stage=int(env.curriculum_stage_index),
+    )
+
+    env.set_training_stage(3, env.curriculum_stages[3], iteration=7000)
+    shuffle_metrics = {
+        "Train/mean_episode_length": 500.0,
+        "Episode/reset_roll": 0.0,
+        "Episode/reset_z": 0.0,
+        "Episode_metric/metric_tracking_lin_vel_max": 0.34,
+        "Episode_metric/metric_tracking_contacts_shaped_force": -0.47,
+        "Episode_metric/metric_feet_height": 0.092,
+    }
+    env.update_auto_curriculum(11000, shuffle_metrics)
+    checks.require(
+        "curriculum/rejects_four_contact_shuffle",
+        env.curriculum_stage_index == 3,
+        stage=int(env.curriculum_stage_index),
+    )
+    stepping_metrics = {
+        "Train/mean_episode_length": 500.0,
+        "Episode/reset_roll": 0.0,
+        "Episode/reset_z": 0.0,
+        "Episode_metric/metric_tracking_lin_vel_max": 0.60,
+        "Episode_metric/metric_tracking_contacts_shaped_force": -0.20,
+        "Episode_metric/metric_feet_height": 0.05,
+    }
+    env.set_training_stage(3, env.curriculum_stages[3], iteration=7000)
+    env.update_auto_curriculum(11000, stepping_metrics)
+    checks.require(
+        "curriculum/advances_only_after_gait_gate",
+        env.curriculum_stage_index == 4,
         stage=int(env.curriculum_stage_index),
     )
 
@@ -528,6 +652,7 @@ def run(cli):
     }
     try:
         probe_rewards(env, checks)
+        probe_all_reward_functions(env, checks)
         probe_ik(env, checks)
         probe_reset(env, checks)
         probe_training_metadata(env, checks)

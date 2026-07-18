@@ -19,7 +19,15 @@ class ManipLoco_rewards:
         rew = torch.exp(-ee_pos_error/self.env.cfg.rewards.tracking_ee_sigma * 2)
         return rew, ee_pos_error
 
-    def _stability_safety(self):
+    def _terrain_height(self):
+        measured_heights = getattr(self.env, "measured_heights", None)
+        if torch.is_tensor(measured_heights) and measured_heights.ndim == 2:
+            return torch.mean(measured_heights, dim=1)
+        if hasattr(self.env, "env_origins"):
+            return self.env.env_origins[:, 2]
+        return torch.zeros_like(self.env.root_states[:, 2])
+
+    def _body_stability_safety(self):
         body_rpy = self.env._get_body_orientation()
         roll_abs = torch.abs(body_rpy[:, 0])
         pitch_abs = torch.abs(body_rpy[:, 1])
@@ -46,12 +54,26 @@ class ManipLoco_rewards:
             max=1.0,
         )
 
-        foot_contacts = self.env.foot_contacts_from_sensor.float()
-        contact_count = torch.sum(foot_contacts, dim=1)
-        min_feet = getattr(self.env.cfg.rewards, "safety_min_feet_contacts", 3.0)
-        foot_safety = torch.clamp((contact_count - (min_feet - 1.0)) / 1.0, min=0.0, max=1.0)
+        return roll_safety * pitch_safety * height_safety
 
-        return roll_safety * pitch_safety * height_safety * foot_safety
+    def _support_safety(self):
+        contact_count = torch.sum(self.env.foot_contacts_from_sensor.float(), dim=1)
+        standing_min = getattr(
+            self.env.cfg.rewards,
+            "safety_min_feet_contacts_standing",
+            getattr(self.env.cfg.rewards, "safety_min_feet_contacts", 3.0),
+        )
+        walking_min = getattr(
+            self.env.cfg.rewards,
+            "safety_min_feet_contacts_walking",
+            2.0,
+        )
+        min_feet = torch.full_like(contact_count, float(standing_min))
+        min_feet[self.env._get_walking_cmd_mask()] = float(walking_min)
+        return torch.clamp(contact_count - (min_feet - 1.0), min=0.0, max=1.0)
+
+    def _stability_safety(self):
+        return self._body_stability_safety() * self._support_safety()
 
     def _reward_tracking_ee_world_stable(self):
         reward, metric = self._reward_tracking_ee_world()
@@ -62,14 +84,14 @@ class ManipLoco_rewards:
         return safety, safety
 
     def _reward_tracking_ee_sphere_walking(self):
-        reward, metric = self.env._reward_tracking_ee_sphere()
+        reward, metric = self._reward_tracking_ee_sphere()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[~walking_mask] = 0
         metric[~walking_mask] = 0
         return reward, metric
 
     def _reward_tracking_ee_sphere_standing(self):
-        reward, metric = self.env._reward_tracking_ee_sphere()
+        reward, metric = self._reward_tracking_ee_sphere()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[walking_mask] = 0
         metric[walking_mask] = 0
@@ -86,7 +108,12 @@ class ManipLoco_rewards:
         return torch.exp(-orn_err/self.env.cfg.rewards.tracking_ee_sigma), orn_err
 
     def _reward_arm_energy_abs_sum(self):
-        energy = torch.sum(torch.abs(self.env.torques[:, 12:-self.env.cfg.env.num_gripper_joints] * self.env.dof_vel[:, 12:-self.env.cfg.env.num_gripper_joints]), dim = 1)
+        num_gripper = self.env.cfg.env.num_gripper_joints
+        arm_end = -num_gripper if num_gripper > 0 else None
+        energy = torch.sum(
+            torch.abs(self.env.torques[:, 12:arm_end] * self.env.dof_vel[:, 12:arm_end]),
+            dim=1,
+        )
         return energy, energy
 
     def _reward_tracking_ee_orn_ry(self):
@@ -153,7 +180,7 @@ class ManipLoco_rewards:
         return squared_error, squared_error
 
     def _reward_tracking_lin_vel_z_l2(self):
-        squared_error = (self.env.commands[:, 2] - self.env.base_lin_vel[:, 2]) ** 2
+        squared_error = self.env.base_lin_vel[:, 2] ** 2
         return squared_error, squared_error
 
     def _reward_survive(self):
@@ -166,7 +193,8 @@ class ManipLoco_rewards:
 
     def _reward_torques(self):
         # Penalize torques
-        torque = torch.sum(torch.square(self.env.torques), dim=1)
+        num_torques = getattr(self.env, "num_torques", self.env.torques.shape[1])
+        torque = torch.sum(torch.square(self.env.torques[:, :num_torques]), dim=1)
         return torque, torque
 
     def _reward_energy_square(self):
@@ -268,7 +296,8 @@ class ManipLoco_rewards:
         return result, result
 
     def _reward_alive(self):
-        return 1., 1.
+        alive = torch.ones(self.env.num_envs, device=self.env.device)
+        return alive, alive
 
     def _reward_feet_drag(self):
         feet_xyz_vel = torch.abs(self.env.rigid_body_state[:, self.env.feet_indices, 7:10]).sum(dim=-1)
@@ -318,7 +347,7 @@ class ManipLoco_rewards:
         fr_calf_bend = torch.clamp(default[:, 5] - dof_pos[:, 5], min=0.0)
         bend = 0.25 * (fl_thigh_bend + fr_thigh_bend + fl_calf_bend + fr_calf_bend)
 
-        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2] - self._terrain_height()
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
 
@@ -344,7 +373,7 @@ class ManipLoco_rewards:
         )
         asymmetry = torch.clamp(front_bend - rear_bend, min=0.0)
 
-        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2] - self._terrain_height()
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
 
@@ -362,7 +391,7 @@ class ManipLoco_rewards:
         rr_calf_ext = torch.clamp(dof_pos[:, 11] - default[:, 11], min=0.0)
         extension = 0.25 * (rl_thigh_ext + rr_thigh_ext + rl_calf_ext + rr_calf_ext)
 
-        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2] - self._terrain_height()
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
 
@@ -378,7 +407,7 @@ class ManipLoco_rewards:
         target_ratio = getattr(self.env.cfg.rewards, 'low_goal_hind_force_ratio_target', 0.30)
         rew = torch.clamp(hind_ratio / target_ratio, max=1.0)
 
-        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2] - self._terrain_height()
         low_goal_h = getattr(self.env.cfg.rewards, 'low_goal_height_thresh', 0.22)
         low_goal_mask = ee_goal_z < low_goal_h
 
@@ -397,11 +426,7 @@ class ManipLoco_rewards:
         return error, error
 
     def _base_height_relative_to_terrain(self):
-        base_height = self.env.root_states[:, 2]
-        measured_heights = getattr(self.env, "measured_heights", None)
-        if torch.is_tensor(measured_heights) and measured_heights.ndim == 2:
-            base_height = base_height - torch.mean(measured_heights, dim=1)
-        return base_height
+        return self.env.root_states[:, 2] - self._terrain_height()
 
     def _reward_base_height(self):
         # Penalize deviation from target body height relative to terrain, not absolute world z.
@@ -414,7 +439,7 @@ class ManipLoco_rewards:
         When EE target z is low (~0.1m), body should crouch (~0.15m).
         When EE target z is high (~0.45m), body stays near the configured natural height.
         """
-        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2]
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2] - self._terrain_height()
         base_height = self._base_height_relative_to_terrain()
 
         sphere_center_z = self.env.cfg.goal_ee.sphere_center.z_invariant_offset  # 0.45
@@ -454,42 +479,42 @@ class ManipLoco_rewards:
         return reward, metric
 
     def _reward_torques_walking(self):
-        reward, metric = self.env._reward_torques()
+        reward, metric = self._reward_torques()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[~walking_mask] = 0
         metric[~walking_mask] = 0
         return reward, metric
 
     def _reward_torques_standing(self):
-        reward, metric = self.env._reward_torques()
+        reward, metric = self._reward_torques()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[walking_mask] = 0
         metric[walking_mask] = 0
         return reward, metric
 
     def _reward_energy_square_walking(self):
-        reward, metric = self.env._reward_energy_square()
+        reward, metric = self._reward_energy_square()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[~walking_mask] = 0
         metric[~walking_mask] = 0
         return reward, metric
 
     def _reward_energy_square_standing(self):
-        reward, metric = self.env._reward_energy_square()
+        reward, metric = self._reward_energy_square()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[walking_mask] = 0
         metric[walking_mask] = 0
         return reward, metric
 
     def _reward_base_height_walking(self):
-        reward, metric = self.env._reward_base_height()
+        reward, metric = self._reward_base_height()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[~walking_mask] = 0
         metric[~walking_mask] = 0
         return reward, metric
 
     def _reward_base_height_standing(self):
-        reward, metric = self.env._reward_base_height()
+        reward, metric = self._reward_base_height()
         walking_mask = self.env._get_walking_cmd_mask()
         reward[walking_mask] = 0
         metric[walking_mask] = 0
@@ -527,7 +552,8 @@ class ManipLoco_rewards:
     # -------------B1 Gait Control Rewards----------------
     def _reward_tracking_contacts_shaped_force(self):
         if not self.env.cfg.env.observe_gait_commands:
-            return 0,0
+            zero = torch.zeros(self.env.num_envs, device=self.env.device)
+            return zero, zero
         foot_forces = torch.norm(self.env.contact_forces[:, self.env.feet_indices, :], dim=-1)
         desired_contact = self.env.desired_contact_states
 
@@ -541,7 +567,8 @@ class ManipLoco_rewards:
 
     def _reward_tracking_contacts_shaped_vel(self):
         if not self.env.cfg.env.observe_gait_commands:
-            return 0,0
+            zero = torch.zeros(self.env.num_envs, device=self.env.device)
+            return zero, zero
         # Read the freshly refreshed simulator tensor directly. The foot cache
         # is advanced-indexed and therefore cannot be treated as a persistent
         # view into rigid_body_state.
@@ -564,11 +591,7 @@ class ManipLoco_rewards:
             foot_ids = foot_ids[:2]
             desired_contact = desired_contact[:, :2]
 
-        measured_heights = getattr(self.env, "measured_heights", None)
-        if torch.is_tensor(measured_heights) and measured_heights.ndim == 2:
-            terrain_height = torch.mean(measured_heights, dim=1, keepdim=True)
-        else:
-            terrain_height = self.env.env_origins[:, 2:3]
+        terrain_height = self._terrain_height().unsqueeze(1)
 
         foot_height = self.env.rigid_body_state[:, foot_ids, 2] - terrain_height
         swing_weight = 1.0 - desired_contact

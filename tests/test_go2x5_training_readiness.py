@@ -32,6 +32,7 @@ def test_reward_audit_is_complete_and_fail_closed():
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MISMATCH" not in result.stdout
     assert "No metadata yet" not in result.stdout
+    assert "74/74" in result.stdout
     assert "tracking_contacts_shaped_force` | 1.0 | + | OK" in result.stdout
     assert "tracking_contacts_shaped_vel` | 0.5 | + | OK" in result.stdout
 
@@ -49,7 +50,12 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert '"walking_dof_scale": 0.0' in config
     assert '"feet_height_scale": 1.0' in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v4_live_foot_gait_h032"' in config
+    assert 'profile_name = "go2x5_stable_reach_curriculum_v5_gait_aware_h032"' in config
+    assert "safety_min_feet_contacts_standing = 3.0" in config
+    assert "safety_min_feet_contacts_walking = 2.0" in config
+    assert '"name": "S3_forward_gait_initiation"' in config
+    assert '"name": "S4_bidirectional_locomotion_reach"' in config
+    assert '"Episode_metric/metric_tracking_lin_vel_max": [">", 0.45]' in config
 
 
 def test_reward_implementations_cover_stop_mask_height_and_jerk_state():
