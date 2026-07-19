@@ -181,6 +181,12 @@ def test_schema_v2_smoke_checkpoint_metadata_shape_and_purpose():
     assert checkpoint["metadata"]["trained"] is False
 
 
+def test_parity_factory_uses_final_command_contract():
+    factory = (ROOT / "tools/go2x5_parity_factories.py").read_text(encoding="utf-8")
+    assert "env_cfg.commands.ranges.lin_vel_x = [-0.3, 0.3]" in factory
+    assert "env_cfg.commands.ranges.ang_vel_yaw = [-0.4, 0.4]" in factory
+
+
 def test_robot_start_pose_precedence_and_b1_fallback():
     module_path = ROOT / "high-level/envs/runtime_contract.py"
     spec = importlib.util.spec_from_file_location("runtime_contract", module_path)
@@ -253,6 +259,7 @@ if __name__ == "__main__":
     test_case_registry_has_required_cases()
     test_control_contract_hash_is_canonical_and_checkpoint_rejects_18d()
     test_schema_v2_smoke_checkpoint_metadata_shape_and_purpose()
+    test_parity_factory_uses_final_command_contract()
     test_robot_start_pose_precedence_and_b1_fallback()
     with tempfile.TemporaryDirectory() as directory:
         temp_path = pathlib.Path(directory)
