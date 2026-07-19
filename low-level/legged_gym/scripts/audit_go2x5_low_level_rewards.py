@@ -934,7 +934,7 @@ def build_report() -> str:
     contract_failures: list[str] = []
     if env_cfg.get("observe_gait_commands") is not False:
         contract_failures.append("simple locomotion must not prescribe a gait clock")
-    if auto_curriculum_cfg.get("profile_name") != "go2x5_simple_locomotion_reach_v1":
+    if auto_curriculum_cfg.get("profile_name") != "go2x5_simple_locomotion_reach_v2_bounded_action":
         contract_failures.append("curriculum profile must identify the simple two-stage contract")
     if ppo_policy_cfg.get("init_std") != [[0.8, 1.0, 1.0] * 4]:
         contract_failures.append("initial exploration std must preserve locomotion discovery")
@@ -944,6 +944,8 @@ def build_report() -> str:
         contract_failures.append("contact-phase shaping must remain disabled")
     if scales.get("feet_height") != 0.0 or scales.get("walking_dof") != 0.0:
         contract_failures.append("named-gait clearance and posture shaping must remain disabled")
+    if scales.get("leg_action_l2_deadzone") != -0.02:
+        contract_failures.append("large policy actions must retain the bounded-action penalty")
     if arm_scales.get("tracking_ee_world") != 0.4 or arm_scales.get("tracking_ee_world_stable") != 0.0:
         contract_failures.append("raw EE tracking must be active without a support-gated duplicate")
     if len(stages) != 2:

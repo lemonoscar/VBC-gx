@@ -321,7 +321,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             base_height = -1.0
             stability_safety = 0.0
             dof_error_deadzone = 0.0
-            leg_action_l2_deadzone = 0.0
+            # Do not prescribe a gait, but prevent an unbounded actor mean from
+            # buying velocity with saturated PD targets. Actions inside +/-0.2
+            # remain free; the quadratic tail only constrains large offsets.
+            leg_action_l2_deadzone = -0.02
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -407,7 +410,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class auto_curriculum:
         enabled = True
-        profile_name = "go2x5_simple_locomotion_reach_v1"
+        profile_name = "go2x5_simple_locomotion_reach_v2_bounded_action"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True

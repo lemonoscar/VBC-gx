@@ -50,14 +50,16 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "walking_dof = 0.0" in config
     assert "feet_height = 0.0" in config
     assert "feet_air_time = 1.0" in config
+    assert "leg_action_l2_deadzone = -0.02" in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_simple_locomotion_reach_v1"' in config
+    assert 'profile_name = "go2x5_simple_locomotion_reach_v2_bounded_action"' in config
     assert '"name": "S0_locomotion_center_reach"' in config
     assert '"name": "S1_bidirectional_coordinated_reach"' in config
     assert config.count('"name": "S') == 2
     assert "standing_probability = 0.25" in config
     assert "replace_cylinder_with_capsule = False" in config
     assert '"advance": {}' in config
+    assert '"contract/leg_pd_and_action_scale"' in read(READINESS)
 
 
 def test_reward_implementations_cover_stop_mask_height_and_jerk_state():

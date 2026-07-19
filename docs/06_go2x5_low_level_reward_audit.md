@@ -25,7 +25,7 @@ python3 low-level/legged_gym/scripts/audit_go2x5_low_level_rewards.py --output d
 - collision_soft_clip: `50.0`
 - feet_height_target: `0.12`
 - max_contact_force: `200.0`
-- Active leg reward terms: `21`
+- Active leg reward terms: `22`
 - Active arm reward terms: `1`
 - Reward implementations with reviewed metadata: `74/74`
 - PPO policy num_leg_actions: `12`
@@ -87,6 +87,7 @@ Reward aggregation details:
 | `feet_drag` | leg | -0.15 | sum foot xyz velocity for feet detected in contact | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:302` | feet_indices and force_sensor_tensor contact booleans | Sign is correct; requires feet_indices and force_sensor_tensor to describe the same FL,FR,RL,RR order. | Slide one contacting foot in sim; raw should increase only for that foot. |
 | `feet_contact_forces` | leg | -0.001 | sum(max(norm(force_sensor_tensor)-max_contact_force, 0)) after 2 seconds | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:308` | force_sensor_tensor and max_contact_force | Sign is correct; max_contact_force=200 makes it a high-force limiter, not normal contact shaping. | Inspect force histograms; raw should be near zero for nominal stance and positive for impacts. |
 | `base_height` | leg | -1.0 | abs((root_z - mean(measured_heights)) - base_height_target) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:431` | root_states[:,2], measured_heights, base_height_target | Sign is correct for target 0.32; terrain height sampling must be valid under Go2-X5 footprint. | Probe flat base z 0.24/0.32/0.41; weighted reward should be best at 0.32. |
+| `leg_action_l2_deadzone` | leg | -0.02 | sum(square(max(abs(applied_leg_action)-deadzone, 0))) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:142` | 12D applied leg action in URDF order | An overly small dead zone can suppress useful corrective actions during early learning. | Sweep one action around the dead zone; penalty must be zero inside and quadratic outside. |
 | `tracking_ee_world` | arm | 0.4 | exp(-2 * L1(ee_pos - curr_ee_goal_cart_world) / tracking_ee_sigma) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:17` | gripper_idx=arm_eef_link, ee_pos rigid body state, world-frame EE goal | Sign is correct; with num_arm_actions=0 it influences the leg policy through PPO reward mixing, not a separate arm action head. | Set goal exactly at arm_eef_link and then offset x/y/z; raw should be highest at zero offset and decay monotonically. |
 
 ## Curriculum Reward Overrides
@@ -121,7 +122,6 @@ Reward aggregation details:
 | `orientation_standing` | 0.0 | Mask inversion penalizes the wrong mode. | Probe tilted base in stopped and walking modes. |
 | `stability_safety` | 0.0 | Any contact-count gate can favor one support pattern and suppress otherwise valid emergent locomotion. | Keep the term disabled in the simple profile; if restored, test valid walk, trot, and transition contacts independently. |
 | `dof_error_deadzone` | 0.0 | Wrong default angles or leg slicing penalize the intended nominal stance. | Perturb each leg joint within and beyond the dead zone; only excess displacement should contribute. |
-| `leg_action_l2_deadzone` | 0.0 | An overly small dead zone can suppress useful corrective actions during early learning. | Sweep one action around the dead zone; penalty must be zero inside and quadratic outside. |
 | `torques_walking` | 0.0 | Incorrect wrapper dispatch or mask makes it unsafe to enable. | Call directly in both command modes. |
 | `torques_standing` | 0.0 | Incorrect wrapper dispatch or mask makes it unsafe to enable. | Call directly in both command modes. |
 | `energy_square` | 0.0 | Large scale can suppress useful gait motion. | Check zero at zero torque or velocity and quadratic growth otherwise. |

@@ -58,8 +58,8 @@ env:
 
   lowPolicyContract:
     action_scale: [0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25]
-    leg_stiffness: 60.0
-    leg_damping: 1.5
+    leg_stiffness: 40.0
+    leg_damping: 1.0
     arm_position_stiffness: 110.0
     arm_position_damping: 7.5
     gripper_position_stiffness: 110.0
@@ -271,8 +271,8 @@ env:
         scale: 1.0
 
     control:
-      stiffness: {'hip': 60, 'thigh': 60, 'calf': 60, 'arm': 5}
-      damping: {'hip': 1.5, 'thigh': 1.5, 'calf': 1.5, 'arm': 0.5}
+      stiffness: {'hip': 40, 'thigh': 40, 'calf': 40, 'arm': 5}
+      damping: {'hip': 1.0, 'thigh': 1.0, 'calf': 1.0, 'arm': 0.5}
       armPositionDriveStiffness: 110.0
       armPositionDriveDamping: 7.5
       gripperPositionDriveStiffness: 110.0

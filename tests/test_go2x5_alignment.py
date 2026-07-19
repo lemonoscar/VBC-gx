@@ -100,6 +100,8 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["numPhysicalGripperDof"] == spec.NUM_PHYSICAL_GRIPPER_DOFS
     assert env_cfg["gripperOpenAtUpper"] is True
     assert env_cfg["lowActionScale"] == spec.LOW_ACTION_SCALE
+    assert spec.LEG_STIFFNESS == 40.0
+    assert spec.LEG_DAMPING == 1.0
     assert len(env_cfg["lowActionScale"]) == env_cfg["lowPolicyNumActions"]
     assert env_cfg["robotStartPose"][2] == spec.BASE_INIT_HEIGHT
     assert env_cfg["evalRobotStartPose"][2] == spec.BASE_INIT_HEIGHT
@@ -223,7 +225,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_simple_locomotion_reach_v1"' in go2x5_config
+    assert 'profile_name = "go2x5_simple_locomotion_reach_v2_bounded_action"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert go2x5_config.count('"name": "S0_locomotion_center_reach"') == 1
     assert go2x5_config.count('"name": "S1_bidirectional_coordinated_reach"') == 1
@@ -294,6 +296,7 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "feet_air_time = 1.0" in go2x5_config
     assert "walking_dof = 0.0" in go2x5_config
     assert "stability_safety = 0.0" in go2x5_config
+    assert "leg_action_l2_deadzone = -0.02" in go2x5_config
     assert "tracking_ee_world_stable = 0.0" in go2x5_config
 
     assert "base_height = -1.0" in go2x5_config
@@ -312,6 +315,7 @@ def test_go2x5_simple_training_design_matches_current_plan():
 def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     cfg = load_high_level_cfg()
     env_cfg = cfg["env"]
+    asset_cfg = env_cfg["asset"]
     high_level = (ROOT / "high-level/envs/b1z1_base.py").read_text(encoding="utf-8")
     low_level = (ROOT / "low-level/legged_gym/envs/manip_loco/manip_loco.py").read_text(encoding="utf-8")
     go2x5_config = (ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_config.py").read_text(encoding="utf-8")
@@ -342,6 +346,10 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert env_cfg["lowFootContactThreshold"] == contract["foot_contact_threshold"] == 1.5
     assert contract["gripper_position_stiffness"] == 110.0
     assert contract["gripper_position_damping"] == 7.5
+    assert contract["leg_stiffness"] == 40.0
+    assert contract["leg_damping"] == 1.0
+    assert asset_cfg["control"]["stiffness"]["hip"] == 40
+    assert asset_cfg["control"]["damping"]["hip"] == 1.0
 
     assert 'actions = self.action_history_buf[:, -(self.action_delay + 1)]' in low_level
     assert "self._reindex_all(self.actions)[:, :12]" in low_level

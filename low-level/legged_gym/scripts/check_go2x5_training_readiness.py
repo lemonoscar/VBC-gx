@@ -140,6 +140,20 @@ def probe_rewards(env, checks):
         initial=float(env.cfg.init_state.pos[2]),
         target=float(env.cfg.rewards.base_height_target),
     )
+    expected_scale = torch.tensor(
+        [0.125, 0.25, 0.25] * 4, device=env.device, dtype=env.action_scale.dtype
+    )
+    checks.require(
+        "contract/leg_pd_and_action_scale",
+        bool(
+            torch.all(env.p_gains[:12] == 40.0)
+            and torch.all(env.d_gains[:12] == 1.0)
+            and torch.equal(env.action_scale[:12], expected_scale)
+        ),
+        kp=env.p_gains[:12].detach().cpu().tolist(),
+        kd=env.d_gains[:12].detach().cpu().tolist(),
+        action_scale=env.action_scale[:12].detach().cpu().tolist(),
+    )
     checks.require(
         "contract/simple_emergent_locomotion",
         env.cfg.env.num_proprio == 66
@@ -150,6 +164,7 @@ def probe_rewards(env, checks):
         and "tracking_contacts_shaped_vel" not in env.reward_scales
         and "feet_height" not in env.reward_scales
         and "stability_safety" not in env.reward_scales
+        and abs(float(env.reward_scales["leg_action_l2_deadzone"]) + 0.02) <= 1e-9
         and abs(float(env.reward_scales["tracking_lin_vel_max"]) - 2.0) <= 1e-9
         and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9
         and abs(float(env.reward_scales["feet_air_time"]) - 1.0) <= 1e-9
@@ -161,6 +176,7 @@ def probe_rewards(env, checks):
         tracking_lin_vel=float(env.reward_scales["tracking_lin_vel_max"]),
         tracking_ang_vel=float(env.reward_scales["tracking_ang_vel"]),
         feet_air_time=float(env.reward_scales["feet_air_time"]),
+        action_bound=float(env.reward_scales["leg_action_l2_deadzone"]),
         ee_tracking=float(env.arm_reward_scales["tracking_ee_world"]),
     )
 
