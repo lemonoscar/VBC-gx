@@ -139,6 +139,8 @@ def test_resume_id_uses_normal_path_join():
 
 def test_training_checkpoint_metadata_is_fail_closed():
     env = read(ENV)
+    assert 'bool(self.cfg.env.observe_gait_commands)' in env
+    assert '("observe_gait_commands", alignment.get("observe_gait_commands"), True)' not in env
     for message in (
         "training checkpoint has no metadata",
         "metadata mismatch for",

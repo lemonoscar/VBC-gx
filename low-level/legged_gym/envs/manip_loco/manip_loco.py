@@ -403,7 +403,11 @@ class ManipLoco(LeggedRobot):
                 ("num_observations", alignment.get("num_observations"), int(self.cfg.env.num_observations)),
                 ("num_torques", alignment.get("num_torques"), int(self.cfg.env.num_torques)),
                 ("num_gripper_joints", alignment.get("num_gripper_joints"), int(self.cfg.env.num_gripper_joints)),
-                ("observe_gait_commands", alignment.get("observe_gait_commands"), True),
+                (
+                    "observe_gait_commands",
+                    alignment.get("observe_gait_commands"),
+                    bool(self.cfg.env.observe_gait_commands),
+                ),
                 ("reorder_dofs", alignment.get("reorder_dofs"), bool(self.cfg.env.reorder_dofs)),
                 ("policy_leg_joint_order", alignment.get("policy_leg_joint_order"), go2x5_robot_spec.POLICY_LEG_JOINT_NAMES),
                 ("foot_order", alignment.get("foot_order"), go2x5_robot_spec.FOOT_BODY_NAMES),
