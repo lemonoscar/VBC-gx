@@ -63,9 +63,9 @@ AUDIT: dict[str, RewardAudit] = {
         raw_formula="sum((feet_air_time - configured target) on first contact)",
         raw_direction="larger is better",
         expected_scale_sign="+",
-        dependency="force_sensor_tensor order, gait frequency, and swing duration",
-        migration_risk="The target must match the configured gait period; all four feet should contribute to a quadruped gait.",
-        verification="At 2 Hz and 50% swing, verify first contact near 0.25 s is neutral and longer air time is positive.",
+        dependency="force_sensor_tensor order and per-foot contact timing",
+        migration_risk="This generic stepping incentive must cover all four feet without prescribing their phase relationship.",
+        verification="Touch each foot independently; first contact below/above 0.25 s should contribute negative/positive air-time margin.",
     ),
     "feet_height": RewardAudit(
         raw_formula="negative mean per-foot swing-clearance shortfall relative to terrain",
@@ -120,8 +120,8 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="default_dof_pos, walking command mask",
-        migration_risk="It biases walking toward the default crouch and is intentionally disabled in Go2-X5 S3 after the v3 no-step failure.",
-        verification="Keep the S3 scale at zero unless a gait-amplitude ablation proves the term cannot dominate swing rewards.",
+        migration_risk="It biases motion toward the default crouch and can recreate a no-step local optimum.",
+        verification="Keep it disabled unless an explicit ablation proves it does not suppress useful locomotion amplitude.",
     ),
     "alive": RewardAudit(
         raw_formula="constant 1",
@@ -296,8 +296,8 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="base attitude, measured heights, force-sensor contacts, and walking command mask",
-        migration_risk="A fixed three-foot gate contradicts the intended two-foot diagonal trot and rewards all-four-foot shuffling.",
-        verification="Require three contacts when stopped and two while walking; correct two-contact trot and four-contact support must have equal safety.",
+        migration_risk="Any contact-count gate can favor one support pattern and suppress otherwise valid emergent locomotion.",
+        verification="Keep the term disabled in the simple profile; if restored, test valid walk, trot, and transition contacts independently.",
     ),
     "dof_error_deadzone": RewardAudit(
         raw_formula="sum(square(max(abs(leg_q-default_q)-deadzone, 0)))",
@@ -328,8 +328,8 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="arm_eef_link world position, EE world target, attitude, height, and foot contacts",
-        migration_risk="The support gate must protect standing without zeroing EE reward during the intended two-foot trot.",
-        verification="Compare exact EE tracking in stable four-foot stance and stable two-foot walking support; both must retain the same body-safe EE reward.",
+        migration_risk="The support/height multiplier can zero the coordination signal precisely when crouching or stepping is required.",
+        verification="Keep it disabled in the simple profile and use raw world-position EE tracking for body-arm coordination.",
     ),
     "tracking_ee_orn": RewardAudit(
         raw_formula="exp(-Euler L1 orientation error / tracking_ee_sigma)",
@@ -932,34 +932,38 @@ def build_report() -> str:
     missing_metadata = sorted(set(function_lines) - set(AUDIT))
     stages = auto_curriculum_cfg.get("stages", [])
     contract_failures: list[str] = []
-    if reward_cfg.get("safety_min_feet_contacts_standing") != 3.0:
-        contract_failures.append("standing support safety must require 3 feet")
-    if reward_cfg.get("safety_min_feet_contacts_walking") != 2.0:
-        contract_failures.append("walking support safety must allow the intended 2-foot trot")
-    if auto_curriculum_cfg.get("profile_name") != "go2x5_stable_reach_curriculum_v5_gait_aware_h032":
-        contract_failures.append("curriculum profile must invalidate pre-v5 checkpoints")
-    if ppo_policy_cfg.get("init_std") != [[0.15, 0.20, 0.20] * 4]:
-        contract_failures.append("initial exploration std must match the S0 smoke-tested value")
-    if ppo_algorithm_cfg.get("min_policy_std") != [[0.08, 0.12, 0.12] * 4]:
-        contract_failures.append("minimum exploration std must preserve gait discovery without destabilizing S0")
-    if len(stages) != 5:
-        contract_failures.append("curriculum must contain S0-S4")
+    if env_cfg.get("observe_gait_commands") is not False:
+        contract_failures.append("simple locomotion must not prescribe a gait clock")
+    if auto_curriculum_cfg.get("profile_name") != "go2x5_simple_locomotion_reach_v1":
+        contract_failures.append("curriculum profile must identify the simple two-stage contract")
+    if ppo_policy_cfg.get("init_std") != [[0.8, 1.0, 1.0] * 4]:
+        contract_failures.append("initial exploration std must preserve locomotion discovery")
+    if ppo_algorithm_cfg.get("min_policy_std") != [[0.15, 0.25, 0.25] * 4]:
+        contract_failures.append("minimum exploration std must preserve useful leg exploration")
+    if scales.get("tracking_contacts_shaped_force") != 0.0 or scales.get("tracking_contacts_shaped_vel") != 0.0:
+        contract_failures.append("contact-phase shaping must remain disabled")
+    if scales.get("feet_height") != 0.0 or scales.get("walking_dof") != 0.0:
+        contract_failures.append("named-gait clearance and posture shaping must remain disabled")
+    if arm_scales.get("tracking_ee_world") != 0.4 or arm_scales.get("tracking_ee_world_stable") != 0.0:
+        contract_failures.append("raw EE tracking must be active without a support-gated duplicate")
+    if len(stages) != 2:
+        contract_failures.append("curriculum must contain exactly S0-S1")
     else:
-        gait_stage = stages[3]
-        final_stage = stages[4]
-        if gait_stage.get("name") != "S3_forward_gait_initiation":
-            contract_failures.append("S3 must be the isolated forward gait-init stage")
-        if gait_stage.get("lin_vel_x_range") != [0.08, 0.16] or gait_stage.get("ang_vel_yaw_range") != [0.0, 0.0]:
-            contract_failures.append("S3 commands must isolate small forward gait")
-        required_gait_gates = {
-            "Episode_metric/metric_tracking_lin_vel_max",
-            "Episode_metric/metric_tracking_contacts_shaped_force",
-            "Episode_metric/metric_feet_height",
-        }
-        if not required_gait_gates.issubset(gait_stage.get("advance", {})):
-            contract_failures.append("S3 must fail closed on locomotion, contact-phase, and clearance metrics")
-        if final_stage.get("name") != "S4_bidirectional_locomotion_reach":
-            contract_failures.append("S4 must restore the final bidirectional locomotion/reach contract")
+        locomotion_stage, coordinated_stage = stages
+        if locomotion_stage.get("name") != "S0_locomotion_center_reach":
+            contract_failures.append("S0 must jointly expose forward locomotion and central reach")
+        if locomotion_stage.get("lin_vel_x_range") != [0.0, 0.25] or locomotion_stage.get("ang_vel_yaw_range") != [-0.15, 0.15]:
+            contract_failures.append("S0 must contain motion commands from the beginning")
+        if locomotion_stage.get("goal_pos_z") != [-0.02, 0.24]:
+            contract_failures.append("S0 must keep the initial reach volume conservative")
+        if locomotion_stage.get("advance") != {}:
+            contract_failures.append("S0 transition must be deterministic rather than metric-gated")
+        if coordinated_stage.get("name") != "S1_bidirectional_coordinated_reach":
+            contract_failures.append("S1 must restore bidirectional coordinated reach")
+        if coordinated_stage.get("lin_vel_x_range") != [-0.30, 0.30] or coordinated_stage.get("ang_vel_yaw_range") != [-0.40, 0.40]:
+            contract_failures.append("S1 must expose the final bidirectional command range")
+        if coordinated_stage.get("goal_pos_z") != [-0.26, 0.28]:
+            contract_failures.append("S1 must include safe crouch-assisted reach targets")
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()
@@ -1042,13 +1046,13 @@ def build_report() -> str:
         lines.append(f"   - `{len(unreviewed)}` active terms still lack reviewed semantics: {terms}.")
     for failure in contract_failures:
         lines.append(f"   - CONTRACT_MISMATCH: {failure}.")
-    lines.append("2. Stability support is mode-aware: stopped posture requires at least three contacts, while commanded gait receives full safety and EE reward with the intended two diagonal contacts.")
-    lines.append("3. Gait contact shaping is zero for stopped commands and uses positive coefficients because its raw values are non-positive penalties.")
-    lines.append("4. Air-time uses the configured 0.25 s target for the 2 Hz/50% swing gait, and air-time/clearance shaping covers all four feet.")
-    lines.append("5. `tracking_ee_world` uses `arm_eef_link` world position and is an active PPO reward channel. With `num_arm_actions=0`, its effect on the low-level 12D leg policy comes through PPO advantage mixing, ramped by `mixing_schedule=[1.0, 0, 3000]`.")
+    lines.append("2. No named gait is prescribed: gait-clock observations, contact-phase shaping, swing-height shaping, and walking-posture shaping are disabled.")
+    lines.append("3. From iteration zero, 75% of sampled commands request motion and 25% request an explicit stop, so locomotion cannot be deferred behind a standing-only stage.")
+    lines.append("4. Locomotion is rewarded through velocity tracking and generic all-foot air-time, while foot drag, collision, vertical motion, roll, and action rate remain penalized.")
+    lines.append("5. `tracking_ee_world` uses `arm_eef_link` world position and is an active raw PPO reward channel. It is not multiplied by a height/support gate, so crouching can improve low terrain-fixed reach targets.")
     lines.append("6. `collision` sign is correct, but the resolved penalized set is thigh/calf only. Base, arm, wrist, and finger contacts are intentionally outside this term so future end-effector interaction is not forbidden.")
     lines.append("7. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.")
-    lines.append("8. S3 isolates small forward gait and cannot advance on the previously observed four-contact shuffle metrics; S4 restores bidirectional velocity, yaw, and full reach.")
+    lines.append("8. The curriculum has only two deterministic stages: S0 learns locomotion plus central reach, then S1 expands to bidirectional commands and crouch-assisted reach.")
     lines.append("")
     lines.append("## Active Reward Audit Table")
     lines.append("")
@@ -1117,7 +1121,7 @@ def build_report() -> str:
     lines.append("")
     lines.append("Static analysis can verify sign consistency and dependency wiring, but it cannot prove that Isaac Gym rigid-body/contact tensors have the expected values at runtime. Before launching a long low-level run, run these probes:")
     lines.append("")
-    lines.append("1. Gait-aware support oracle: standing 2/3 contacts must yield safety 0/1; walking 2/4 contacts must both yield safety 1, and correct two-contact phase must beat all-four contact after weighted gait terms.")
+    lines.append("1. Emergent-locomotion oracle: gait clocks must remain absent, contact-phase rewards must remain zero, and nonzero velocity commands must produce finite observations and rewards.")
     lines.append("2. Base-height monotonicity: set flat-terrain root z near `0.24, 0.32, 0.41`; `base_height` weighted contribution must be best at `0.32`.")
     lines.append("3. Contact identity: touch `FL_foot, FR_foot, RL_foot, RR_foot` one at a time and confirm `force_sensor_tensor` order is `FL,FR,RL,RR`, while policy observation order is `FR,FL,RR,RL`.")
     lines.append("4. Collision identity: create contact on a thigh, calf, base, arm link, and finger link; only thigh/calf should affect current `collision`.")
@@ -1130,7 +1134,7 @@ def build_report() -> str:
     lines.append(textwrap.dedent(
         """
         The current Go2-X5 low-level reward set is sign-consistent and all reward implementations have reviewed metadata.
-        The static contract also rejects the fixed three-foot walking gate and a curriculum that can skip gait acquisition.
+        The static contract rejects any reintroduction of a named gait and any curriculum that postpones locomotion until a late stage.
         Static signs do not prove simulator tensor identity, terrain-relative height semantics, or reset behavior.
         Runtime acceptance therefore also requires the listed monotonicity and identity probes; their executed status is recorded in the dated training-readiness report.
         """

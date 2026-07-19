@@ -19,6 +19,9 @@ for path in (ROOT, ROOT / "third_party/rsl_rl"):
 
 from rsl_rl.modules import ActorCritic  # noqa: E402
 from tools.go2x5_runtime_parity import (  # noqa: E402
+    SMOKE_HISTORY_LEN,
+    SMOKE_NUM_PRIV,
+    SMOKE_NUM_PROP,
     build_smoke_actor_critic,
     canonical_json_sha256,
     smoke_actor_critic_kwargs,
@@ -26,7 +29,7 @@ from tools.go2x5_runtime_parity import (  # noqa: E402
 )
 
 
-CONTRACT_PROFILE = "s3_deployment_smoke"
+CONTRACT_PROFILE = "simple_deployment_smoke_v1"
 PURPOSE = "runtime_parity_smoke_only"
 
 
@@ -49,11 +52,11 @@ def build_metadata(cfg, asset_path: Path, seed: int):
         "num_arm_actions": 0,
         "num_torques": 12,
         "num_gripper_joints": 2,
-        "num_proprio": 71,
-        "num_priv": 18,
-        "history_len": 10,
-        "num_observations": 799,
-        "observe_gait_commands": True,
+        "num_proprio": SMOKE_NUM_PROP,
+        "num_priv": SMOKE_NUM_PRIV,
+        "history_len": SMOKE_HISTORY_LEN,
+        "num_observations": SMOKE_NUM_PROP * (SMOKE_HISTORY_LEN + 1) + SMOKE_NUM_PRIV,
+        "observe_gait_commands": False,
         "reorder_dofs": True,
         "ee_body_name": env_cfg["eeBodyName"],
         "arm_base_offset": env_cfg["armBaseOffset"],

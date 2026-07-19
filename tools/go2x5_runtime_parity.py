@@ -17,6 +17,9 @@ import numpy as np
 
 SCHEMA_VERSION = 2
 DEFAULT_ATOL = 1.0e-6
+SMOKE_NUM_PROP = 66
+SMOKE_NUM_PRIV = 18
+SMOKE_HISTORY_LEN = 10
 
 POLICY_LEG_JOINT_NAMES = [
     "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
@@ -90,7 +93,13 @@ def build_smoke_actor_critic(actor_critic_class: Any, seed: int = 20260713):
     import torch
     torch.manual_seed(seed)
     return actor_critic_class(
-        71, 71, 12, **smoke_actor_critic_kwargs(), num_priv=18, num_hist=10, num_prop=71
+        SMOKE_NUM_PROP,
+        SMOKE_NUM_PROP,
+        12,
+        **smoke_actor_critic_kwargs(),
+        num_priv=SMOKE_NUM_PRIV,
+        num_hist=SMOKE_HISTORY_LEN,
+        num_prop=SMOKE_NUM_PROP,
     )
 
 
@@ -123,29 +132,34 @@ def make_diagnostic_policy(mode: str, obs_dim: int, action_dim: int = 12,
                 return torch.zeros(obs.shape[0], action_dim, device=obs.device, dtype=obs.dtype)
             return np.zeros((obs.shape[0], action_dim), dtype=np.asarray(obs).dtype)
     elif mode == "constant_probe":
-        values = torch.tensor(PROBE_ACTION_POLICY_ORDER, device=device, dtype=torch.float32) if torch is not None \
-            else np.asarray(PROBE_ACTION_POLICY_ORDER, dtype=np.float32)
+        values_np = np.asarray(PROBE_ACTION_POLICY_ORDER, dtype=np.float32)
+        values_torch = torch.tensor(values_np, device=device) if torch is not None else None
         def policy(obs, hist_encoding=True):
             if torch is not None and hasattr(obs, "device"):
-                return values.to(device=obs.device, dtype=obs.dtype).expand(obs.shape[0], -1)
-            return np.broadcast_to(values.astype(np.asarray(obs).dtype), (obs.shape[0], action_dim)).copy()
+                return values_torch.to(device=obs.device, dtype=obs.dtype).expand(obs.shape[0], -1)
+            return np.broadcast_to(
+                values_np.astype(np.asarray(obs).dtype), (obs.shape[0], action_dim)
+            ).copy()
     elif mode == "linear_probe":
         rng = np.random.default_rng(seed)
         weight_np = rng.standard_normal((action_dim, obs_dim), dtype=np.float32) / max(obs_dim, 1) ** 0.5
         bias_np = rng.standard_normal(action_dim, dtype=np.float32) * 0.1
-        weight = torch.from_numpy(weight_np).to(device=device) if torch is not None else weight_np
-        bias = torch.from_numpy(bias_np).to(device=device) if torch is not None else bias_np
+        weight_torch = torch.from_numpy(weight_np).to(device=device) if torch is not None else None
+        bias_torch = torch.from_numpy(bias_np).to(device=device) if torch is not None else None
         metadata.update({"seed": seed, "scale": scale})
         def policy(obs, hist_encoding=True):
             policy_obs = obs
-            if obs_dim == 71 * 11 and obs.shape[1] != obs_dim:
-                policy_obs = torch.cat([obs[:, :71], obs[:, -71 * 10:]], dim=-1) \
+            if obs_dim % (SMOKE_HISTORY_LEN + 1) == 0 and obs.shape[1] != obs_dim:
+                num_prop = obs_dim // (SMOKE_HISTORY_LEN + 1)
+                policy_obs = torch.cat([obs[:, :num_prop], obs[:, -num_prop * SMOKE_HISTORY_LEN:]], dim=-1) \
                     if torch is not None and hasattr(obs, "device") else np.concatenate(
-                        [obs[:, :71], obs[:, -71 * 10:]], axis=-1
+                        [obs[:, :num_prop], obs[:, -num_prop * SMOKE_HISTORY_LEN:]], axis=-1
                     )
             if torch is not None and hasattr(obs, "device"):
-                return scale * torch.tanh(policy_obs @ weight.to(obs).T + bias.to(obs))
-            return scale * np.tanh(policy_obs @ weight.T + bias)
+                return scale * torch.tanh(
+                    policy_obs @ weight_torch.to(obs).T + bias_torch.to(obs)
+                )
+            return scale * np.tanh(policy_obs @ weight_np.T + bias_np)
     else:
         raise ValueError(f"Unknown diagnostic policy mode: {mode}")
     return policy, metadata
@@ -608,10 +622,12 @@ def collect_natural_reset_sequence(env: Any, side: str) -> Dict[str, Any]:
             raise ValueError("side must be 'low' or 'high'")
     nonfinite_count = sum(sum(sample["nonfinite"].values()) for sample in samples)
     immediate_resets = [sample["step"] for sample in samples if sample["reset"]]
+    num_prop = env.cfg.env.num_proprio if side == "low" else env.num_proprio
+    history_len = env.cfg.env.history_len if side == "low" else env.history_len
     return {
         "schema_version": SCHEMA_VERSION, "kind": "natural_reset", "side": side,
         "sample_steps": [0, 1, 4, 10], "samples": samples,
-        "observation_shape": 71 * 11,
+        "observation_shape": int(num_prop * (history_len + 1)),
         "raw_observation_shape": int(env.obs_buf.shape[1] if side == "low" else env.low_obs_buf.shape[1]),
         "nonfinite_count": nonfinite_count, "immediate_reset_steps": immediate_resets,
         "passed": nonfinite_count == 0 and not immediate_resets,

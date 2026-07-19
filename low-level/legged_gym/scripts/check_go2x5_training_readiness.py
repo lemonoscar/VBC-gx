@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument(
         "--rollout-stage",
         type=int,
-        choices=range(5),
+        choices=range(2),
         default=0,
         help="Curriculum stage used by the rollout gate (default: S0 training entry).",
     )
@@ -73,13 +73,13 @@ def make_env_args(cli):
     args.sim_device = cli.sim_device
     args.rl_device = cli.rl_device
     args.graphics_device_id = cli.graphics_device_id
-    args.observe_gait_commands = True
+    args.observe_gait_commands = False
     return args
 
 
 def configure_env(cfg, cli):
     cfg.env.num_envs = cli.num_envs
-    cfg.env.observe_gait_commands = True
+    cfg.env.observe_gait_commands = False
     cfg.env.record_video = False
     cfg.env.teleop_mode = False
     cfg.terrain.num_rows = 2
@@ -141,86 +141,89 @@ def probe_rewards(env, checks):
         target=float(env.cfg.rewards.base_height_target),
     )
     checks.require(
-        "reward/final_gait_weights",
-        "walking_dof" not in env.reward_scales
-        and abs(float(env.reward_scales["tracking_contacts_shaped_force"]) - 1.0) <= 1e-9
-        and abs(float(env.reward_scales["tracking_contacts_shaped_vel"]) - 0.5) <= 1e-9
-        and abs(float(env.reward_scales["feet_height"]) - 1.0) <= 1e-9
+        "contract/simple_emergent_locomotion",
+        env.cfg.env.num_proprio == 66
+        and not env.cfg.env.observe_gait_commands
+        and not env.cfg.asset.replace_cylinder_with_capsule
+        and "walking_dof" not in env.reward_scales
+        and "tracking_contacts_shaped_force" not in env.reward_scales
+        and "tracking_contacts_shaped_vel" not in env.reward_scales
+        and "feet_height" not in env.reward_scales
+        and "stability_safety" not in env.reward_scales
         and abs(float(env.reward_scales["tracking_lin_vel_max"]) - 2.0) <= 1e-9
-        and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9,
-        walking_dof=float(env.reward_scales.get("walking_dof", 0.0)),
-        shaped_force=float(env.reward_scales["tracking_contacts_shaped_force"]),
-        shaped_vel=float(env.reward_scales["tracking_contacts_shaped_vel"]),
-        feet_height=float(env.reward_scales["feet_height"]),
+        and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9
+        and abs(float(env.reward_scales["feet_air_time"]) - 1.0) <= 1e-9
+        and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 0.8) <= 1e-9
+        and "tracking_ee_world_stable" not in env.arm_reward_scales,
+        num_proprio=int(env.cfg.env.num_proprio),
+        observe_gait=bool(env.cfg.env.observe_gait_commands),
+        replace_capsules=bool(env.cfg.asset.replace_cylinder_with_capsule),
         tracking_lin_vel=float(env.reward_scales["tracking_lin_vel_max"]),
         tracking_ang_vel=float(env.reward_scales["tracking_ang_vel"]),
+        feet_air_time=float(env.reward_scales["feet_air_time"]),
+        ee_tracking=float(env.arm_reward_scales["tracking_ee_world"]),
     )
 
     env.commands.zero_()
-    env.commands[:, 0] = 0.10
-    env.desired_contact_states.fill_(1.0)
-    env.desired_contact_states[:, 0] = 0.0
-    env.contact_forces[:, env.feet_indices, :] = 0.0
-    force_best, _ = reward._reward_tracking_contacts_shaped_force()
-    env.contact_forces[:, env.feet_indices[0], 2] = 100.0
-    force_bad, _ = reward._reward_tracking_contacts_shaped_force()
-    checks.require(
-        "reward/off_phase_force_decreases",
-        bool(torch.all(force_bad < force_best)),
-        best=float(force_best.mean().item()),
-        bad=float(force_bad.mean().item()),
-        scale=float(env.reward_scales["tracking_contacts_shaped_force"]),
-    )
-    checks.require(
-        "reward/off_phase_force_weighted_negative",
-        bool(torch.all(force_bad * env.reward_scales["tracking_contacts_shaped_force"] < 0)),
-    )
-    env.commands.zero_()
-    force_stop, _ = reward._reward_tracking_contacts_shaped_force()
-    checks.require("reward/off_phase_force_zero_when_stopped", scalar_max_abs(force_stop) == 0.0)
-
-    env.commands[:, 0] = 0.10
     env.desired_contact_states.fill_(0.0)
-    env.desired_contact_states[:, 0] = 1.0
-    env.rigid_body_state[:, env.feet_indices, 7:10] = 0.0
-    env._refresh_foot_kinematics()
-    vel_best, _ = reward._reward_tracking_contacts_shaped_vel()
-    env.rigid_body_state[:, env.feet_indices[0], 7] = 1.0
-    env._refresh_foot_kinematics()
-    vel_bad, _ = reward._reward_tracking_contacts_shaped_vel()
-    live_foot_velocity = torch.index_select(
-        env.rigid_body_state[:, :, 7:10], 1, env.feet_indices
-    )
+    env.contact_forces[:, env.feet_indices, 2] = 100.0
+    force_disabled, _ = reward._reward_tracking_contacts_shaped_force()
+    vel_disabled, _ = reward._reward_tracking_contacts_shaped_vel()
     checks.require(
-        "runtime/foot_velocity_cache_is_live",
-        bool(torch.equal(env.foot_velocities, live_foot_velocity)),
-        max_error=scalar_max_abs(env.foot_velocities - live_foot_velocity),
+        "reward/gait_schedule_disabled",
+        scalar_max_abs(force_disabled) == 0.0 and scalar_max_abs(vel_disabled) == 0.0,
     )
-    checks.require(
-        "reward/stance_velocity_decreases",
-        bool(torch.all(vel_bad < vel_best)),
-        best=float(vel_best.mean().item()),
-        bad=float(vel_bad.mean().item()),
-        scale=float(env.reward_scales["tracking_contacts_shaped_vel"]),
-    )
-    env.commands.zero_()
-    vel_stop, _ = reward._reward_tracking_contacts_shaped_vel()
-    checks.require("reward/stance_velocity_zero_when_stopped", scalar_max_abs(vel_stop) == 0.0)
 
+    env.commands.zero_()
     env.commands[:, 0] = 0.10
-    env.desired_contact_states.fill_(1.0)
-    env.desired_contact_states[:, 0] = 0.0
-    env.measured_heights.zero_()
-    env.rigid_body_state[:, env.feet_indices, 2] = 0.20
-    env.rigid_body_state[:, env.feet_indices[0], 2] = 0.02
-    height_low, metric_low = reward._reward_feet_height()
-    env.rigid_body_state[:, env.feet_indices[0], 2] = 0.13
-    height_clear, metric_clear = reward._reward_feet_height()
+    env.base_lin_vel[:, 0] = 0.10
+    velocity_best, _ = reward._reward_tracking_lin_vel_max()
+    env.base_lin_vel[:, 0] = 0.0
+    velocity_bad, _ = reward._reward_tracking_lin_vel_max()
     checks.require(
-        "reward/per_foot_clearance",
-        bool(torch.all(height_low < height_clear) and torch.all(metric_low > metric_clear)),
-        low=float(height_low.mean().item()),
-        clear=float(height_clear.mean().item()),
+        "reward/velocity_tracking_monotonic",
+        bool(torch.all(velocity_best > velocity_bad)),
+        best=float(velocity_best.mean().item()),
+        bad=float(velocity_bad.mean().item()),
+    )
+
+    env.curr_ee_goal_cart_world[:] = env.ee_pos
+    ee_exact, _ = reward._reward_tracking_ee_world()
+    env.curr_ee_goal_cart_world[:, 0] += 0.10
+    ee_offset, _ = reward._reward_tracking_ee_world()
+    env.foot_contacts_from_sensor.zero_()
+    ee_without_contacts, _ = reward._reward_tracking_ee_world()
+    checks.require(
+        "reward/raw_ee_tracking_allows_body_coordination",
+        bool(torch.all(ee_exact > ee_offset) and torch.equal(ee_offset, ee_without_contacts)),
+        exact=float(ee_exact.mean().item()),
+        offset=float(ee_offset.mean().item()),
+    )
+
+    env.foot_contacts_from_sensor.fill_(True)
+    env.rigid_body_state[:, env.feet_indices, 7:10] = 0.0
+    drag_still, _ = reward._reward_feet_drag()
+    env.rigid_body_state[:, env.feet_indices[0], 7] = 0.5
+    drag_moving, _ = reward._reward_feet_drag()
+    checks.require(
+        "reward/contact_drag_penalized",
+        bool(torch.all(drag_moving > drag_still)),
+        still=float(drag_still.mean().item()),
+        moving=float(drag_moving.mean().item()),
+    )
+
+    zero_commands = 0
+    sample_count = 0
+    ids = torch.arange(env.num_envs, device=env.device)
+    for _ in range(100):
+        env._resample_commands(ids)
+        zero_commands += int((torch.abs(env.commands).sum(dim=1) == 0).sum().item())
+        sample_count += env.num_envs
+    standing_fraction = zero_commands / sample_count
+    checks.require(
+        "commands/explicit_standing_population",
+        0.15 <= standing_fraction <= 0.40,
+        fraction=standing_fraction,
     )
 
     env.episode_length_buf.fill_(51)
@@ -247,74 +250,6 @@ def probe_rewards(env, checks):
         bad=float(height_bad.mean().item()),
     )
 
-    env.root_states[:, 3:7] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device)
-    env.root_states[:, 2] = env.cfg.rewards.base_height_target
-    env.foot_contacts_from_sensor.fill_(True)
-    env.curr_ee_goal_cart_world[:] = env.ee_pos
-    ee_exact, _ = reward._reward_tracking_ee_world_stable()
-    env.curr_ee_goal_cart_world[:, 0] += 0.10
-    ee_offset, _ = reward._reward_tracking_ee_world_stable()
-    checks.require(
-        "reward/stable_ee_tracking_monotonic",
-        bool(torch.all(ee_exact > ee_offset) and torch.all(ee_exact > 0)),
-        exact=float(ee_exact.mean().item()),
-        offset=float(ee_offset.mean().item()),
-    )
-
-    env.base_quat[:] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device)
-    env.root_states[:, 2] = env.cfg.rewards.base_height_target
-    env.curr_ee_goal_cart_world[:] = env.ee_pos
-    env.commands.zero_()
-    env.foot_contacts_from_sensor.zero_()
-    env.foot_contacts_from_sensor[:, :2] = True
-    standing_two = reward._stability_safety()
-    env.foot_contacts_from_sensor[:, 2] = True
-    standing_three = reward._stability_safety()
-    checks.require(
-        "reward/standing_requires_three_contacts",
-        bool(torch.all(standing_two == 0.0) and torch.all(standing_three > 0.0)),
-        two=float(standing_two.mean().item()),
-        three=float(standing_three.mean().item()),
-    )
-
-    env.commands[:, 0] = 0.10
-    env.desired_contact_states[:] = torch.tensor(
-        [0.0, 1.0, 1.0, 0.0], device=env.device
-    )
-    env.foot_contacts_from_sensor[:] = torch.tensor(
-        [False, True, True, False], device=env.device
-    )
-    env.contact_forces[:, env.feet_indices, :] = 0.0
-    env.contact_forces[:, env.feet_indices[1:3], 2] = 100.0
-    two_stability = reward._stability_safety()
-    two_ee, _ = reward._reward_tracking_ee_world_stable()
-    two_force, _ = reward._reward_tracking_contacts_shaped_force()
-
-    env.foot_contacts_from_sensor.fill_(True)
-    env.contact_forces[:, env.feet_indices, 2] = 100.0
-    four_stability = reward._stability_safety()
-    four_ee, _ = reward._reward_tracking_ee_world_stable()
-    four_force, _ = reward._reward_tracking_contacts_shaped_force()
-    leg_stability_scale = env.reward_scales["stability_safety"]
-    force_scale = env.reward_scales["tracking_contacts_shaped_force"]
-    ee_scale = env.arm_reward_scales["tracking_ee_world_stable"]
-    two_total = two_stability * leg_stability_scale + two_force * force_scale + two_ee * ee_scale
-    four_total = four_stability * leg_stability_scale + four_force * force_scale + four_ee * ee_scale
-    checks.require(
-        "reward/two_contact_trot_keeps_safety_and_beats_four_contact_shuffle",
-        bool(
-            torch.allclose(two_stability, four_stability, atol=1.0e-7, rtol=0.0)
-            and torch.allclose(two_ee, four_ee, atol=1.0e-7, rtol=0.0)
-            and torch.all(two_force > four_force)
-            and torch.all(two_total > four_total)
-        ),
-        two_stability=float(two_stability.mean().item()),
-        four_stability=float(four_stability.mean().item()),
-        two_force=float(two_force.mean().item()),
-        four_force=float(four_force.mean().item()),
-        two_weighted=float(two_total.mean().item()),
-        four_weighted=float(four_total.mean().item()),
-    )
 
 
 def probe_all_reward_functions(env, checks):
@@ -412,6 +347,15 @@ def probe_reset(env, checks):
 def probe_training_metadata(env, checks):
     env.global_steps = 123
     metadata = env.get_training_metadata()
+    alignment = metadata["go2x5_alignment"]
+    checks.require(
+        "checkpoint/simple_runtime_contract",
+        alignment["num_proprio"] == 66
+        and alignment["num_observations"] == 744
+        and alignment["observe_gait_commands"] is False
+        and alignment["control_contract"]["replace_cylinder_with_capsule"] is False
+        and "gait_frequency" not in alignment["control_contract"],
+    )
     env.global_steps = 0
     env.load_training_metadata(metadata)
     checks.require("checkpoint/valid_metadata_loads", env.global_steps == 123)
@@ -457,52 +401,28 @@ def probe_training_metadata(env, checks):
 
 
 def probe_curriculum(env, checks):
+    checks.require("curriculum/two_stages_only", len(env.curriculum_stages) == 2)
     env.set_training_stage(0, env.curriculum_stages[0], iteration=0)
-    passing_metrics = {
-        "Train/mean_episode_length": 500.0,
-        "Episode/reset_roll": 0.0,
-        "Episode/reset_z": 0.0,
-        "Episode_metric/metric_collision": 0.0,
-        "Episode_metric/metric_tracking_ee_world_stable": 0.15,
-    }
-    env.update_auto_curriculum(999, passing_metrics)
-    checks.require("curriculum/respects_min_iterations", env.curriculum_stage_index == 0)
-    env.update_auto_curriculum(1000, passing_metrics)
     checks.require(
-        "curriculum/advances_with_physical_unit_metrics",
+        "curriculum/stage0_contains_motion",
+        env.command_ranges["lin_vel_x"][1] > env.cfg.commands.lin_vel_x_clip,
+        command_range=list(env.command_ranges["lin_vel_x"]),
+    )
+    env.update_auto_curriculum(5999, {})
+    checks.require("curriculum/respects_min_iterations", env.curriculum_stage_index == 0)
+    env.update_auto_curriculum(6000, {})
+    checks.require(
+        "curriculum/advances_once_to_coordinated_reach",
         env.curriculum_stage_index == 1,
         stage=int(env.curriculum_stage_index),
     )
-
-    env.set_training_stage(3, env.curriculum_stages[3], iteration=7000)
-    shuffle_metrics = {
-        "Train/mean_episode_length": 500.0,
-        "Episode/reset_roll": 0.0,
-        "Episode/reset_z": 0.0,
-        "Episode_metric/metric_tracking_lin_vel_max": 0.34,
-        "Episode_metric/metric_tracking_contacts_shaped_force": -0.47,
-        "Episode_metric/metric_feet_height": 0.092,
-    }
-    env.update_auto_curriculum(11000, shuffle_metrics)
     checks.require(
-        "curriculum/rejects_four_contact_shuffle",
-        env.curriculum_stage_index == 3,
-        stage=int(env.curriculum_stage_index),
-    )
-    stepping_metrics = {
-        "Train/mean_episode_length": 500.0,
-        "Episode/reset_roll": 0.0,
-        "Episode/reset_z": 0.0,
-        "Episode_metric/metric_tracking_lin_vel_max": 0.60,
-        "Episode_metric/metric_tracking_contacts_shaped_force": -0.20,
-        "Episode_metric/metric_feet_height": 0.05,
-    }
-    env.set_training_stage(3, env.curriculum_stages[3], iteration=7000)
-    env.update_auto_curriculum(11000, stepping_metrics)
-    checks.require(
-        "curriculum/advances_only_after_gait_gate",
-        env.curriculum_stage_index == 4,
-        stage=int(env.curriculum_stage_index),
+        "curriculum/final_contract",
+        env.command_ranges["lin_vel_x"] == [-0.30, 0.30]
+        and env.goal_ee_ranges["pos_z"] == [-0.26, 0.28]
+        and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 0.8) <= 1e-9,
+        command_range=list(env.command_ranges["lin_vel_x"]),
+        goal_z=list(env.goal_ee_ranges["pos_z"]),
     )
 
 
@@ -532,7 +452,7 @@ def probe_rollout(env, checks, steps, stage_index):
         iteration=stage_iteration,
     )
     env.reset()
-    checks.require("runtime/observation_shape", env.obs_buf.shape[1] == 799, shape=list(env.obs_buf.shape))
+    checks.require("runtime/observation_shape", env.obs_buf.shape[1] == 744, shape=list(env.obs_buf.shape))
     checks.require("runtime/action_shape", env.num_actions == 12, action_dim=int(env.num_actions))
     checks.require(
         "runtime/measured_heights_shape",
@@ -599,11 +519,9 @@ def probe_rollout(env, checks, steps, stage_index):
                     first_index=torch.nonzero(~finite, as_tuple=False)[0].tolist(),
                 )
             max_abs[name] = max(max_abs[name], scalar_max_abs(tensor))
-        if step == 19:
-            checks.require("gait/nonzero_command_advances", bool(torch.all(env.gait_indices > 0.0)))
-        if step == 29:
+        if step in (19, 29):
             checks.require(
-                "gait/stop_resets_phase_and_contacts",
+                f"gait/disabled_state_is_constant_step_{step}",
                 bool(torch.all(env.gait_indices == 0.0) and torch.all(env.desired_contact_states == 1.0)),
             )
     for name, count in nonfinite.items():

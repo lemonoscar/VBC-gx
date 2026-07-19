@@ -30,11 +30,11 @@ def make_low_env(state_mode="canonical_injected", case="C0", policy_mode=None, c
     args.sim_device = "cuda:0"
     args.rl_device = "cuda:0"
     args.graphics_device_id = 0
-    args.observe_gait_commands = True
+    args.observe_gait_commands = False
 
     env_cfg, _ = task_registry.get_cfgs(name=args.task)
     env_cfg.env.num_envs = 1
-    env_cfg.env.observe_gait_commands = True
+    env_cfg.env.observe_gait_commands = False
     env_cfg.env.action_delay = 0
     env_cfg.env.record_video = False
     env_cfg.env.teleop_mode = False
@@ -117,7 +117,7 @@ def make_high_env(state_mode="canonical_injected", case="C0", policy_mode=None, 
         def diagnostic_policy_loader(instance, *args, **kwargs):
             instance.num_priv = 18
             instance.num_gripper_joints = instance.num_physical_gripper_dof
-            instance.num_proprio = 71
+            instance.num_proprio = 66
             instance.history_len = 10
 
             policy, metadata = _make_policy(
@@ -137,7 +137,7 @@ def make_high_env(state_mode="canonical_injected", case="C0", policy_mode=None, 
                 graphics_device_id=0,
                 headless=True,
                 use_roboinfo=True,
-                observe_gait_commands=True,
+                observe_gait_commands=False,
                 no_feature=True,
                 commands_curriculum=False,
             )

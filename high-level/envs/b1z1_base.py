@@ -711,7 +711,9 @@ class B1Z1Base(RewardVecTask):
         asset_options = gymapi.AssetOptions()
         asset_options.default_dof_drive_mode = 3
         asset_options.collapse_fixed_joints = True
-        asset_options.replace_cylinder_with_capsule = True
+        asset_options.replace_cylinder_with_capsule = bool(
+            self.cfg["env"]["asset"].get("replaceCylinderWithCapsule", True)
+        )
         asset_options.flip_visual_attachments = False
         asset_options.fix_base_link = False
         asset_options.density = 1000.0

@@ -33,29 +33,31 @@ def test_reward_audit_is_complete_and_fail_closed():
     assert "MISMATCH" not in result.stdout
     assert "No metadata yet" not in result.stdout
     assert "74/74" in result.stdout
-    assert "tracking_contacts_shaped_force` | 1.0 | + | OK" in result.stdout
-    assert "tracking_contacts_shaped_vel` | 0.5 | + | OK" in result.stdout
+    assert "tracking_contacts_shaped_force` | 0.0" in result.stdout
+    assert "tracking_contacts_shaped_vel` | 0.0" in result.stdout
 
 
 def test_go2x5_training_contract_defaults_are_unambiguous():
     config = read(CONFIG)
-    assert "observe_gait_commands = True" in config
-    assert "num_observations = robot_spec.observation_dim(True)" in config
+    assert "observe_gait_commands = False" in config
+    assert "num_observations = robot_spec.observation_dim(False)" in config
     assert "require_training_metadata = True" in config
     assert "feet_air_time_target = 0.25" in config
     assert "feet_aritime_allfeet = True" in config
     assert "feet_height_allfeet = True" in config
-    assert '"tracking_contacts_shaped_force_scale": 1.0' in config
-    assert '"tracking_contacts_shaped_vel_scale": 0.5' in config
-    assert '"walking_dof_scale": 0.0' in config
-    assert '"feet_height_scale": 1.0' in config
+    assert "tracking_contacts_shaped_force = 0.0" in config
+    assert "tracking_contacts_shaped_vel = 0.0" in config
+    assert "walking_dof = 0.0" in config
+    assert "feet_height = 0.0" in config
+    assert "feet_air_time = 1.0" in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v5_gait_aware_h032"' in config
-    assert "safety_min_feet_contacts_standing = 3.0" in config
-    assert "safety_min_feet_contacts_walking = 2.0" in config
-    assert '"name": "S3_forward_gait_initiation"' in config
-    assert '"name": "S4_bidirectional_locomotion_reach"' in config
-    assert '"Episode_metric/metric_tracking_lin_vel_max": [">", 0.45]' in config
+    assert 'profile_name = "go2x5_simple_locomotion_reach_v1"' in config
+    assert '"name": "S0_locomotion_center_reach"' in config
+    assert '"name": "S1_bidirectional_coordinated_reach"' in config
+    assert config.count('"name": "S') == 2
+    assert "standing_probability = 0.25" in config
+    assert "replace_cylinder_with_capsule = False" in config
+    assert '"advance": {}' in config
 
 
 def test_reward_implementations_cover_stop_mask_height_and_jerk_state():
@@ -155,7 +157,7 @@ def test_checkpoint_rollout_fails_closed_on_early_resets():
     assert 'report["early_resets"] <= report["max_early_resets"]' in rollout
 
 
-def test_fixed_command_gait_gate_detects_no_step_policies():
+def test_fixed_command_locomotion_gate_detects_no_step_policies():
     gait = read(FIXED_COMMAND_GAIT)
     for option in (
         '"--min-translation-progress-ratio"',
@@ -173,10 +175,11 @@ def test_fixed_command_gait_gate_detects_no_step_policies():
     assert 'return 0 if report["passed"] else 1' in gait
 
 
-def test_training_readiness_separates_s0_gate_from_later_stage_stress():
+def test_training_readiness_checks_both_simple_stages():
     readiness = read(READINESS)
     assert '"--rollout-stage"' in readiness
     assert "default=0" in readiness
+    assert "choices=range(2)" in readiness
     assert 'reset_causes = {"roll": 0, "pitch": 0, "z": 0, "contact": 0}' in readiness
     assert 'early_resets == 0' in readiness
 

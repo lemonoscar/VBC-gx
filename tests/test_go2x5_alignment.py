@@ -93,7 +93,7 @@ def test_high_level_yaml_uses_same_robot_interface():
     asset_cfg = env_cfg["asset"]
 
     assert env_cfg["lowPolicyNumActions"] == spec.ACTION_DIM
-    assert env_cfg["lowPolicyObserveGaitCommands"] is True
+    assert env_cfg["lowPolicyObserveGaitCommands"] is False
     assert env_cfg["lowPolicyReorderDofs"] is True
     assert env_cfg["requireLowPolicyMetadata"] is True
     assert env_cfg["numGripperDof"] == spec.NUM_GRIPPER_DOFS
@@ -216,30 +216,32 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "center_mode = 'terrain_invariant'" in go2x5_config
     assert "x_offset = robot_spec.ARM_BASE_OFFSET[0]" in go2x5_config
     assert "z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + robot_spec.ARM_BASE_OFFSET[2]" in go2x5_config
-    assert "pos_x = [0.05, 0.60]" in go2x5_config
-    assert "pos_y_cart = [-0.30, 0.30]" in go2x5_config
-    assert "pos_z = [-0.40, 0.42]" in go2x5_config
+    assert "pos_x = [0.12, 0.50]" in go2x5_config
+    assert "pos_y_cart = [-0.20, 0.20]" in go2x5_config
+    assert "pos_z = [-0.26, 0.28]" in go2x5_config
     assert "pos_l = [0.20, 0.56]" in go2x5_config
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_stable_reach_curriculum_v5_gait_aware_h032"' in go2x5_config
+    assert 'profile_name = "go2x5_simple_locomotion_reach_v1"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
-    assert '"name": "S0_safe_small_reach"' in go2x5_config
-    assert '"name": "S1_mid_reach_compensation"' in go2x5_config
-    assert '"name": "S2_full_reach_compensation"' in go2x5_config
-    assert '"name": "S3_forward_gait_initiation"' in go2x5_config
-    assert '"name": "S4_bidirectional_locomotion_reach"' in go2x5_config
+    assert go2x5_config.count('"name": "S0_locomotion_center_reach"') == 1
+    assert go2x5_config.count('"name": "S1_bidirectional_coordinated_reach"') == 1
+    assert '"name": "S2_' not in go2x5_config
     assert "safety_min_feet_contacts_standing = 3.0" in go2x5_config
     assert "safety_min_feet_contacts_walking = 2.0" in go2x5_config
     assert "feet_height_target = 0.12" in go2x5_config
-    assert "lin_vel_x = [0.0, 0.0]" in go2x5_config
-    assert "ang_vel_yaw = [0.0, 0.0]" in go2x5_config
-    assert "base_height = -6.0" in go2x5_config
+    assert "standing_probability = 0.25" in go2x5_config
+    assert "lin_vel_x = [0.0, 0.25]" in go2x5_config
+    assert "ang_vel_yaw = [-0.15, 0.15]" in go2x5_config
+    assert "base_height = -1.0" in go2x5_config
     assert "termination = -100.0" in go2x5_config
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
-    assert "tracking_lin_vel_max = 0.0" in go2x5_config
-    assert "tracking_ee_world_stable = 0.2" in go2x5_config
+    assert "tracking_lin_vel_max = 2.0" in go2x5_config
+    assert "tracking_ee_world = 0.4" in go2x5_config
+    assert "tracking_ee_world_stable = 0.0" in go2x5_config
+    assert "observe_gait_commands = False" in go2x5_config
+    assert "replace_cylinder_with_capsule = False" in go2x5_config
     assert "collision_force_threshold = 5.0" in go2x5_config
     assert "randomize_friction = False" in go2x5_config
     assert "friction_range = [1.0, 1.0]" in go2x5_config
@@ -275,7 +277,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert 'getattr(self.cfg.goal_ee, "center_mode", "terrain_invariant") == "arm_base"' in manip_loco
 
 
-def test_go2x5_stability_design_matches_current_training_plan():
+def test_go2x5_simple_training_design_matches_current_plan():
     go2x5_config = (ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_config.py").read_text(encoding="utf-8")
 
     assert "actor_hidden_dims = [128]" in go2x5_config
@@ -286,34 +288,25 @@ def test_go2x5_stability_design_matches_current_training_plan():
     assert "num_leg_actions = 12" in go2x5_config
     assert "num_arm_actions = 0" in go2x5_config
 
-    assert "feet_height_target = 0.12" in go2x5_config
-    assert "low_goal_height_thresh = 0.35" in go2x5_config
-    assert "height_adaptation = 0.0" in go2x5_config
-    assert "low_goal_front_leg_bend = 0.0" in go2x5_config
-    assert "low_goal_posture_asymmetry = 0.0" in go2x5_config
-    assert "low_goal_hind_leg_extension = 0.0" in go2x5_config
-    assert "low_goal_hind_support_force = 0.0" in go2x5_config
-    assert "feet_contact_standing = -2.0" in go2x5_config
-    assert "hind_feet_contact_standing = -2.5" in go2x5_config
-    assert "foot_support_standing = -2.0" in go2x5_config
-    assert "pitch_soft_limit_standing = -2.0" in go2x5_config
+    assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
+    assert "tracking_contacts_shaped_vel = 0.0" in go2x5_config
+    assert "feet_height = 0.0" in go2x5_config
+    assert "feet_air_time = 1.0" in go2x5_config
+    assert "walking_dof = 0.0" in go2x5_config
+    assert "stability_safety = 0.0" in go2x5_config
+    assert "tracking_ee_world_stable = 0.0" in go2x5_config
 
-    assert "base_height = -6.0" in go2x5_config
+    assert "base_height = -1.0" in go2x5_config
     assert "termination = -100.0" in go2x5_config
-    assert "lin_vel_z = -5.0" in go2x5_config
-    assert "roll = -8.0" in go2x5_config
-    assert "ang_vel_xy = -2.0" in go2x5_config
-    assert "collision = -8.0" in go2x5_config
-    assert "feet_drag = -0.25" in go2x5_config
-    assert "foot_lateral_spacing = -2.0" in go2x5_config
-    assert "orientation = -3.0" in go2x5_config
-    assert "stability_safety = 1.0" in go2x5_config
-    assert "dof_error_deadzone = -1.0" in go2x5_config
-    assert "leg_action_l2_deadzone = -0.1" in go2x5_config
-    assert "action_scale = [0.10, 0.16, 0.16] * 4" in go2x5_config
+    assert "lin_vel_z = -1.5" in go2x5_config
+    assert "roll = -2.0" in go2x5_config
+    assert "ang_vel_xy = -0.2" in go2x5_config
+    assert "collision = -10.0" in go2x5_config
+    assert "feet_drag = -0.15" in go2x5_config
+    assert "action_scale = robot_spec.LOW_ACTION_SCALE" in go2x5_config
     assert '"action_scale": robot_spec.LOW_ACTION_SCALE' in go2x5_config
-    assert "init_std = [[0.15, 0.20, 0.20] * 4]" in go2x5_config
-    assert "min_policy_std = [[0.08, 0.12, 0.12] * 4]" in go2x5_config
+    assert "init_std = [[0.8, 1.0, 1.0] * 4]" in go2x5_config
+    assert "min_policy_std = [[0.15, 0.25, 0.25] * 4]" in go2x5_config
 
 
 def test_go2x5_runtime_contract_is_deterministic_and_name_based():
@@ -352,7 +345,9 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
 
     assert 'actions = self.action_history_buf[:, -(self.action_delay + 1)]' in low_level
     assert "self._reindex_all(self.actions)[:, :12]" in low_level
-    assert "self.gait_indices[~is_walking] = 0" in high_level
+    assert env_cfg["lowPolicyObserveGaitCommands"] is False
+    assert "gait_frequency" not in contract
+    assert contract["replace_cylinder_with_capsule"] is False
     assert '"control_contract_sha256": control_contract_hash' in low_level
     assert "Low-level checkpoint control contract mismatch" in high_level
     assert "resolve_robot_start_pose(" in high_level

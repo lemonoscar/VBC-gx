@@ -280,7 +280,7 @@ class ManipLoco(LeggedRobot):
             "Curriculum/collision_force_threshold": getattr(self.cfg.rewards, "collision_force_threshold", 0.0),
             "Curriculum/action_scale_hip": float(self.cfg.control.action_scale[0]),
             "Curriculum/action_scale_thigh": float(self.cfg.control.action_scale[1]),
-            "Curriculum/ee_tracking_stable_weight": float(getattr(self.cfg.rewards.arm_scales, "tracking_ee_world_stable", 0.0)),
+            "Curriculum/ee_tracking_weight": float(getattr(self.cfg.rewards.arm_scales, "tracking_ee_world", 0.0)),
             "Curriculum/lin_vel_x_max": float(self.command_ranges.get("lin_vel_x", [0.0, 0.0])[1]),
         }
 
@@ -314,6 +314,7 @@ class ManipLoco(LeggedRobot):
                 "default_buffer_size_multiplier": float(self.cfg.sim.physx.default_buffer_size_multiplier),
             },
             "action_delay_steps": int(self.cfg.env.action_delay),
+            "replace_cylinder_with_capsule": bool(self.cfg.asset.replace_cylinder_with_capsule),
             "command_ranges": {
                 "lin_vel_x": list(self.cfg.commands.ranges.lin_vel_x),
                 "ang_vel_yaw": list(self.cfg.commands.ranges.ang_vel_yaw),
@@ -322,7 +323,6 @@ class ManipLoco(LeggedRobot):
                 "lin_vel_x": float(self.cfg.commands.lin_vel_x_clip),
                 "ang_vel_yaw": float(self.cfg.commands.ang_vel_yaw_clip),
             },
-            "gait_frequency": float(self.cfg.env.frequencies),
             "foot_contact_threshold": 1.5,
             "ee_frame": "TERRAIN_INVARIANT_YAW"
             if self.cfg.goal_ee.center_mode == "terrain_invariant" else "ARM_BASE_YAW",
@@ -1482,15 +1482,27 @@ class ManipLoco(LeggedRobot):
         if self.cfg.env.teleop_mode:
             return
 
-        if self.global_steps < 5000 * 24: # 5000 can learn forward
-            self.commands[env_ids, 0] = torch_rand_float(0, self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        else:
-            self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        if len(env_ids) == 0:
+            return
+
+        self.commands[env_ids, 0] = torch_rand_float(
+            self.command_ranges["lin_vel_x"][0],
+            self.command_ranges["lin_vel_x"][1],
+            (len(env_ids), 1),
+            device=self.device,
+        ).squeeze(1)
 
         self.commands[env_ids, 1] = 0
         self.commands[env_ids, 2] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        # set small commands to zero
-        self.commands[env_ids, :] *= (torch.logical_or(torch.abs(self.commands[env_ids, 0]) > self.cfg.commands.lin_vel_x_clip, torch.abs(self.commands[env_ids, 2]) > self.cfg.commands.ang_vel_yaw_clip)).unsqueeze(1)
+        # Preserve an explicit standing population instead of relying on the
+        # probability that two independently sampled commands hit a dead zone.
+        standing_probability = float(getattr(self.cfg.commands, "standing_probability", 0.0))
+        standing = torch.rand(len(env_ids), device=self.device) < standing_probability
+        moving = torch.logical_or(
+            torch.abs(self.commands[env_ids, 0]) > self.cfg.commands.lin_vel_x_clip,
+            torch.abs(self.commands[env_ids, 2]) > self.cfg.commands.ang_vel_yaw_clip,
+        )
+        self.commands[env_ids[standing | ~moving], :] = 0.0
 
     def _step_contact_targets(self):
         if self.cfg.env.observe_gait_commands:

@@ -69,6 +69,16 @@ def test_constant_probe_is_asymmetric_policy_order():
     output = policy(np.zeros((2, 7), dtype=np.float32))
     assert output.shape == (2, 12)
     assert output[0].tolist() == np.asarray(PROBE_ACTION_POLICY_ORDER, dtype=np.float32).tolist()
+    try:
+        import torch
+    except ImportError:
+        torch = None
+    if torch is not None:
+        torch_output = policy(torch.zeros((2, 7), dtype=torch.float32))
+        assert torch_output.shape == (2, 12)
+        assert torch.equal(
+            torch_output[0], torch.tensor(PROBE_ACTION_POLICY_ORDER, dtype=torch.float32)
+        )
     assert metadata == {"mode": "constant_probe", "input_dim": 7, "output_dim": 12}
 
 
@@ -78,6 +88,14 @@ def test_linear_probe_is_seeded_nonzero_and_reproducible():
     second, second_meta = make_diagnostic_policy("linear_probe", 11, seed=17, scale=0.05)
     assert np.array_equal(first(obs), second(obs))
     assert np.max(np.abs(first(obs))) > 1.0e-6
+    try:
+        import torch
+    except ImportError:
+        torch = None
+    if torch is not None:
+        torch_obs = torch.from_numpy(obs)
+        assert torch.equal(first(torch_obs), second(torch_obs))
+        assert float(torch.max(torch.abs(first(torch_obs)))) > 1.0e-6
     assert first_meta == second_meta == {
         "mode": "linear_probe", "input_dim": 11, "output_dim": 12, "seed": 17, "scale": 0.05
     }
@@ -152,7 +170,7 @@ def test_schema_v2_smoke_checkpoint_metadata_shape_and_purpose():
             "purpose": "runtime_parity_smoke_only", "trained": False,
             "go2x5_alignment": {
                 "schema_version": 2, "action_dim": 12, "num_arm_actions": 0,
-                "purpose": "parity_smoke", "contract_profile": "s3_deployment_smoke",
+                "purpose": "parity_smoke", "contract_profile": "simple_deployment_smoke_v1",
                 "control_contract": contract,
                 "control_contract_sha256": canonical_json_sha256(contract),
             },

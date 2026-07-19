@@ -25,14 +25,14 @@ env:
   low_policy_path: "../low-level/logs/go2x5-low/go2x5_stable_base_v1/model_17600.pt"
   requireLowPolicyMetadata: True
   lowPolicyNumActions: 12
-  lowPolicyObserveGaitCommands: True
+  lowPolicyObserveGaitCommands: False
   lowPolicyReorderDofs: True
-  lowActionScale: [0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35]
+  lowActionScale: [0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25]
   lowLevelLinVelClip: 0.05
   lowLevelAngVelYawClip: 0.05
   lowLevelAngVelPitchClip: 0.25
   lowFootContactThreshold: 1.5
-  lowEeGoalRanges: [[0.05, 0.60], [-0.30, 0.30], [-0.40, 0.42]]
+  lowEeGoalRanges: [[0.12, 0.50], [-0.20, 0.20], [-0.26, 0.28]]
   robotStartPose: [-0.75, 0.0, 0.32]
   evalRobotStartPose: [-0.70, 0.0, 0.32]
   initialEEGoalCart: [0.30, 0.0, 0.20]
@@ -57,7 +57,7 @@ env:
     baseComOffsetM: [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
 
   lowPolicyContract:
-    action_scale: [0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35, 0.2625, 0.35, 0.35]
+    action_scale: [0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25]
     leg_stiffness: 60.0
     leg_damping: 1.5
     arm_position_stiffness: 110.0
@@ -75,13 +75,13 @@ env:
       max_depenetration_velocity: 1.0
       default_buffer_size_multiplier: 5.0
     action_delay_steps: 0
+    replace_cylinder_with_capsule: false
     command_ranges:
-      lin_vel_x: [-0.2, 0.2]
-      ang_vel_yaw: [-0.3, 0.3]
+      lin_vel_x: [-0.3, 0.3]
+      ang_vel_yaw: [-0.4, 0.4]
     command_dead_zone:
       lin_vel_x: 0.05
       ang_vel_yaw: 0.05
-    gait_frequency: 2.0
     foot_contact_threshold: 1.5
     ee_frame: "TERRAIN_INVARIANT_YAW"
     ik_gain: 0.25
@@ -100,6 +100,7 @@ env:
     objectAssetRoot: "data/asset"
     assetFileRobot: "go2x5/go2_x5.urdf"
     baseBodyName: "base"
+    replaceCylinderWithCapsule: false
     assetFileObj: "obj_set/"
 
     asset_multi:

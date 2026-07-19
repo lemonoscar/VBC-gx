@@ -41,7 +41,7 @@ class FakeEnv:
                 tracking_ee_sigma=1.0,
                 gait_force_sigma=0.5,
             ),
-            env=SimpleNamespace(observe_gait_commands=True),
+            env=SimpleNamespace(observe_gait_commands=False),
             commands=SimpleNamespace(lin_vel_x_clip=0.05, ang_vel_yaw_clip=0.05),
         )
         self.commands = torch.zeros(self.num_envs, 3)
@@ -91,27 +91,16 @@ def test_support_safety_is_mode_aware():
     assert torch.equal(reward._stability_safety(), torch.ones(env.num_envs))
 
 
-def test_correct_trot_beats_four_contact_shuffle_without_losing_ee_reward():
+def test_raw_ee_tracking_is_independent_of_contact_schedule():
     env, reward = make_reward()
-    env.commands[:, 0] = 0.10
-    env.foot_contacts_from_sensor[:] = torch.tensor([False, True, True, False])
-    env.contact_forces[:, 1:3, 2] = 100.0
-    two_safety = reward._stability_safety()
-    two_ee, _ = reward._reward_tracking_ee_world_stable()
-    two_force, _ = reward._reward_tracking_contacts_shaped_force()
-
+    env.curr_ee_goal_cart_world[:, 0] = 0.10
+    first, first_error = reward._reward_tracking_ee_world()
     env.foot_contacts_from_sensor.fill_(True)
     env.contact_forces[:, :, 2] = 100.0
-    four_safety = reward._stability_safety()
-    four_ee, _ = reward._reward_tracking_ee_world_stable()
-    four_force, _ = reward._reward_tracking_contacts_shaped_force()
-
-    two_weighted = two_safety + two_force + 0.8 * two_ee
-    four_weighted = four_safety + four_force + 0.8 * four_ee
-    assert torch.equal(two_safety, four_safety)
-    assert torch.equal(two_ee, four_ee)
-    assert torch.all(two_force > four_force)
-    assert torch.all(two_weighted > four_weighted)
+    second, second_error = reward._reward_tracking_ee_world()
+    assert torch.equal(first, second)
+    assert torch.equal(first_error, second_error)
+    assert torch.all(first > 0)
 
 
 def test_vertical_velocity_penalty_does_not_consume_yaw_command():

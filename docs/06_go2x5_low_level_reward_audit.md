@@ -17,7 +17,7 @@ python3 low-level/legged_gym/scripts/audit_go2x5_low_level_rewards.py --output d
 - Env reward aggregation: `low-level/legged_gym/envs/manip_loco/manip_loco.py:398`
 - PPO two-channel reward storage: `third_party/rsl_rl/rsl_rl/algorithms/ppo.py:129`, `third_party/rsl_rl/rsl_rl/storage/rollout_storage.py:56`
 - only_positive_rewards: `False`
-- observe_gait_commands: `True`
+- observe_gait_commands: `False`
 - base_height_target: `0.32`
 - tracking_sigma: `0.2`
 - tracking_ee_sigma: `1.0`
@@ -25,7 +25,7 @@ python3 low-level/legged_gym/scripts/audit_go2x5_low_level_rewards.py --output d
 - collision_soft_clip: `50.0`
 - feet_height_target: `0.12`
 - max_contact_force: `200.0`
-- Active leg reward terms: `27`
+- Active leg reward terms: `21`
 - Active arm reward terms: `1`
 - Reward implementations with reviewed metadata: `74/74`
 - PPO policy num_leg_actions: `12`
@@ -54,119 +54,45 @@ Reward aggregation details:
 ## Main Findings
 
 1. Every reward implementation has reviewed semantics, and no active or curriculum-stage sign mismatch was found.
-2. Stability support is mode-aware: stopped posture requires at least three contacts, while commanded gait receives full safety and EE reward with the intended two diagonal contacts.
-3. Gait contact shaping is zero for stopped commands and uses positive coefficients because its raw values are non-positive penalties.
-4. Air-time uses the configured 0.25 s target for the 2 Hz/50% swing gait, and air-time/clearance shaping covers all four feet.
-5. `tracking_ee_world` uses `arm_eef_link` world position and is an active PPO reward channel. With `num_arm_actions=0`, its effect on the low-level 12D leg policy comes through PPO advantage mixing, ramped by `mixing_schedule=[1.0, 0, 3000]`.
+2. No named gait is prescribed: gait-clock observations, contact-phase shaping, swing-height shaping, and walking-posture shaping are disabled.
+3. From iteration zero, 75% of sampled commands request motion and 25% request an explicit stop, so locomotion cannot be deferred behind a standing-only stage.
+4. Locomotion is rewarded through velocity tracking and generic all-foot air-time, while foot drag, collision, vertical motion, roll, and action rate remain penalized.
+5. `tracking_ee_world` uses `arm_eef_link` world position and is an active raw PPO reward channel. It is not multiplied by a height/support gate, so crouching can improve low terrain-fixed reach targets.
 6. `collision` sign is correct, but the resolved penalized set is thigh/calf only. Base, arm, wrist, and finger contacts are intentionally outside this term so future end-effector interaction is not forbidden.
 7. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.
-8. S3 isolates small forward gait and cannot advance on the previously observed four-contact shuffle metrics; S4 restores bidirectional velocity, yaw, and full reach.
+8. The curriculum has only two deterministic stages: S0 learns locomotion plus central reach, then S1 expands to bidirectional commands and crouch-assisted reach.
 
 ## Active Reward Audit Table
 
 | term | channel | scale | raw meaning | expected sign | sign check | source | dependency | Go2-X5 migration risk | verification |
 |---|---:|---:|---|---:|---|---|---|---|---|
+| `feet_air_time` | leg | 1.0 | sum((feet_air_time - configured target) on first contact) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:609` | force_sensor_tensor order and per-foot contact timing | This generic stepping incentive must cover all four feet without prescribing their phase relationship. | Touch each foot independently; first contact below/above 0.25 s should contribute negative/positive air-time margin. |
+| `tracking_lin_vel_max` | leg | 2.0 | velocity progress ratio for x command; zero command uses exp(-abs(base_vx)) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:539` | commands[:,0], base_lin_vel[:,0] in base frame | Sign is correct; overspeed is weakly penalized because the ratio saturates at 1. | Probe command vx {-0.5,0,0.5} and base vx offsets; weighted reward should be highest near command. |
+| `tracking_ang_vel` | leg | 0.5 | exp(-square(command_yaw - base_yaw_rate) / tracking_sigma) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:218` | commands[:,2], base_ang_vel[:,2] | Sign is correct; confirm command yaw is not confused with vertical linear velocity in any caller. | Probe yaw-rate error 0, small, large; weighted reward should monotonically decrease with error. |
 | `torques` | leg | -2.5e-05 | sum(square(all torques)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:194` | torques tensor, leg plus zero arm/gripper torque convention | Sign is correct; with low-level 12D actions arm torques should not dominate this term. | Check per-joint torque contribution; arm/gripper entries should be zero or intentionally excluded. |
-| `stand_still` | leg | 3.0 | exp(-0.05 * leg dof L1 deviation from default), standing commands only | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:253` | default_dof_pos, walking command mask | Sign is correct; too much weight can oppose crouching needed for low EE goals. | With zero command, perturb leg default pose and confirm reward is highest at default. |
-| `alive` | leg | 3.0 | constant 1 | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:298` | episode survival only | Sign is correct; this is a survival baseline, not a behavior-specific signal. | Confirm the term is constant and termination penalties are handled separately. |
+| `stand_still` | leg | 1.0 | exp(-0.05 * leg dof L1 deviation from default), standing commands only | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:253` | default_dof_pos, walking command mask | Sign is correct; too much weight can oppose crouching needed for low EE goals. | With zero command, perturb leg default pose and confirm reward is highest at default. |
+| `alive` | leg | 1.0 | constant 1 | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:298` | episode survival only | Sign is correct; this is a survival baseline, not a behavior-specific signal. | Confirm the term is constant and termination penalties are handled separately. |
 | `termination` | leg | -100.0 | 1 on non-timeout reset, otherwise 0 | - | OK | `low-level/legged_gym/envs/manip_loco/manip_loco.py:689` | reset_buf and time_out_buf after roll/pitch/height/contact checks | A wrong sign rewards falls; counting timeouts would also punish successful full episodes. | Trigger roll, pitch, height, and timeout resets; only non-timeout resets must receive the penalty. |
-| `lin_vel_z` | leg | -5.0 | square(base_lin_vel_z) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:210` | base linear velocity in base frame | Sign is correct; excessive vertical oscillation should be penalized. | Inject upward/downward base z velocity; weighted reward should become more negative. |
-| `roll` | leg | -8.0 | abs(base roll) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:422` | base_quat to roll extraction | Sign is correct; pitch is not directly penalized by this active term. | Probe roll {0, 0.2, 0.5}; weighted reward should monotonically decrease. |
-| `ang_vel_xy` | leg | -2.0 | sum(square(base angular velocity x/y)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:214` | base_ang_vel x/y | Sign is correct; complements roll but does not replace pitch/orientation checks. | Inject roll/pitch angular velocity; weighted reward should become more negative. |
-| `dof_acc` | leg | -1e-06 | sum(square((last_dof_vel - dof_vel) / dt) over leg joints) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:227` | leg dof velocity order | Sign is correct; confirms smoothness, not migration correctness by itself. | Apply a velocity jump to one leg joint and confirm the expected joint contribution increases. |
-| `collision` | leg | -8.0 | sum(clamp(norm(contact_force on penalized bodies)-threshold, 0, soft_clip)/threshold) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:245` | penalized_contact_indices from asset.penalize_contacts_on substrings | Sign is correct, but current body set is thigh/calf only; base and arm contacts are not penalized here. | Print resolved penalized body names; manually create thigh/calf/base/arm contacts and confirm only intended bodies count. |
-| `action_rate` | leg | -0.03 | sum(square(last_actions - actions) over leg actions) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:231` | policy action order before/after _reindex_all | Sign is correct; action-order bugs can still hide behind a smooth but wrong action stream. | Pulse policy FR hip action and confirm the smoothness term uses the policy-order action history consistently. |
+| `lin_vel_z` | leg | -1.5 | square(base_lin_vel_z) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:210` | base linear velocity in base frame | Sign is correct; excessive vertical oscillation should be penalized. | Inject upward/downward base z velocity; weighted reward should become more negative. |
+| `roll` | leg | -2.0 | abs(base roll) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:422` | base_quat to roll extraction | Sign is correct; pitch is not directly penalized by this active term. | Probe roll {0, 0.2, 0.5}; weighted reward should monotonically decrease. |
+| `ang_vel_xy` | leg | -0.2 | sum(square(base angular velocity x/y)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:214` | base_ang_vel x/y | Sign is correct; complements roll but does not replace pitch/orientation checks. | Inject roll/pitch angular velocity; weighted reward should become more negative. |
+| `dof_acc` | leg | -7.5e-07 | sum(square((last_dof_vel - dof_vel) / dt) over leg joints) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:227` | leg dof velocity order | Sign is correct; confirms smoothness, not migration correctness by itself. | Apply a velocity jump to one leg joint and confirm the expected joint contribution increases. |
+| `collision` | leg | -10.0 | sum(clamp(norm(contact_force on penalized bodies)-threshold, 0, soft_clip)/threshold) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:245` | penalized_contact_indices from asset.penalize_contacts_on substrings | Sign is correct, but current body set is thigh/calf only; base and arm contacts are not penalized here. | Print resolved penalized body names; manually create thigh/calf/base/arm contacts and confirm only intended bodies count. |
+| `action_rate` | leg | -0.015 | sum(square(last_actions - actions) over leg actions) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:231` | policy action order before/after _reindex_all | Sign is correct; action-order bugs can still hide behind a smooth but wrong action stream. | Pulse policy FR hip action and confirm the smoothness term uses the policy-order action history consistently. |
 | `dof_pos_limits` | leg | -10.0 | sum soft joint-limit violation over leg joints | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:235` | dof_pos_limits, URDF leg dof order | Sign is correct; verify Go2-X5 URDF limits are not inherited from B1/Z1 or too tight after mimic edits. | Sweep each leg joint near lower/upper limit; raw should be zero inside and positive outside soft range. |
 | `delta_torques` | leg | -1e-07 | sum(square(torques - last_torques) over leg joints) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:241` | leg torque order after action reindexing | Sign is correct; magnitude can hide action-order bugs if torques are assigned to wrong legs. | Apply a one-joint action impulse and confirm only the expected URDF leg torque changes. |
-| `hip_pos` | leg | -0.5 | sum(square(hip dofs - default hip dofs)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:267` | hip_indices = FR,FL,RR,RL names resolved in URDF dof_names | Sign is correct; name lookup avoids relying on URDF order, but default angles must match Go2-X5. | Print hip_indices and dof_names; perturb each hip and check only that hip contributes. |
+| `hip_pos` | leg | -0.3 | sum(square(hip dofs - default hip dofs)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:267` | hip_indices = FR,FL,RR,RL names resolved in URDF dof_names | Sign is correct; name lookup avoids relying on URDF order, but default angles must match Go2-X5. | Print hip_indices and dof_names; perturb each hip and check only that hip contributes. |
 | `work` | leg | -0.003 | abs(sum(torque * dof_vel over leg joints)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:222` | leg torque and velocity order | Sign is correct; can penalize useful work as well as waste. | Probe zero velocity, co-directed torque/velocity, and opposing torque/velocity; magnitude should increase away from zero. |
 | `feet_jerk` | leg | -0.0002 | sum(norm(force_sensor_tensor - last_contact_forces)) after first 50 steps | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:285` | force_sensor_tensor order and contact sensor stability | Sign is correct; noisy force sensors on rough terrain can inject high-variance penalty. | Log raw term on flat standing and rough stepping; it should not dominate early reward breakdown. |
-| `feet_drag` | leg | -0.25 | sum foot xyz velocity for feet detected in contact | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:302` | feet_indices and force_sensor_tensor contact booleans | Sign is correct; requires feet_indices and force_sensor_tensor to describe the same FL,FR,RL,RR order. | Slide one contacting foot in sim; raw should increase only for that foot. |
-| `foot_lateral_spacing` | leg | -2.0 | sum lateral-width shortfall for FL/RL on +y and FR/RR on -y | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:271` | URDF foot order FL,FR,RL,RR and yaw-frame foot positions | An incorrect foot order or side sign would reward crossed legs. | Move each foot toward and across the sagittal centerline; only the corresponding shortfall should increase. |
+| `feet_drag` | leg | -0.15 | sum foot xyz velocity for feet detected in contact | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:302` | feet_indices and force_sensor_tensor contact booleans | Sign is correct; requires feet_indices and force_sensor_tensor to describe the same FL,FR,RL,RR order. | Slide one contacting foot in sim; raw should increase only for that foot. |
 | `feet_contact_forces` | leg | -0.001 | sum(max(norm(force_sensor_tensor)-max_contact_force, 0)) after 2 seconds | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:308` | force_sensor_tensor and max_contact_force | Sign is correct; max_contact_force=200 makes it a high-force limiter, not normal contact shaping. | Inspect force histograms; raw should be near zero for nominal stance and positive for impacts. |
-| `feet_contact_standing` | leg | -2.0 | number of feet off ground while the command is stopped | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:314` | force-sensor contact booleans and walking command mask | A bad contact threshold can penalize a nominal four-foot stance. | At zero command lift one foot at a time; the raw penalty should rise by one and be zero while walking. |
-| `hind_feet_contact_standing` | leg | -2.5 | number of RL/RR feet off ground while the command is stopped | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:323` | force-sensor order FL,FR,RL,RR and walking command mask | A migrated foot order could constrain the front pair instead of the rear support pair. | Lift FL, FR, RL, RR independently; only RL/RR should contribute while stopped. |
-| `foot_support_standing` | leg | -2.0 | max(min_stance_feet - contact_count, 0) while stopped | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:332` | four force-sensor contact booleans and walking command mask | A flickering contact threshold can create a high-variance standing penalty. | Sweep contact count 4,3,2,1 at zero command; raw penalty should be 0,0,1,2. |
-| `pitch_soft_limit_standing` | leg | -2.0 | max(abs(pitch) - configured soft limit, 0) while stopped | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:458` | full base quaternion and walking command mask | Too tight a limit prevents body compensation needed for low EE targets. | Sweep pitch below and above 0.35 rad; penalty must be zero below it and disabled while walking. |
-| `orientation` | leg | -3.0 | sum(square(projected_gravity_xy)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:417` | base quaternion and gravity vector | This base penalty is independent of the position-only EE orientation setting. | Sweep base roll/pitch around identity; the minimum must occur at level orientation. |
-| `base_height` | leg | -6.0 | abs((root_z - mean(measured_heights)) - base_height_target) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:431` | root_states[:,2], measured_heights, base_height_target | Sign is correct for target 0.32; terrain height sampling must be valid under Go2-X5 footprint. | Probe flat base z 0.24/0.32/0.41; weighted reward should be best at 0.32. |
-| `stability_safety` | leg | 1.0 | product of roll, pitch, terrain-relative height, and gait-aware support margins (standing >=3, walking >=2) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:82` | base attitude, measured heights, force-sensor contacts, and walking command mask | A fixed three-foot gate contradicts the intended two-foot diagonal trot and rewards all-four-foot shuffling. | Require three contacts when stopped and two while walking; correct two-contact trot and four-contact support must have equal safety. |
-| `dof_error_deadzone` | leg | -1.0 | sum(square(max(abs(leg_q-default_q)-deadzone, 0))) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:533` | URDF leg joint order and default pose | Wrong default angles or leg slicing penalize the intended nominal stance. | Perturb each leg joint within and beyond the dead zone; only excess displacement should contribute. |
-| `leg_action_l2_deadzone` | leg | -0.1 | sum(square(max(abs(applied_leg_action)-deadzone, 0))) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:142` | 12D applied leg action in URDF order | An overly small dead zone can suppress useful corrective actions during early learning. | Sweep one action around the dead zone; penalty must be zero inside and quadratic outside. |
-| `tracking_ee_world_stable` | arm | 0.2 | world-position EE tracking reward multiplied by the stability safety margin | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:78` | arm_eef_link world position, EE world target, attitude, height, and foot contacts | The support gate must protect standing without zeroing EE reward during the intended two-foot trot. | Compare exact EE tracking in stable four-foot stance and stable two-foot walking support; both must retain the same body-safe EE reward. |
+| `base_height` | leg | -1.0 | abs((root_z - mean(measured_heights)) - base_height_target) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:431` | root_states[:,2], measured_heights, base_height_target | Sign is correct for target 0.32; terrain height sampling must be valid under Go2-X5 footprint. | Probe flat base z 0.24/0.32/0.41; weighted reward should be best at 0.32. |
+| `tracking_ee_world` | arm | 0.4 | exp(-2 * L1(ee_pos - curr_ee_goal_cart_world) / tracking_ee_sigma) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:17` | gripper_idx=arm_eef_link, ee_pos rigid body state, world-frame EE goal | Sign is correct; with num_arm_actions=0 it influences the leg policy through PPO reward mixing, not a separate arm action head. | Set goal exactly at arm_eef_link and then offset x/y/z; raw should be highest at zero offset and decay monotonically. |
 
 ## Curriculum Reward Overrides
 
 | stage | term | scale | expected sign | sign check |
 |---|---|---:|---:|---|
-| `S0_safe_small_reach` | `collision` | -8.0 | - | OK |
-| `S0_safe_small_reach` | `orientation` | -3.0 | - | OK |
-| `S0_safe_small_reach` | `foot_lateral_spacing` | -2.0 | - | OK |
-| `S0_safe_small_reach` | `feet_contact_standing` | -2.0 | - | OK |
-| `S0_safe_small_reach` | `hind_feet_contact_standing` | -2.5 | - | OK |
-| `S0_safe_small_reach` | `foot_support_standing` | -2.0 | - | OK |
-| `S0_safe_small_reach` | `dof_error_deadzone` | -1.0 | - | OK |
-| `S0_safe_small_reach` | `leg_action_l2_deadzone` | -0.1 | - | OK |
-| `S0_safe_small_reach` | `stability_safety` | 1.0 | + | OK |
-| `S0_safe_small_reach` | `tracking_lin_vel_max` | 0.0 | + | DISABLED |
-| `S0_safe_small_reach` | `walking_dof` | 0.0 | + | DISABLED |
-| `S0_safe_small_reach` | `tracking_contacts_shaped_force` | 0.0 | + | DISABLED |
-| `S0_safe_small_reach` | `tracking_contacts_shaped_vel` | 0.0 | + | DISABLED |
-| `S0_safe_small_reach` | `tracking_ee_world_stable` | 0.2 | + | OK |
-| `S1_mid_reach_compensation` | `collision` | -10.0 | - | OK |
-| `S1_mid_reach_compensation` | `orientation` | -3.0 | - | OK |
-| `S1_mid_reach_compensation` | `foot_lateral_spacing` | -2.0 | - | OK |
-| `S1_mid_reach_compensation` | `feet_contact_standing` | -2.0 | - | OK |
-| `S1_mid_reach_compensation` | `hind_feet_contact_standing` | -2.5 | - | OK |
-| `S1_mid_reach_compensation` | `foot_support_standing` | -2.0 | - | OK |
-| `S1_mid_reach_compensation` | `dof_error_deadzone` | -0.8 | - | OK |
-| `S1_mid_reach_compensation` | `leg_action_l2_deadzone` | -0.08 | - | OK |
-| `S1_mid_reach_compensation` | `stability_safety` | 1.0 | + | OK |
-| `S1_mid_reach_compensation` | `tracking_ee_world_stable` | 0.4 | + | OK |
-| `S2_full_reach_compensation` | `collision` | -12.0 | - | OK |
-| `S2_full_reach_compensation` | `orientation` | -3.0 | - | OK |
-| `S2_full_reach_compensation` | `foot_lateral_spacing` | -1.5 | - | OK |
-| `S2_full_reach_compensation` | `feet_contact_standing` | -1.5 | - | OK |
-| `S2_full_reach_compensation` | `hind_feet_contact_standing` | -2.0 | - | OK |
-| `S2_full_reach_compensation` | `foot_support_standing` | -1.5 | - | OK |
-| `S2_full_reach_compensation` | `dof_error_deadzone` | -0.5 | - | OK |
-| `S2_full_reach_compensation` | `leg_action_l2_deadzone` | -0.05 | - | OK |
-| `S2_full_reach_compensation` | `stability_safety` | 1.0 | + | OK |
-| `S2_full_reach_compensation` | `tracking_ee_world_stable` | 0.8 | + | OK |
-| `S3_forward_gait_initiation` | `collision` | -12.0 | - | OK |
-| `S3_forward_gait_initiation` | `orientation` | -3.0 | - | OK |
-| `S3_forward_gait_initiation` | `foot_lateral_spacing` | -1.5 | - | OK |
-| `S3_forward_gait_initiation` | `feet_contact_standing` | -1.0 | - | OK |
-| `S3_forward_gait_initiation` | `hind_feet_contact_standing` | -1.5 | - | OK |
-| `S3_forward_gait_initiation` | `foot_support_standing` | -1.0 | - | OK |
-| `S3_forward_gait_initiation` | `dof_error_deadzone` | -0.1 | - | OK |
-| `S3_forward_gait_initiation` | `leg_action_l2_deadzone` | -0.01 | - | OK |
-| `S3_forward_gait_initiation` | `stability_safety` | 1.0 | + | OK |
-| `S3_forward_gait_initiation` | `tracking_lin_vel_max` | 2.0 | + | OK |
-| `S3_forward_gait_initiation` | `tracking_ang_vel` | 0.0 | + | DISABLED |
-| `S3_forward_gait_initiation` | `walking_dof` | 0.0 | + | DISABLED |
-| `S3_forward_gait_initiation` | `tracking_contacts_shaped_force` | 1.0 | + | OK |
-| `S3_forward_gait_initiation` | `tracking_contacts_shaped_vel` | 0.5 | + | OK |
-| `S3_forward_gait_initiation` | `feet_air_time` | 0.5 | + | OK |
-| `S3_forward_gait_initiation` | `feet_height` | 1.0 | + | OK |
-| `S3_forward_gait_initiation` | `tracking_ee_world_stable` | 0.2 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `collision` | -12.0 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `orientation` | -3.0 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `foot_lateral_spacing` | -1.5 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `feet_contact_standing` | -1.0 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `hind_feet_contact_standing` | -1.5 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `foot_support_standing` | -1.0 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `dof_error_deadzone` | -0.3 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `leg_action_l2_deadzone` | -0.03 | - | OK |
-| `S4_bidirectional_locomotion_reach` | `stability_safety` | 1.0 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `tracking_lin_vel_max` | 2.0 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `tracking_ang_vel` | 0.5 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `walking_dof` | 0.0 | + | DISABLED |
-| `S4_bidirectional_locomotion_reach` | `tracking_contacts_shaped_force` | 1.0 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `tracking_contacts_shaped_vel` | 0.5 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `feet_air_time` | 0.5 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `feet_height` | 1.0 | + | OK |
-| `S4_bidirectional_locomotion_reach` | `tracking_ee_world_stable` | 0.8 | + | OK |
 
 ## Disabled But Migration-Relevant Terms
 
@@ -174,22 +100,28 @@ Reward aggregation details:
 |---|---:|---|---|
 | `tracking_contacts_shaped_force` | 0.0 | When enabled, the coefficient must remain positive or bad off-phase contact becomes positive reward. | Enable observe_gait_commands in a small probe; inject off-phase foot force and confirm weighted reward decreases. |
 | `tracking_contacts_shaped_vel` | 0.0 | When enabled, the coefficient must remain positive and must not read an advanced-indexed cache that is never refreshed. | Inject stance-foot velocity into live rigid_body_state, refresh the cache, and confirm both the raw reward and cache value change. |
-| `feet_air_time` | 0.0 | The target must match the configured gait period; all four feet should contribute to a quadruped gait. | At 2 Hz and 50% swing, verify first contact near 0.25 s is neutral and longer air time is positive. |
 | `feet_height` | 0.0 | Each desired-swing foot must clear independently; one high foot must not mask another low foot. | Sweep each foot z independently; only the low desired-swing foot should contribute clearance error. |
-| `tracking_lin_vel_max` | 0.0 | Sign is correct; overspeed is weakly penalized because the ratio saturates at 1. | Probe command vx {-0.5,0,0.5} and base vx offsets; weighted reward should be highest near command. |
 | `tracking_lin_vel_x_l1` | 0.0 | Near-zero command normalization is sensitive to the stop threshold. | Probe positive, negative, and stopped commands. |
 | `tracking_lin_vel_x_exp` | 0 | A high baseline at zero motion can be weak for small commands. | Sweep signed x tracking errors. |
-| `tracking_ang_vel` | 0.0 | Sign is correct; confirm command yaw is not confused with vertical linear velocity in any caller. | Probe yaw-rate error 0, small, large; weighted reward should monotonically decrease with error. |
-| `walking_dof` | 0.0 | It biases walking toward the default crouch and is intentionally disabled in Go2-X5 S3 after the v3 no-step failure. | Keep the S3 scale at zero unless a gait-amplitude ablation proves the term cannot dominate swing rewards. |
+| `walking_dof` | 0.0 | It biases motion toward the default crouch and can recreate a no-step local optimum. | Keep it disabled unless an explicit ablation proves it does not suppress useful locomotion amplitude. |
 | `dof_default_pos` | 0.0 | Enabling it during gait can recreate the no-step default-pose optimum. | Confirm maximum at the default pose and keep disabled for locomotion without an ablation. |
 | `dof_error` | 0.0 | Wrong DOF order penalizes the wrong joints. | Perturb one named leg joint and confirm a positive quadratic error. |
+| `foot_lateral_spacing` | 0.0 | An incorrect foot order or side sign would reward crossed legs. | Move each foot toward and across the sagittal centerline; only the corresponding shortfall should increase. |
 | `height_adaptation` | 0.0 | Absolute world height breaks on nonzero terrain origins. | Translate terrain, root, and EE goal together; the value must remain invariant. |
 | `low_goal_front_leg_bend` | 0.0 | Wrong leg indices or absolute world z shape the wrong posture. | Lower the EE goal and bend each front/rear leg independently. |
 | `low_goal_posture_asymmetry` | 0.0 | Incorrect joint signs reward the opposite posture. | Compare front-only, rear-only, and symmetric crouches. |
 | `low_goal_hind_leg_extension` | 0.0 | Wrong indices reward hind-leg crouch instead of extension. | Lower the goal and perturb RL/RR thigh/calf joints independently. |
 | `low_goal_hind_support_force` | 0.0 | Foot-order errors swap front and hind support. | Inject front/hind forces independently and verify the ratio. |
+| `feet_contact_standing` | 0.0 | A bad contact threshold can penalize a nominal four-foot stance. | At zero command lift one foot at a time; the raw penalty should rise by one and be zero while walking. |
+| `hind_feet_contact_standing` | 0.0 | A migrated foot order could constrain the front pair instead of the rear support pair. | Lift FL, FR, RL, RR independently; only RL/RR should contribute while stopped. |
+| `foot_support_standing` | 0.0 | A flickering contact threshold can create a high-variance standing penalty. | Sweep contact count 4,3,2,1 at zero command; raw penalty should be 0,0,1,2. |
+| `pitch_soft_limit_standing` | 0.0 | Too tight a limit prevents body compensation needed for low EE targets. | Sweep pitch below and above 0.35 rad; penalty must be zero below it and disabled while walking. |
+| `orientation` | 0.0 | This base penalty is independent of the position-only EE orientation setting. | Sweep base roll/pitch around identity; the minimum must occur at level orientation. |
 | `orientation_walking` | 0.0 | Mask inversion penalizes the wrong mode. | Probe tilted base in stopped and walking modes. |
 | `orientation_standing` | 0.0 | Mask inversion penalizes the wrong mode. | Probe tilted base in stopped and walking modes. |
+| `stability_safety` | 0.0 | Any contact-count gate can favor one support pattern and suppress otherwise valid emergent locomotion. | Keep the term disabled in the simple profile; if restored, test valid walk, trot, and transition contacts independently. |
+| `dof_error_deadzone` | 0.0 | Wrong default angles or leg slicing penalize the intended nominal stance. | Perturb each leg joint within and beyond the dead zone; only excess displacement should contribute. |
+| `leg_action_l2_deadzone` | 0.0 | An overly small dead zone can suppress useful corrective actions during early learning. | Sweep one action around the dead zone; penalty must be zero inside and quadratic outside. |
 | `torques_walking` | 0.0 | Incorrect wrapper dispatch or mask makes it unsafe to enable. | Call directly in both command modes. |
 | `torques_standing` | 0.0 | Incorrect wrapper dispatch or mask makes it unsafe to enable. | Call directly in both command modes. |
 | `energy_square` | 0.0 | Large scale can suppress useful gait motion. | Check zero at zero torque or velocity and quadratic growth otherwise. |
@@ -199,7 +131,7 @@ Reward aggregation details:
 | `base_height_standing` | 0.0 | Mask inversion would constrain walking instead of standing. | Check zero/nonzero commands at target and offset heights. |
 | `penalty_lin_vel_y` | 0.0 | Suppressing it during every turn can permit lateral drift. | Probe lateral velocity with zero and nonzero yaw commands. |
 | `tracking_ee_sphere` | 0.0 | Cartesian-mode Go2-X5 does not normally activate this legacy path. | Set an exact spherical target and offset each coordinate. |
-| `tracking_ee_world` | 0.0 | Sign is correct; with num_arm_actions=0 it influences the leg policy through PPO reward mixing, not a separate arm action head. | Set goal exactly at arm_eef_link and then offset x/y/z; raw should be highest at zero offset and decay monotonically. |
+| `tracking_ee_world_stable` | 0.0 | The support/height multiplier can zero the coordination signal precisely when crouching or stepping is required. | Keep it disabled in the simple profile and use raw world-position EE tracking for body-arm coordination. |
 | `tracking_ee_sphere_walking` | 0.0 | Wrapper must call the reward container, not a nonexistent env method. | Call directly in both command modes. |
 | `tracking_ee_sphere_standing` | 0.0 | Wrapper must call the reward container, not a nonexistent env method. | Call directly in both command modes. |
 | `tracking_ee_cart` | None | Frame mismatch can reward the wrong world target. | Translate/yaw the base and reconstruct the expected world target independently. |
@@ -211,7 +143,7 @@ Reward aggregation details:
 
 Static analysis can verify sign consistency and dependency wiring, but it cannot prove that Isaac Gym rigid-body/contact tensors have the expected values at runtime. Before launching a long low-level run, run these probes:
 
-1. Gait-aware support oracle: standing 2/3 contacts must yield safety 0/1; walking 2/4 contacts must both yield safety 1, and correct two-contact phase must beat all-four contact after weighted gait terms.
+1. Emergent-locomotion oracle: gait clocks must remain absent, contact-phase rewards must remain zero, and nonzero velocity commands must produce finite observations and rewards.
 2. Base-height monotonicity: set flat-terrain root z near `0.24, 0.32, 0.41`; `base_height` weighted contribution must be best at `0.32`.
 3. Contact identity: touch `FL_foot, FR_foot, RL_foot, RR_foot` one at a time and confirm `force_sensor_tensor` order is `FL,FR,RL,RR`, while policy observation order is `FR,FL,RR,RL`.
 4. Collision identity: create contact on a thigh, calf, base, arm link, and finger link; only thigh/calf should affect current `collision`.
@@ -222,6 +154,6 @@ Static analysis can verify sign consistency and dependency wiring, but it cannot
 ## Interpretation
 
 The current Go2-X5 low-level reward set is sign-consistent and all reward implementations have reviewed metadata.
-The static contract also rejects the fixed three-foot walking gate and a curriculum that can skip gait acquisition.
+The static contract rejects any reintroduction of a named gait and any curriculum that postpones locomotion until a late stage.
 Static signs do not prove simulator tensor identity, terrain-relative height semantics, or reset behavior.
 Runtime acceptance therefore also requires the listed monotonicity and identity probes; their executed status is recorded in the dated training-readiness report.
