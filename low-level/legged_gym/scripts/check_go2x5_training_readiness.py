@@ -37,6 +37,7 @@ from isaacgym.torch_utils import orientation_error  # noqa: E402
 import torch  # noqa: E402
 
 from legged_gym.envs import *  # noqa: E402,F401,F403
+from legged_gym.envs.manip_loco import go2x5_robot_spec  # noqa: E402
 from legged_gym.utils import get_args, task_registry  # noqa: E402
 
 
@@ -139,6 +140,36 @@ def probe_rewards(env, checks):
         and abs(float(env.cfg.rewards.base_height_target) - 0.32) <= 1e-9,
         initial=float(env.cfg.init_state.pos[2]),
         target=float(env.cfg.rewards.base_height_target),
+    )
+    center = [
+        float(env.cfg.goal_ee.sphere_center.x_offset),
+        float(env.cfg.goal_ee.sphere_center.y_offset),
+        float(env.cfg.goal_ee.sphere_center.z_invariant_offset),
+    ]
+    local_ranges = [
+        list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
+    ]
+    world_ranges = [
+        [round(center[axis] + limit, 6) for limit in local_ranges[axis]]
+        for axis in range(3)
+    ]
+    checks.require(
+        "contract/front_ee_workspace",
+        center == go2x5_robot_spec.EE_GOAL_CENTER_OFFSET
+        and local_ranges == go2x5_robot_spec.EE_GOAL_LOCAL_RANGES
+        and world_ranges == go2x5_robot_spec.EE_GOAL_WORLD_RANGES,
+        center=center,
+        local_ranges=local_ranges,
+        world_ranges=world_ranges,
+    )
+    arm_default = env.default_dof_pos[-8:-2].detach().cpu().tolist()
+    checks.require(
+        "contract/forward_ready_arm_pose",
+        all(
+            abs(actual - expected) <= 1.0e-6
+            for actual, expected in zip(arm_default, go2x5_robot_spec.ARM_READY_JOINT_ANGLES)
+        ),
+        arm_default=arm_default,
     )
     expected_scale = torch.tensor(
         [0.125, 0.25, 0.25] * 4, device=env.device, dtype=env.action_scale.dtype
@@ -435,10 +466,14 @@ def probe_curriculum(env, checks):
     checks.require(
         "curriculum/final_contract",
         env.command_ranges["lin_vel_x"] == [-0.30, 0.30]
-        and env.goal_ee_ranges["pos_z"] == [-0.26, 0.28]
+        and [
+            list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
+        ] == go2x5_robot_spec.EE_GOAL_LOCAL_RANGES
         and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 0.8) <= 1e-9,
         command_range=list(env.command_ranges["lin_vel_x"]),
-        goal_z=list(env.goal_ee_ranges["pos_z"]),
+        goal_ranges=[
+            list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
+        ],
     )
 
 

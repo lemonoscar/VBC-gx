@@ -94,8 +94,18 @@ def _print_static_summary(env_cfg, env):
     print(f"init_state.pos: {env_cfg.init_state.pos}")
     print(f"base_height_target: {env_cfg.rewards.base_height_target}")
     print(f"goal sphere center: x={env_cfg.goal_ee.sphere_center.x_offset}, z={env_cfg.goal_ee.sphere_center.z_invariant_offset}")
-    print(f"goal pos_l: {env_cfg.goal_ee.ranges.pos_l}")
-    print(f"goal pos_p: {env_cfg.goal_ee.ranges.pos_p}")
+    print(
+        "goal local xyz: "
+        f"x={env_cfg.goal_ee.ranges.pos_x}, "
+        f"y={env_cfg.goal_ee.ranges.pos_y_cart}, "
+        f"z={env_cfg.goal_ee.ranges.pos_z}"
+    )
+    print(
+        "goal root/terrain xyz: "
+        f"x={[round(env_cfg.goal_ee.sphere_center.x_offset + value, 3) for value in env_cfg.goal_ee.ranges.pos_x]}, "
+        f"y={env_cfg.goal_ee.ranges.pos_y_cart}, "
+        f"z={[round(env_cfg.goal_ee.sphere_center.z_invariant_offset + value, 3) for value in env_cfg.goal_ee.ranges.pos_z]}"
+    )
     print(f"num_actions={env.num_actions}, num_torques={env.num_torques}, num_dofs={env.num_dofs}, num_bodies={env.num_bodies}")
     print(f"dof_names: {env.dof_names}")
     print(f"gripper_idx: {env.gripper_idx}")

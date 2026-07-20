@@ -140,6 +140,21 @@ class B1Z1Base(RewardVecTask):
         self.robot_start_pose = resolve_robot_start_pose(
             self.cfg["env"], robot_start_pose=robot_start_pose, eval_mode=eval
         )
+        self.robot_reset_position_range_xy = self.cfg["env"].get("robotResetPositionRangeXY")
+        self.robot_reset_yaw_range = self.cfg["env"].get("robotResetYawRange")
+        if self.robot_reset_position_range_xy is not None:
+            if (
+                len(self.robot_reset_position_range_xy) != 2
+                or any(float(value) < 0.0 for value in self.robot_reset_position_range_xy)
+            ):
+                raise ValueError(
+                    "robotResetPositionRangeXY must contain two non-negative values, "
+                    f"got {self.robot_reset_position_range_xy}"
+                )
+        if self.robot_reset_yaw_range is not None and float(self.robot_reset_yaw_range) < 0.0:
+            raise ValueError(
+                f"robotResetYawRange must be non-negative, got {self.robot_reset_yaw_range}"
+            )
 
         self._extra_env_settings()
         
@@ -414,7 +429,19 @@ class B1Z1Base(RewardVecTask):
         self.curr_ee_goal_cart = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float)
         self.ee_goal_world = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float)
         self.curr_ee_goal_orn_rpy = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float)
-        self.ee_goal_center_offset = torch.tensor([0.3, 0.0, 0.7], device=self.device).repeat(self.num_envs, 1)
+        if self.ee_frame == "TERRAIN_INVARIANT_YAW":
+            default_goal_center_offset = [
+                self.arm_base_offset_cfg[0],
+                self.arm_base_offset_cfg[1],
+                self.robot_start_pose[2] + self.arm_base_offset_cfg[2],
+            ]
+        else:
+            default_goal_center_offset = [0.3, 0.0, 0.7]
+        self.ee_goal_center_offset = torch.tensor(
+            self.cfg["env"].get("eeGoalCenterOffset", default_goal_center_offset),
+            device=self.device,
+            dtype=torch.float,
+        ).repeat(self.num_envs, 1)
 
         self.closest_dist = -torch.ones(self.num_envs, device=self.device, dtype=torch.float)
         self.curr_dist = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
@@ -913,12 +940,28 @@ class B1Z1Base(RewardVecTask):
     
     def _reset_actors(self, env_ids):
         self._robot_root_states[env_ids] = self._initial_robot_root_states[env_ids]
-        self._robot_root_states[env_ids, :2] += torch_rand_float(-0.2, 0.2, (len(env_ids), 2), device=self.device) # small randomization
-        rand_yaw_robot = torch_rand_float(-0.8, 0.8, (len(env_ids), 1), device=self.device).squeeze(1)
-        if self.enable_camera:
-            self._robot_root_states[env_ids, 3:7] = quat_from_euler_xyz(0*rand_yaw_robot, 0*rand_yaw_robot, 0.2*rand_yaw_robot)
+        if self.robot_reset_position_range_xy is None:
+            position_delta = torch_rand_float(-0.2, 0.2, (len(env_ids), 2), device=self.device)
         else:
-            self._robot_root_states[env_ids, 3:7] = quat_from_euler_xyz(0*rand_yaw_robot, 0*rand_yaw_robot, rand_yaw_robot)
+            position_range = torch.tensor(
+                self.robot_reset_position_range_xy, device=self.device, dtype=torch.float
+            ).unsqueeze(0)
+            position_delta = torch_rand_float(-1.0, 1.0, (len(env_ids), 2), device=self.device)
+            position_delta *= position_range
+        self._robot_root_states[env_ids, :2] += position_delta
+
+        if self.robot_reset_yaw_range is None:
+            rand_yaw_robot = torch_rand_float(-0.8, 0.8, (len(env_ids), 1), device=self.device).squeeze(1)
+            if self.enable_camera:
+                rand_yaw_robot *= 0.2
+        else:
+            yaw_range = float(self.robot_reset_yaw_range)
+            rand_yaw_robot = torch_rand_float(
+                -yaw_range, yaw_range, (len(env_ids), 1), device=self.device
+            ).squeeze(1)
+        self._robot_root_states[env_ids, 3:7] = quat_from_euler_xyz(
+            0 * rand_yaw_robot, 0 * rand_yaw_robot, rand_yaw_robot
+        )
         # self._robot_root_states[env_ids, 3:7] = quat_from_euler_xyz(0*rand_yaw_robot, 0*rand_yaw_robot, 0*rand_yaw_robot)
         # self._dof_pos[env_ids] = self._initial_dof_pos[env_ids] * torch_rand_float(0.8, 1.2, (len(env_ids), 1), device=self.device)
         self._dof_pos[env_ids] = self._initial_dof_pos[env_ids]
@@ -1086,12 +1129,7 @@ class B1Z1Base(RewardVecTask):
                 self._robot_root_states[env_ids, :2],
                 torch.zeros(len(env_ids), 1, device=self.device),
             ], dim=1)
-            center_offset = torch.tensor(
-                [self.arm_base_offset_cfg[0], self.arm_base_offset_cfg[1],
-                 self.robot_start_pose[2] + self.arm_base_offset_cfg[2]],
-                device=self.device,
-            ).repeat(len(env_ids), 1)
-            center += quat_apply(self.base_yaw_quat[env_ids], center_offset)
+            center += quat_apply(self.base_yaw_quat[env_ids], self.ee_goal_center_offset[env_ids])
             self.ee_goal_world[env_ids] = center + quat_apply(
                 self.base_yaw_quat[env_ids], self.curr_ee_goal_cart[env_ids]
             )

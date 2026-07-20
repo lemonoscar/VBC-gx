@@ -12,10 +12,10 @@ env:
   controlFrequencyLow: 8
   imgDelayFrame: 4
 
-  liftedSuccessThreshold: 0.35
-  liftedInitThreshold: 0.05
-  successEeDistThreshold: 0.30
-  baseObjectDisThreshold: 0.6
+  liftedSuccessThreshold: 0.15
+  liftedInitThreshold: 0.03
+  successEeDistThreshold: 0.12
+  baseObjectDisThreshold: 0.45
   holdSteps: 25
   lastCommands: False
 
@@ -32,13 +32,14 @@ env:
   lowLevelAngVelYawClip: 0.05
   lowLevelAngVelPitchClip: 0.25
   lowFootContactThreshold: 1.5
-  lowEeGoalRanges: [[0.12, 0.50], [-0.20, 0.20], [-0.26, 0.28]]
-  robotStartPose: [-0.75, 0.0, 0.32]
-  evalRobotStartPose: [-0.70, 0.0, 0.32]
-  initialEEGoalCart: [0.30, 0.0, 0.20]
+  lowEeGoalRanges: [[0.215, 0.465], [-0.15, 0.15], [-0.334, 0.036]]
+  robotStartPose: [-0.45, 0.0, 0.32]
+  evalRobotStartPose: [-0.45, 0.0, 0.32]
+  initialEEGoalCart: [0.365, 0.0, -0.164]
   initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
-  maskArmGoalCart: [0.34, 0.0, 0.24]
+  maskArmGoalCart: [0.365, 0.0, -0.064]
   armBaseOffset: [0.085, 0.0, 0.094]
+  eeGoalCenterOffset: [0.085, 0.0, 0.414]
   eeFrame: "TERRAIN_INVARIANT_YAW"
   armIkGain: 0.25
   trackEeOrientation: False
@@ -48,6 +49,13 @@ env:
   wristBodyName: "arm_link6"
   flangeBodyName: "arm_link6"
   fingerBodyNames: ["arm_link7", "arm_link8"]
+  tableDims: [0.30, 0.60, 0.10]
+  tablePositionXY: [0.0, 0.0]
+  tableHeightRange: [0.10, 0.15]
+  objectPositionRangeX: [-0.05, 0.05]
+  objectPositionRangeY: [-0.10, 0.10]
+  robotResetPositionRangeXY: [0.03, 0.03]
+  robotResetYawRange: 0.08
 
   domainRandomization:
     profile: "go2x5_deterministic_v1"

@@ -228,12 +228,29 @@ def _set_canonical_state(env, side, case="C0"):
         root_tensor = env._root_states
         dof_state_tensor = env.dof_state
         dof_pos = env.dof_pos
+        initial_ee_goal = list(env.cfg.goal_ee.ranges.init_pos_end)
+        ee_goal_ranges = [
+            list(env.cfg.goal_ee.ranges.pos_x),
+            list(env.cfg.goal_ee.ranges.pos_y_cart),
+            list(env.cfg.goal_ee.ranges.pos_z),
+        ]
     else:
         env._dof_pos[:] = env.initial_robo_pos
         env._dof_vel[:] = 0.0
         root_tensor = env._root_states
         dof_state_tensor = env._dof_state
         dof_pos = env._dof_pos
+        initial_ee_goal = list(env.cfg["env"]["initialEEGoalCart"])
+        ee_goal_ranges = [list(values) for values in env.cfg["env"]["lowEeGoalRanges"]]
+
+    if case == "C3":
+        canonical_ee_goal = [0.40, -0.08, -0.20]
+    elif case == "C4":
+        canonical_ee_goal = [
+            ee_goal_ranges[0][1], ee_goal_ranges[1][1], ee_goal_ranges[2][0]
+        ]
+    else:
+        canonical_ee_goal = initial_ee_goal
 
     if case == "C2":
         from tools.go2x5_runtime_parity import (
@@ -247,6 +264,18 @@ def _set_canonical_state(env, side, case="C0"):
         arm_delta = torch.tensor([0.015, -0.010, 0.020, -0.012, 0.008, -0.006], device=env.device)
         num_gripper = env.cfg.env.num_gripper_joints if side == "low" else env.num_gripper_joints
         dof_pos[:, -(6 + num_gripper):-num_gripper] += arm_delta
+
+    if case == "C4":
+        # Exercise the production clamp with a valid arm state that starts near
+        # joint2's upper limit and a far/low target inside the configured task
+        # workspace.  The target remains in front of the robot; no overhead or
+        # deliberately unreachable goal is needed for this invariant.
+        arm_joint2_index = list(env.dof_names).index("arm_joint2")
+        if side == "low":
+            arm_joint2_upper = env.dof_pos_limits[arm_joint2_index, 1]
+        else:
+            arm_joint2_upper = env.dof_limits_upper[arm_joint2_index]
+        dof_pos[:, arm_joint2_index] = arm_joint2_upper - 0.02
 
     desired_root = root.clone()
     desired_dof_pos = dof_pos.clone()
@@ -285,10 +314,7 @@ def _set_canonical_state(env, side, case="C0"):
         env.action_history_buf[:] = 0.0
         env.gait_indices[:] = 0.0
         env.clock_inputs[:] = 0.0
-        env.curr_ee_goal_cart[:] = torch.tensor(
-            [0.32, -0.08, 0.18] if case == "C3" else
-            ([0.54, 0.16, 0.34] if case == "C4" else [0.30, 0.0, 0.20]), device=env.device
-        )
+        env.curr_ee_goal_cart[:] = torch.tensor(canonical_ee_goal, device=env.device)
         from isaacgym.torch_utils import quat_apply
         env.curr_ee_goal_cart_world[:] = env._get_ee_goal_spherical_center() + quat_apply(
             env.base_yaw_quat, env.curr_ee_goal_cart
@@ -307,10 +333,7 @@ def _set_canonical_state(env, side, case="C0"):
         env.foot_contacts_from_sensor[:] = False
         env.gait_indices[:] = 0.0
         env.clock_inputs[:] = 0.0
-        env.curr_ee_goal_cart[:] = torch.tensor(
-            [0.32, -0.08, 0.18] if case == "C3" else
-            ([0.54, 0.16, 0.34] if case == "C4" else [0.30, 0.0, 0.20]), device=env.device
-        )
+        env.curr_ee_goal_cart[:] = torch.tensor(canonical_ee_goal, device=env.device)
         env._update_ee_goal_world()
     if case == "C3":
         env.commands[:, 0] = 0.10

@@ -26,6 +26,34 @@ ARM_BASE_OFFSET = [0.085, 0.0, 0.094]
 BASE_HEIGHT_TARGET = 0.32
 BASE_INIT_HEIGHT = 0.32
 
+# Terrain-invariant EE task coordinates.  The local ranges are expressed from
+# the nominal arm-base center and map to a compact workspace in front of the
+# robot: root-forward x=[0.30, 0.55] m and terrain z=[0.08, 0.45] m.
+EE_GOAL_CENTER_OFFSET = [0.085, 0.0, 0.414]
+EE_GOAL_LOCAL_RANGES = [[0.215, 0.465], [-0.15, 0.15], [-0.334, 0.036]]
+EE_GOAL_WORLD_RANGES = [[0.30, 0.55], [-0.15, 0.15], [0.08, 0.45]]
+EE_GOAL_INIT_START_LOCAL = [0.402, 0.0, -0.108]
+EE_GOAL_INIT_END_LOCAL = [0.365, 0.0, -0.164]
+EE_GOAL_MASK_LOCAL = [0.365, 0.0, -0.064]
+
+# A forward-ready X5 pose.  Its nominal EE position is approximately
+# root-forward [0.487, 0.0, 0.306] m at the 0.32 m Go2 stance height.
+ARM_READY_JOINT_ANGLES = [0.0, 2.4, 1.15, 0.0, 0.0, 0.0]
+
+# Go2-X5 tabletop task geometry.  With the robot root at x=-0.45 m and a
+# 0.30 m-deep table centered at x=0, the near table edge is 0.30 m ahead.
+HIGH_LEVEL_ROBOT_START_POSE = [-0.45, 0.0, BASE_INIT_HEIGHT]
+HIGH_LEVEL_TABLE_DIMS = [0.30, 0.60, 0.10]
+HIGH_LEVEL_TABLE_POSITION_XY = [0.0, 0.0]
+HIGH_LEVEL_TABLE_HEIGHT_RANGE = [0.10, 0.15]
+HIGH_LEVEL_OBJECT_POSITION_RANGE_X = [-0.05, 0.05]
+HIGH_LEVEL_OBJECT_POSITION_RANGE_Y = [-0.10, 0.10]
+HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY = [0.03, 0.03]
+HIGH_LEVEL_ROBOT_RESET_YAW_RANGE = 0.08
+HIGH_LEVEL_LIFT_SUCCESS_HEIGHT = 0.15
+HIGH_LEVEL_EE_SUCCESS_DISTANCE = 0.12
+HIGH_LEVEL_BASE_OBJECT_DISTANCE = 0.45
+
 GO2X5_LAB_LEG_ACTION_SCALE = [0.125, 0.25, 0.25] * 4
 LEGACY_LEG_ACTION_SCALE = [0.4, 0.45, 0.45] * 4
 # Keep the VBC low-level action contract identical to the Go2-X5-lab asset.
@@ -95,12 +123,12 @@ DEFAULT_JOINT_ANGLES = {
     "RL_hip_joint": -0.1,
     "RL_thigh_joint": 1.0,
     "RL_calf_joint": -1.5,
-    "arm_joint1": 0.0,
-    "arm_joint2": 0.3,
-    "arm_joint3": 0.5,
-    "arm_joint4": 0.0,
-    "arm_joint5": 0.0,
-    "arm_joint6": 0.0,
+    "arm_joint1": ARM_READY_JOINT_ANGLES[0],
+    "arm_joint2": ARM_READY_JOINT_ANGLES[1],
+    "arm_joint3": ARM_READY_JOINT_ANGLES[2],
+    "arm_joint4": ARM_READY_JOINT_ANGLES[3],
+    "arm_joint5": ARM_READY_JOINT_ANGLES[4],
+    "arm_joint6": ARM_READY_JOINT_ANGLES[5],
     "arm_joint7": 0.022,
     "arm_joint8": 0.022,
 }

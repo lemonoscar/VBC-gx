@@ -706,6 +706,10 @@ def safe_eval(node: ast.AST, names: dict[str, Any]) -> Any:
     if isinstance(node, ast.Attribute):
         base = safe_eval(node.value, names)
         return getattr(base, node.attr)
+    if isinstance(node, ast.Subscript):
+        base = safe_eval(node.value, names)
+        index = safe_eval(node.slice, names)
+        return base[index]
     raise ValueError(f"Unsupported expression: {ast.dump(node)}")
 
 
@@ -956,16 +960,24 @@ def build_report() -> str:
             contract_failures.append("S0 must jointly expose forward locomotion and central reach")
         if locomotion_stage.get("lin_vel_x_range") != [0.0, 0.25] or locomotion_stage.get("ang_vel_yaw_range") != [-0.15, 0.15]:
             contract_failures.append("S0 must contain motion commands from the beginning")
-        if locomotion_stage.get("goal_pos_z") != [-0.02, 0.24]:
-            contract_failures.append("S0 must keep the initial reach volume conservative")
+        if (
+            locomotion_stage.get("goal_pos_x") != [0.315, 0.415]
+            or locomotion_stage.get("goal_pos_y_cart") != [-0.08, 0.08]
+            or locomotion_stage.get("goal_pos_z") != [-0.214, -0.064]
+        ):
+            contract_failures.append("S0 must keep a compact forward tabletop reach volume")
         if locomotion_stage.get("advance") != {}:
             contract_failures.append("S0 transition must be deterministic rather than metric-gated")
         if coordinated_stage.get("name") != "S1_bidirectional_coordinated_reach":
             contract_failures.append("S1 must restore bidirectional coordinated reach")
         if coordinated_stage.get("lin_vel_x_range") != [-0.30, 0.30] or coordinated_stage.get("ang_vel_yaw_range") != [-0.40, 0.40]:
             contract_failures.append("S1 must expose the final bidirectional command range")
-        if coordinated_stage.get("goal_pos_z") != [-0.26, 0.28]:
-            contract_failures.append("S1 must include safe crouch-assisted reach targets")
+        if (
+            coordinated_stage.get("goal_pos_x") != robot_spec.EE_GOAL_LOCAL_RANGES[0]
+            or coordinated_stage.get("goal_pos_y_cart") != robot_spec.EE_GOAL_LOCAL_RANGES[1]
+            or coordinated_stage.get("goal_pos_z") != robot_spec.EE_GOAL_LOCAL_RANGES[2]
+        ):
+            contract_failures.append("S1 must expose the full forward crouch-assisted workspace")
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()

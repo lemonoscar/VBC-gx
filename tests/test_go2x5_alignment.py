@@ -106,8 +106,22 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["robotStartPose"][2] == spec.BASE_INIT_HEIGHT
     assert env_cfg["evalRobotStartPose"][2] == spec.BASE_INIT_HEIGHT
     assert cfg["reward"]["base_height_target"] == spec.BASE_HEIGHT_TARGET
-    assert env_cfg["initialEEGoalCart"] == [0.30, 0.0, 0.20]
-    assert env_cfg["maskArmGoalCart"] == [0.34, 0.0, 0.24]
+    assert env_cfg["lowEeGoalRanges"] == spec.EE_GOAL_LOCAL_RANGES
+    assert env_cfg["initialEEGoalCart"] == spec.EE_GOAL_INIT_END_LOCAL
+    assert env_cfg["maskArmGoalCart"] == spec.EE_GOAL_MASK_LOCAL
+    assert env_cfg["eeGoalCenterOffset"] == spec.EE_GOAL_CENTER_OFFSET
+    assert env_cfg["robotStartPose"] == spec.HIGH_LEVEL_ROBOT_START_POSE
+    assert env_cfg["evalRobotStartPose"] == spec.HIGH_LEVEL_ROBOT_START_POSE
+    assert env_cfg["tableDims"] == spec.HIGH_LEVEL_TABLE_DIMS
+    assert env_cfg["tablePositionXY"] == spec.HIGH_LEVEL_TABLE_POSITION_XY
+    assert env_cfg["tableHeightRange"] == spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE
+    assert env_cfg["objectPositionRangeX"] == spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X
+    assert env_cfg["objectPositionRangeY"] == spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y
+    assert env_cfg["robotResetPositionRangeXY"] == spec.HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY
+    assert env_cfg["robotResetYawRange"] == spec.HIGH_LEVEL_ROBOT_RESET_YAW_RANGE
+    assert env_cfg["liftedSuccessThreshold"] == spec.HIGH_LEVEL_LIFT_SUCCESS_HEIGHT
+    assert env_cfg["successEeDistThreshold"] == spec.HIGH_LEVEL_EE_SUCCESS_DISTANCE
+    assert env_cfg["baseObjectDisThreshold"] == spec.HIGH_LEVEL_BASE_OBJECT_DISTANCE
     assert asset_cfg["control"]["armPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
     assert asset_cfg["control"]["armPositionDriveDamping"] == spec.ARM_POS_DAMPING
     assert asset_cfg["control"]["gripperPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
@@ -138,9 +152,40 @@ def test_low_level_observation_dimensions_are_explicit():
     assert spec.observation_dim(True) == 799
     assert spec.BASE_HEIGHT_TARGET == 0.32
     assert spec.BASE_INIT_HEIGHT == 0.32
-    assert spec.DEFAULT_JOINT_ANGLES["arm_joint2"] == 0.3
-    assert spec.DEFAULT_JOINT_ANGLES["arm_joint3"] == 0.5
+    assert spec.DEFAULT_JOINT_ANGLES["arm_joint2"] == spec.ARM_READY_JOINT_ANGLES[1] == 2.4
+    assert spec.DEFAULT_JOINT_ANGLES["arm_joint3"] == spec.ARM_READY_JOINT_ANGLES[2] == 1.15
     assert spec.DEFAULT_JOINT_ANGLES["RR_thigh_joint"] == 1.0
+
+
+def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
+    spec = load_robot_spec()
+
+    world_ranges = []
+    for center, local_range in zip(spec.EE_GOAL_CENTER_OFFSET, spec.EE_GOAL_LOCAL_RANGES):
+        world_ranges.append([round(center + value, 6) for value in local_range])
+    assert world_ranges == spec.EE_GOAL_WORLD_RANGES
+    assert spec.EE_GOAL_WORLD_RANGES[0] == [0.30, 0.55]
+    assert spec.EE_GOAL_WORLD_RANGES[2] == [0.08, 0.45]
+
+    init_start_world = [
+        round(center + value, 6)
+        for center, value in zip(spec.EE_GOAL_CENTER_OFFSET, spec.EE_GOAL_INIT_START_LOCAL)
+    ]
+    init_end_world = [
+        round(center + value, 6)
+        for center, value in zip(spec.EE_GOAL_CENTER_OFFSET, spec.EE_GOAL_INIT_END_LOCAL)
+    ]
+    assert init_start_world == [0.487, 0.0, 0.306]
+    assert init_end_world == [0.45, 0.0, 0.25]
+
+    robot_x = spec.HIGH_LEVEL_ROBOT_START_POSE[0]
+    table_center_x = spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
+    table_near_edge_x = table_center_x - spec.HIGH_LEVEL_TABLE_DIMS[0] / 2.0
+    assert round(table_near_edge_x - robot_x, 6) == 0.30
+    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE == [0.10, 0.15]
+    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0] >= spec.HIGH_LEVEL_TABLE_DIMS[2]
+    assert spec.HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY == [0.03, 0.03]
+    assert spec.HIGH_LEVEL_ROBOT_RESET_YAW_RANGE == 0.08
 
 
 def test_low_level_action_interfaces_keep_b1z1_full_dim():
@@ -216,11 +261,11 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "reorder_dofs = True" in go2x5_config
     assert "command_mode = 'cart'" in go2x5_config
     assert "center_mode = 'terrain_invariant'" in go2x5_config
-    assert "x_offset = robot_spec.ARM_BASE_OFFSET[0]" in go2x5_config
-    assert "z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + robot_spec.ARM_BASE_OFFSET[2]" in go2x5_config
-    assert "pos_x = [0.12, 0.50]" in go2x5_config
-    assert "pos_y_cart = [-0.20, 0.20]" in go2x5_config
-    assert "pos_z = [-0.26, 0.28]" in go2x5_config
+    assert "x_offset = robot_spec.EE_GOAL_CENTER_OFFSET[0]" in go2x5_config
+    assert "z_invariant_offset = robot_spec.EE_GOAL_CENTER_OFFSET[2]" in go2x5_config
+    assert "pos_x = robot_spec.EE_GOAL_LOCAL_RANGES[0]" in go2x5_config
+    assert "pos_y_cart = robot_spec.EE_GOAL_LOCAL_RANGES[1]" in go2x5_config
+    assert "pos_z = robot_spec.EE_GOAL_LOCAL_RANGES[2]" in go2x5_config
     assert "pos_l = [0.20, 0.56]" in go2x5_config
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config

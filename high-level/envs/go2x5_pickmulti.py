@@ -11,8 +11,8 @@ class Go2X5PickMulti(B1Z1PickMulti):
         if self.floating_base:
             default_joint_angles = {
                 'arm_joint1': 0.0,
-                'arm_joint2': 0.3,
-                'arm_joint3': 0.5,
+                'arm_joint2': 2.4,
+                'arm_joint3': 1.15,
                 'arm_joint4': 0.0,
                 'arm_joint5': 0.0,
                 'arm_joint6': 0.0,
@@ -38,8 +38,8 @@ class Go2X5PickMulti(B1Z1PickMulti):
                 'RL_calf_joint': -1.5,
 
                 'arm_joint1': 0.0,
-                'arm_joint2': 0.3,
-                'arm_joint3': 0.5,
+                'arm_joint2': 2.4,
+                'arm_joint3': 1.15,
                 'arm_joint4': 0.0,
                 'arm_joint5': 0.0,
                 'arm_joint6': 0.0,

@@ -35,6 +35,30 @@ class B1Z1PickMulti(B1Z1Base):
         
     def _extra_env_settings(self):
         self.multi_obj = self.cfg["env"]["asset"]["asset_multi"]
+        self.table_dims_cfg = self.cfg["env"].get("tableDims", [0.6, 1.0, 0.25])
+        self.table_position_xy = self.cfg["env"].get("tablePositionXY", [0.0, 0.0])
+        self.table_height_range = self.cfg["env"].get("tableHeightRange", [0.0, 0.5])
+        self.object_position_range_x = self.cfg["env"].get("objectPositionRangeX", [-0.15, 0.15])
+        self.object_position_range_y = self.cfg["env"].get("objectPositionRangeY", [-0.10, 0.10])
+        if len(self.table_dims_cfg) != 3 or any(float(value) <= 0.0 for value in self.table_dims_cfg):
+            raise ValueError(f"tableDims must contain three positive values, got {self.table_dims_cfg}")
+        if len(self.table_position_xy) != 2:
+            raise ValueError(f"tablePositionXY must contain two values, got {self.table_position_xy}")
+        for name, limits in (
+            ("tableHeightRange", self.table_height_range),
+            ("objectPositionRangeX", self.object_position_range_x),
+            ("objectPositionRangeY", self.object_position_range_y),
+        ):
+            if len(limits) != 2 or float(limits[0]) > float(limits[1]):
+                raise ValueError(f"{name} must be an ordered pair, got {limits}")
+        if (
+            "tableHeightRange" in self.cfg["env"]
+            and float(self.table_height_range[0]) < float(self.table_dims_cfg[2])
+        ):
+            raise ValueError(
+                "tableHeightRange minimum must keep the tabletop box above the ground: "
+                f"height={self.table_height_range[0]}, thickness={self.table_dims_cfg[2]}"
+            )
         self.obj_list = list(self.multi_obj.keys())
         self.obj_height = [self.multi_obj[obj]["height"] for obj in self.obj_list]
         self.obj_orn = [self.multi_obj[obj]["orientation"] for obj in self.obj_list]
@@ -92,7 +116,7 @@ class B1Z1PickMulti(B1Z1Base):
         col_filter = 0
         i = env_i
         
-        table_pos = [0.0, 0.0, self.table_dims.z / 2]
+        table_pos = [self.table_position_xy[0], self.table_position_xy[1], self.table_dims.z / 2]
         self.table_heights[i] = table_pos[-1] + self.table_dims.z / 2
 
         obj_idx = i % len(self.obj_list)
@@ -105,8 +129,8 @@ class B1Z1PickMulti(B1Z1Base):
         table_handle = self.gym.create_actor(env_ptr, self.table_asset, table_start_pose, "table", col_group, col_filter, 1)
         
         cube_start_pose = gymapi.Transform()
-        cube_start_pose.p.x = table_start_pose.p.x + np.random.uniform(-0.1, 0.1)
-        cube_start_pose.p.y = table_start_pose.p.y + np.random.uniform(-0.1, 0.1)
+        cube_start_pose.p.x = table_start_pose.p.x + np.random.uniform(*self.object_position_range_x)
+        cube_start_pose.p.y = table_start_pose.p.y + np.random.uniform(*self.object_position_range_y)
         cube_start_pose.p.z = self.table_heights[i] + obj_height
         # cube_start_pose.r = quat_mul(gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-np.pi, np.pi)), gymapi.Quat(*self.obj_orn[obj_idx]))
         cube_handle = self.gym.create_actor(env_ptr, obj_asset, cube_start_pose, "cube", col_group, col_filter, 2)
@@ -125,8 +149,8 @@ class B1Z1PickMulti(B1Z1Base):
         
         self.table_heights = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
         # table
-        self.table_dimz = 0.25
-        self.table_dims = gymapi.Vec3(0.6, 1.0, self.table_dimz)
+        self.table_dimz = float(self.table_dims_cfg[2])
+        self.table_dims = gymapi.Vec3(*[float(value) for value in self.table_dims_cfg])
         table_options = gymapi.AssetOptions()
         table_options.fix_base_link = True
         self.table_asset = self.gym.create_box(self.sim, self.table_dims.x, self.table_dims.y, self.table_dims.z, table_options)
@@ -282,10 +306,16 @@ class B1Z1PickMulti(B1Z1Base):
             return
         
         # self._cube_root_states[env_ids] = self._initial_cube_root_states[env_ids]
-        self._cube_root_states[env_ids, 0] = 0.0
-        self._cube_root_states[env_ids, 0] += torch_rand_float(-0.15, 0.15, (len(env_ids), 1), device=self.device).squeeze(1)
-        self._cube_root_states[env_ids, 1] = 0.0
-        self._cube_root_states[env_ids, 1] += torch_rand_float(-0.1, 0.1, (len(env_ids), 1), device=self.device).squeeze(1)
+        self._cube_root_states[env_ids, 0] = self._table_root_states[env_ids, 0]
+        self._cube_root_states[env_ids, 0] += torch_rand_float(
+            self.object_position_range_x[0], self.object_position_range_x[1],
+            (len(env_ids), 1), device=self.device,
+        ).squeeze(1)
+        self._cube_root_states[env_ids, 1] = self._table_root_states[env_ids, 1]
+        self._cube_root_states[env_ids, 1] += torch_rand_float(
+            self.object_position_range_y[0], self.object_position_range_y[1],
+            (len(env_ids), 1), device=self.device,
+        ).squeeze(1)
         
         self._cube_root_states[env_ids, 2] = self.table_heights[env_ids] + self.init_height[env_ids]
         rand_yaw_box = torch_rand_float(-3.15, 3.15, (len(env_ids), 1), device=self.device).squeeze(1)
@@ -304,7 +334,10 @@ class B1Z1PickMulti(B1Z1Base):
         
         self._table_root_states[env_ids] = self._initial_table_root_states[env_ids]
         if self.table_heights_fix is None:
-            rand_heights = torch_rand_float(0, 0.5, (len(env_ids), 1), device=self.device)
+            rand_heights = torch_rand_float(
+                self.table_height_range[0], self.table_height_range[1],
+                (len(env_ids), 1), device=self.device,
+            )
         else:
             rand_heights = torch.ones((len(env_ids), 1), device=self.device, dtype=torch.float) * self.table_heights_fix
         

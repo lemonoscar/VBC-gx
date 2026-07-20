@@ -48,19 +48,19 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         arm_induced_pitch = 0.38
 
         class sphere_center:
-            x_offset = robot_spec.ARM_BASE_OFFSET[0]  # Relative to base root xy/yaw; z remains terrain-invariant.
-            y_offset = 0    # Relative to base
-            z_invariant_offset = robot_spec.BASE_INIT_HEIGHT + robot_spec.ARM_BASE_OFFSET[2]  # Relative to terrain.
+            x_offset = robot_spec.EE_GOAL_CENTER_OFFSET[0]  # Relative to base root xy/yaw.
+            y_offset = robot_spec.EE_GOAL_CENTER_OFFSET[1]
+            z_invariant_offset = robot_spec.EE_GOAL_CENTER_OFFSET[2]  # Relative to terrain.
 
         class ranges:
             # Cartesian targets relative to the terrain-invariant nominal arm-base center.
-            # The final box includes low targets that require body/arm coordination, but avoids
-            # the extreme hand-written box used by the previous five-stage curriculum.
-            init_pos_start = [0.174, 0.0, 0.318]  # Default arm home from the IK reachability scan.
-            init_pos_end = [0.30, 0.0, 0.16]
-            pos_x = [0.12, 0.50]
-            pos_y_cart = [-0.20, 0.20]
-            pos_z = [-0.26, 0.28]
+            # These map to root-forward x=[0.30, 0.55] m and terrain
+            # z=[0.08, 0.45] m, keeping the primary workspace in front of Go2.
+            init_pos_start = robot_spec.EE_GOAL_INIT_START_LOCAL
+            init_pos_end = robot_spec.EE_GOAL_INIT_END_LOCAL
+            pos_x = robot_spec.EE_GOAL_LOCAL_RANGES[0]
+            pos_y_cart = robot_spec.EE_GOAL_LOCAL_RANGES[1]
+            pos_z = robot_spec.EE_GOAL_LOCAL_RANGES[2]
 
             # Legacy spherical ranges remain defined for B1Z1-compatible helpers and diagnostics.
             pos_l = [0.20, 0.56]
@@ -423,9 +423,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
                 "action_scale": robot_spec.LOW_ACTION_SCALE,
                 "lin_vel_x_range": [0.0, 0.25],
                 "ang_vel_yaw_range": [-0.15, 0.15],
-                "goal_pos_x": [0.16, 0.40],
-                "goal_pos_y_cart": [-0.12, 0.12],
-                "goal_pos_z": [-0.02, 0.24],
+                "goal_pos_x": [0.315, 0.415],
+                "goal_pos_y_cart": [-0.08, 0.08],
+                "goal_pos_z": [-0.214, -0.064],
                 "traj_time": [3.0, 5.0],
                 "hold_time": [1.0, 3.0],
                 "base_height_scale": -1.0,
@@ -438,9 +438,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
                 "action_scale": robot_spec.LOW_ACTION_SCALE,
                 "lin_vel_x_range": [-0.30, 0.30],
                 "ang_vel_yaw_range": [-0.40, 0.40],
-                "goal_pos_x": [0.12, 0.50],
-                "goal_pos_y_cart": [-0.20, 0.20],
-                "goal_pos_z": [-0.26, 0.28],
+                "goal_pos_x": robot_spec.EE_GOAL_LOCAL_RANGES[0],
+                "goal_pos_y_cart": robot_spec.EE_GOAL_LOCAL_RANGES[1],
+                "goal_pos_z": robot_spec.EE_GOAL_LOCAL_RANGES[2],
                 "traj_time": [2.5, 4.0],
                 "hold_time": [1.0, 2.5],
                 "base_height_scale": -0.2,

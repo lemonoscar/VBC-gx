@@ -550,6 +550,7 @@ def collect_gait_sequence(env: Any, side: str, tick_s: float = 0.02,
 
 
 def _natural_reset_record(env: Any, side: str, step: int) -> Dict[str, Any]:
+    task_fields = {}
     if side == "low":
         root = env.root_states[0, :13]
         dof = env.dof_state[:env.num_dofs]
@@ -566,15 +567,22 @@ def _natural_reset_record(env: Any, side: str, step: int) -> Dict[str, Any]:
         ee_target = env.ee_goal_world[0]
         contacts = env.foot_contacts_from_sensor[0]
         reset = env.reset_buf[0]
+        if hasattr(env, "_table_root_states"):
+            task_fields["table_root_state"] = env._table_root_states[0, :13]
+        if hasattr(env, "_cube_root_states"):
+            task_fields["object_root_state"] = env._cube_root_states[0, :13]
+        if hasattr(env, "table_heights"):
+            task_fields["table_surface_height"] = env.table_heights[0]
     arm_target, _ = _arm_target(env, side)
     fields = {
         "root_state": root, "dof_state": dof, "history": history,
         "last_applied_action": action, "gait_index": env.gait_indices[0],
         "clock_inputs": env.clock_inputs[0], "ee_target": ee_target,
         "arm_target": arm_target, "foot_contacts": contacts,
+        **task_fields,
     }
     counts, failures = nonfinite_details(fields)
-    return {
+    record = {
         "step": step, "root_pose": _numbers(root[:7]), "dof_state": _numbers(dof),
         "history": _numbers(history), "last_applied_action": _numbers(action),
         "gait_index": _numbers(env.gait_indices[0]), "clock_inputs": _numbers(env.clock_inputs[0]),
@@ -582,6 +590,8 @@ def _natural_reset_record(env: Any, side: str, step: int) -> Dict[str, Any]:
         "foot_contacts": _numbers(contacts), "reset": bool(_array(reset)),
         "nonfinite": counts, "nonfinite_failures": failures,
     }
+    record.update({name: _numbers(value) for name, value in task_fields.items()})
+    return record
 
 
 def _advance_high_policy_tick(env: Any) -> None:

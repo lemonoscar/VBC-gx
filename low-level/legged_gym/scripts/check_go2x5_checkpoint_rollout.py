@@ -63,6 +63,10 @@ def run(cli):
     action_count = 0
     max_abs_action = 0.0
     max_abs_torque = 0.0
+    ee_error_sum = 0.0
+    ee_error_max = 0.0
+    target_local_min = torch.full((3,), float("inf"), device=env.device)
+    target_local_max = torch.full((3,), float("-inf"), device=env.device)
 
     for step in range(cli.steps):
         if cli.zero_policy:
@@ -80,6 +84,7 @@ def run(cli):
                 "root_state": env.root_states,
                 "dof_state": env.dof_state,
                 "ee_pose": env.rigid_body_state[:, env.gripper_idx, :7],
+                "ee_target": env.curr_ee_goal_cart_world,
                 "jacobian": env.ee_j_eef,
             }
         )
@@ -103,6 +108,23 @@ def run(cli):
         action_count += actions.numel()
         max_abs_action = max(max_abs_action, readiness.scalar_max_abs(actions))
         max_abs_torque = max(max_abs_torque, readiness.scalar_max_abs(env.torques[:, :12]))
+        ee_error = torch.norm(env.ee_pos - env.curr_ee_goal_cart_world, dim=-1)
+        ee_error_sum += float(ee_error.mean().item())
+        ee_error_max = max(ee_error_max, float(ee_error.max().item()))
+        target_local_min = torch.minimum(target_local_min, env.curr_ee_goal_cart.min(dim=0).values)
+        target_local_max = torch.maximum(target_local_max, env.curr_ee_goal_cart.max(dim=0).values)
+
+    expected_target_ranges = [
+        list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
+    ]
+    sampled_target_ranges = [
+        [float(target_local_min[axis].item()), float(target_local_max[axis].item())]
+        for axis in range(3)
+    ]
+    target_bounds_ok = all(
+        expected[0] - 1.0e-6 <= sampled[0] <= sampled[1] <= expected[1] + 1.0e-6
+        for expected, sampled in zip(expected_target_ranges, sampled_target_ranges)
+    )
 
     report = {
         "schema_version": 1,
@@ -118,6 +140,11 @@ def run(cli):
         "mean_abs_policy_action": action_abs_sum / action_count,
         "max_abs_policy_action": max_abs_action,
         "max_abs_leg_torque": max_abs_torque,
+        "mean_ee_error_m": ee_error_sum / cli.steps,
+        "max_ee_error_m": ee_error_max,
+        "expected_target_local_ranges": expected_target_ranges,
+        "sampled_target_local_ranges": sampled_target_ranges,
+        "target_bounds_ok": target_bounds_ok,
         "early_resets": early_resets,
         "max_early_resets": cli.max_early_resets,
         "reset_roll": reset_roll,
@@ -130,6 +157,7 @@ def run(cli):
     report["passed"] = (
         report["nonfinite_count"] == 0
         and report["early_resets"] <= report["max_early_resets"]
+        and report["target_bounds_ok"]
     )
     cli.output.parent.mkdir(parents=True, exist_ok=True)
     cli.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
