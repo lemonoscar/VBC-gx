@@ -109,6 +109,48 @@ canonical controller 复验：
 
 20 iteration smoke 使用真实 PPO optimizer/history-encoder 状态续训，所有 loss 有限。初期少量 pitch reset 随后恢复，最终 checkpoint 在同一 deterministic rollout 中无 early reset。该结果支持从既有 locomotion checkpoint 做任务几何 warm start；EE 误差仍需在正式续训中下降。
 
+### 服务器正式切换
+
+在服务器使用同一固定 seed、128 环境、500 policy tick 的 deterministic rollout 比较候选 checkpoint：
+
+| 检查 | model_35000 | model_36200 | model_36220（新几何 smoke） |
+| --- | ---: | ---: | ---: |
+| early reset（pitch/roll/z） | 7/0/0 | 0/0/0 | 0/0/0 |
+| nonfinite | 0 | 0 | 0 |
+| mean EE error | 0.15888 m | 0.15941 m | 0.16302 m |
+| max EE error | 0.72189 m | 0.24735 m | 0.26764 m |
+| mean collision raw/tick | 0.31109 | 0.03659 | 0.00382 |
+| 目标采样越界 | 0 | 0 | 0 |
+
+因此正式训练选择 `model_36200.pt`，而不是稳定性明显较差的 `model_35000.pt`。在 512 环境上先续训 20 iteration 得到 `model_36220.pt`；全部 loss 有限，随后 deterministic rollout 通过。
+
+旧的头顶目标训练在 iteration 36352 后停止。新的前向工作区长训使用独立 experiment id 启动：
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=0 \
+WANDB_MODE=offline \
+/data4/duanzhibo/miniconda3/bin/conda run --no-capture-output -n b1z1 \
+  python low-level/legged_gym/scripts/train.py \
+  --headless \
+  --task go2x5 \
+  --proj_name go2x5-low \
+  --exptid go2x5_v7_front_workspace_from36200_seed1 \
+  --num_envs 4096 \
+  --max_iterations 50000 \
+  --seed 1 \
+  --sim_device cuda:0 \
+  --rl_device cuda:0 \
+  --graphics_device_id 0 \
+  --resume \
+  --resumeid go2x5_v6_simple_kp40_kd1_seed1 \
+  --checkpoint 36200
+```
+
+启动核验到 iteration 36225：进程和 GPU0 正常、episode length 502、pitch/roll/z reset 均为 0、timeout 为 1.0，value/surrogate/history/privileged loss 均有限。TensorBoard 写入独立目录 `go2x5_v7_front_workspace_from36200_seed1/tensorboard`。完整运行期间仍需持续观察 EE error 是否下降；启动通过不等同于任务已收敛。
+
+小型机器可读切换报告：`docs/parity_reports/go2x5_front_workspace_training_switch_2026-07-21.json`。
+
 ## 尚未证明的内容
 
 - 尚未得到完成前向低桌面任务训练的正式 low-level checkpoint。

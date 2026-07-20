@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-21",
+  "git_commit": "c1e72d5",
+  "task_geometry": "forward_low_tabletop",
+  "candidate_rollouts": [
+    {
+      "checkpoint_iteration": 35000,
+      "early_resets": 7,
+      "reset_pitch": 7,
+      "reset_roll": 0,
+      "reset_z": 0,
+      "nonfinite_count": 0,
+      "mean_ee_error_m": 0.15887826282344758,
+      "max_ee_error_m": 0.7218873500823975,
+      "mean_collision_raw_per_tick": 0.3110901960143819
+    },
+    {
+      "checkpoint_iteration": 36200,
+      "early_resets": 0,
+      "reset_pitch": 0,
+      "reset_roll": 0,
+      "reset_z": 0,
+      "nonfinite_count": 0,
+      "mean_ee_error_m": 0.15941385753825307,
+      "max_ee_error_m": 0.2473464161157608,
+      "mean_collision_raw_per_tick": 0.036593266209762075
+    },
+    {
+      "checkpoint_iteration": 36220,
+      "purpose": "new_geometry_resume_smoke",
+      "early_resets": 0,
+      "reset_pitch": 0,
+      "reset_roll": 0,
+      "reset_z": 0,
+      "nonfinite_count": 0,
+      "target_bounds_ok": true,
+      "mean_ee_error_m": 0.1630170454159379,
+      "max_ee_error_m": 0.267636239528656,
+      "mean_collision_raw_per_tick": 0.0038182002409594133,
+      "passed": true
+    }
+  ],
+  "selected_checkpoint": {
+    "experiment_id": "go2x5_v6_simple_kp40_kd1_seed1",
+    "iteration": 36200
+  },
+  "stopped_experiment": {
+    "experiment_id": "go2x5_v6_simple_kp40_kd1_seed1",
+    "last_observed_iteration": 36352
+  },
+  "long_training": {
+    "experiment_id": "go2x5_v7_front_workspace_from36200_seed1",
+    "num_envs": 4096,
+    "max_iterations": 50000,
+    "seed": 1,
+    "gpu": 0,
+    "last_verified_iteration": 36225,
+    "episode_length": 502.0,
+    "reset_pitch": 0.0,
+    "reset_roll": 0.0,
+    "reset_z": 0.0,
+    "reset_timeout": 1.0,
+    "losses_finite": true,
+    "process_running": true
+  },
+  "passed": true
+}
