@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-21",
+  "task": "go2x5_lowlevel_velocity_ee_coordination",
+  "profile": "go2x5_velocity_ee_coordination_v4_explicit_turn",
+  "decision": "approved_for_long_training",
+  "deployment_ready": false,
+  "selected_checkpoint": {
+    "run": "go2x5_v10_explicit_turn_from_v9_400_smoke_seed1",
+    "iteration": 300,
+    "schema_version": 2,
+    "action_dim": 12,
+    "num_arm_actions": 0,
+    "ik_task": "position_only_translation_3d",
+    "control_contract_sha256": "60a34f33eee22e6380153fe430211e7ce4700a2f17372ecf4207e27a758fc25c",
+    "warm_start_source_sha256": "af01bcd8f0d64f32d32d893c7cada90cfede072266088f0f2f559290854221ea"
+  },
+  "runtime_readiness": {
+    "s0": {
+      "num_envs": 8,
+      "steps": 200,
+      "early_resets": 0,
+      "nonfinite": 0,
+      "explicit_turn_fraction": 0.2,
+      "passed": true
+    },
+    "s1": {
+      "num_envs": 8,
+      "steps": 200,
+      "early_resets": 0,
+      "nonfinite": 0,
+      "explicit_turn_fraction": 0.2,
+      "passed": true
+    },
+    "translation_ik_oracle_max_abs_error": 0.0
+  },
+  "checkpoint_rollouts": [
+    {
+      "seed": 20260721,
+      "num_envs": 128,
+      "steps": 500,
+      "early_resets": 0,
+      "nonfinite": 0,
+      "mean_collision_raw_per_tick": 0.0,
+      "arm_target_clamp_fraction": 0.0,
+      "action_saturation_fraction": 0.0,
+      "mean_vx_abs_error_mps": 0.00447302943142131,
+      "mean_yaw_abs_error_radps": 0.015134014404378832,
+      "mean_ee_error_m": 0.12686906116455793,
+      "mean_height_adaptation_error_m": 0.011670271136797965,
+      "mean_pitch_adaptation_error_rad": 0.017580163549631832,
+      "goal_z_base_height_correlation": -0.08509788351093066,
+      "goal_z_base_pitch_correlation": -0.2103778447003396,
+      "safety_passed": true,
+      "coordination_passed": false
+    },
+    {
+      "seed": 20260722,
+      "num_envs": 128,
+      "steps": 500,
+      "early_resets": 0,
+      "nonfinite": 0,
+      "mean_collision_raw_per_tick": 0.0,
+      "arm_target_clamp_fraction": 0.0,
+      "action_saturation_fraction": 1.3020833333333333e-06,
+      "mean_vx_abs_error_mps": 0.004170414203079418,
+      "mean_yaw_abs_error_radps": 0.01372064105514437,
+      "mean_ee_error_m": 0.12709169542789459,
+      "mean_height_adaptation_error_m": 0.011595972738228738,
+      "mean_pitch_adaptation_error_rad": 0.017292795004323125,
+      "goal_z_base_height_correlation": -0.16355205629275524,
+      "goal_z_base_pitch_correlation": -0.2169273475425371,
+      "safety_passed": true,
+      "coordination_passed": false
+    }
+  ],
+  "fixed_command_gate": {
+    "num_envs": 64,
+    "warmup_steps": 50,
+    "measure_steps": 200,
+    "require_named_gait": false,
+    "cases": [
+      {
+        "case": "stand",
+        "base_vx_mean": 0.0018870352934209223,
+        "base_yaw_rate_mean": 0.002148556447355077,
+        "vx_abs_error_mean": 0.002274868001113646,
+        "yaw_abs_error_mean": 0.006355162445106544,
+        "early_resets": 0,
+        "passed": true
+      },
+      {
+        "case": "forward",
+        "base_vx_mean": 0.10183057837188243,
+        "vx_abs_error_mean": 0.004976522753713653,
+        "early_resets": 0,
+        "passed": true
+      },
+      {
+        "case": "backward",
+        "base_vx_mean": -0.10249290037900209,
+        "vx_abs_error_mean": 0.006060418273555115,
+        "early_resets": 0,
+        "passed": true
+      },
+      {
+        "case": "turn_left",
+        "base_yaw_rate_mean": 0.12919076576828956,
+        "yaw_abs_error_mean": 0.022398016629740596,
+        "early_resets": 0,
+        "passed": true
+      },
+      {
+        "case": "turn_right",
+        "base_yaw_rate_mean": -0.1409240260720253,
+        "yaw_abs_error_mean": 0.01631741476012394,
+        "early_resets": 0,
+        "passed": true
+      }
+    ],
+    "passed": true
+  },
+  "gates": {
+    "cpu_static_tests": true,
+    "runtime_s0_s1": true,
+    "two_seed_safety": true,
+    "fixed_velocity_commands": true,
+    "nonfinite": true,
+    "joint_limit_clamp": true,
+    "final_ee_coordination": false
+  },
+  "notes": [
+    "The selected checkpoint is a safe training seed, not a trained deployment checkpoint.",
+    "Final EE error and goal-conditioned body-height correlation remain long-training objectives.",
+    "No named gait is prescribed or required."
+  ]
+}

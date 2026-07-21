@@ -435,25 +435,39 @@ class ManipLoco_rewards:
         return error, base_height
 
     def _reward_height_adaptation(self):
-        """Encourage lower body posture when EE goal is near the ground.
-        When EE target z is low (~0.1m), body should crouch (~0.15m).
-        When EE target z is high (~0.45m), body stays near the configured natural height.
-        """
-        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2] - self._terrain_height()
+        """Track a safe body height interpolated from terrain-relative EE z."""
         base_height = self._base_height_relative_to_terrain()
-
-        sphere_center_z = self.env.cfg.goal_ee.sphere_center.z_invariant_offset  # 0.45
-        natural_body_h = self.env.cfg.rewards.base_height_target
-        min_body_h = getattr(self.env.cfg.rewards, 'min_body_height', 0.15)
-
-        # Adaptive target: proportional to EE goal height, clamped to feasible range
-        adaptive_target = natural_body_h * (ee_goal_z / sphere_center_z)
-        adaptive_target = torch.clamp(adaptive_target, min_body_h, natural_body_h)
-
+        adaptive_target = self._adaptive_body_height_target()
         error = torch.abs(base_height - adaptive_target)
-
-        # Apply in both standing and walking to shape low-goal posture.
         return error, error
+
+    def _reward_pitch_adaptation(self):
+        """Lower the front/arm mount for low EE goals without prescribing a gait."""
+        body_pitch = self.env._get_body_orientation()[:, 1]
+        adaptive_target = self._adaptive_body_pitch_target()
+        error = torch.abs(body_pitch - adaptive_target)
+        return error, error
+
+    def _adaptive_body_height_target(self):
+        blend = self._adaptive_posture_blend()
+        min_body_h = getattr(self.env.cfg.rewards, "min_body_height", 0.24)
+        natural_body_h = self.env.cfg.rewards.base_height_target
+        return min_body_h + blend * (natural_body_h - min_body_h)
+
+    def _adaptive_body_pitch_target(self):
+        blend = self._adaptive_posture_blend()
+        max_forward_pitch = getattr(self.env.cfg.rewards, "max_forward_body_pitch", 0.12)
+        return (1.0 - blend) * max_forward_pitch
+
+    def _adaptive_posture_blend(self):
+        ee_goal_z = self.env.curr_ee_goal_cart_world[:, 2] - self._terrain_height()
+        low_goal_z = getattr(self.env.cfg.rewards, "height_adaptation_goal_z_low", 0.10)
+        high_goal_z = getattr(self.env.cfg.rewards, "height_adaptation_goal_z_high", 0.35)
+        return torch.clamp(
+            (ee_goal_z - low_goal_z) / max(high_goal_z - low_goal_z, 1e-6),
+            min=0.0,
+            max=1.0,
+        )
 
     def _reward_pitch_soft_limit_standing(self):
         # Allow moderate pitch for bowing/crouching, but penalize excessive pitch to avoid forward fall

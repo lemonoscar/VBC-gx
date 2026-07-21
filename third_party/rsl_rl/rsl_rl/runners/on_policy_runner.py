@@ -30,6 +30,7 @@
 
 import time
 import os
+import hashlib
 from collections import deque
 import statistics
 from numbers import Number
@@ -90,6 +91,7 @@ class OnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+        self.warm_start_provenance = None
         self.dagger_update_freq = self.alg_cfg["dagger_update_freq"]
 
         _, _ = self.env.reset()
@@ -337,6 +339,9 @@ class OnPolicyRunner:
 
     def save(self, path, it, infos=None):
         metadata = self.env.get_training_metadata() if hasattr(self.env, "get_training_metadata") else None
+        if self.warm_start_provenance is not None:
+            metadata = dict(metadata or {})
+            metadata["warm_start"] = dict(self.warm_start_provenance)
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
@@ -350,6 +355,118 @@ class OnPolicyRunner:
             'infos': infos,
             'metadata': metadata,
             }, path)
+
+    @staticmethod
+    def _checkpoint_sha256(path):
+        digest = hashlib.sha256()
+        with open(path, "rb") as checkpoint_file:
+            for chunk in iter(lambda: checkpoint_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def warm_start(self, path):
+        """Load compatible network weights into a genuinely fresh training run.
+
+        This deliberately does not restore PPO/history-optimizer state, policy
+        exploration standard deviation, counters, elapsed time, or environment
+        curriculum state.  It is not a relaxed form of ``load()``.
+        """
+        if self.current_learning_iteration != 0 or self.alg.counter != 0:
+            raise RuntimeError("weights-only warm-start must run before the first learning iteration")
+        if self.tot_timesteps != 0 or self.tot_time != 0:
+            raise RuntimeError("weights-only warm-start requires an unused runner")
+        if self.alg.optimizer.state or self.alg.hist_encoder_optimizer.state:
+            raise RuntimeError("weights-only warm-start requires fresh optimizer state")
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Warm-start checkpoint does not exist: {path}")
+
+        loaded_dict = torch.load(path, map_location=self.device)
+        if not isinstance(loaded_dict, dict):
+            raise RuntimeError("Warm-start checkpoint root must be a dictionary")
+        source_state = loaded_dict.get("model_state_dict")
+        if not isinstance(source_state, dict):
+            raise RuntimeError("Warm-start checkpoint has no model_state_dict")
+        metadata = loaded_dict.get("metadata")
+        require_metadata = bool(
+            getattr(getattr(self.env.cfg, "env", None), "require_training_metadata", False)
+        )
+        compatibility = {}
+        if hasattr(self.env, "validate_warm_start_metadata"):
+            compatibility = self.env.validate_warm_start_metadata(metadata, path)
+        elif require_metadata:
+            raise RuntimeError(
+                "This environment requires checkpoint metadata but has no warm-start validator"
+            )
+
+        target_state = self.alg.actor_critic.state_dict()
+        source_keys = set(source_state)
+        target_keys = set(target_state)
+        if source_keys != target_keys:
+            missing = sorted(target_keys - source_keys)
+            unexpected = sorted(source_keys - target_keys)
+            raise RuntimeError(
+                "Warm-start model keys do not match: "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+
+        for name, target_tensor in target_state.items():
+            source_tensor = source_state[name]
+            if not isinstance(source_tensor, torch.Tensor):
+                raise RuntimeError(f"Warm-start model value is not a tensor: {name}")
+            if source_tensor.shape != target_tensor.shape:
+                raise RuntimeError(
+                    f"Warm-start tensor shape mismatch for {name}: "
+                    f"checkpoint={tuple(source_tensor.shape)}, current={tuple(target_tensor.shape)}"
+                )
+            if source_tensor.dtype != target_tensor.dtype:
+                raise RuntimeError(
+                    f"Warm-start tensor dtype mismatch for {name}: "
+                    f"checkpoint={source_tensor.dtype}, current={target_tensor.dtype}"
+                )
+            if (source_tensor.is_floating_point() or source_tensor.is_complex()) and not bool(
+                torch.all(torch.isfinite(source_tensor))
+            ):
+                first = torch.nonzero(~torch.isfinite(source_tensor), as_tuple=False)[0].tolist()
+                raise FloatingPointError(
+                    f"Non-finite warm-start tensor {name} at index {first}"
+                )
+
+        # The old policy weights are useful, but the new task must begin with
+        # its reviewed exploration schedule instead of inheriting a late-run std.
+        preserved_parameters = ["std"]
+        candidate_state = dict(source_state)
+        for name in preserved_parameters:
+            if name not in target_state:
+                raise RuntimeError(f"Warm-start preservation key is absent from the model: {name}")
+            candidate_state[name] = target_state[name].detach().clone()
+        self.alg.actor_critic.load_state_dict(candidate_state, strict=True)
+
+        source_iteration = loaded_dict.get("iter")
+        if not isinstance(source_iteration, int) or isinstance(source_iteration, bool):
+            raise RuntimeError("Warm-start checkpoint has no valid integer iteration")
+        alignment = (metadata or {}).get("go2x5_alignment", metadata or {})
+        curriculum = alignment.get("curriculum", {}) if isinstance(alignment, dict) else {}
+        self.warm_start_provenance = {
+            "mode": "weights_only_warm_start",
+            "source_file": os.path.basename(os.path.abspath(path)),
+            "source_sha256": self._checkpoint_sha256(path),
+            "source_iteration": source_iteration,
+            "source_contract_sha256": alignment.get("control_contract_sha256"),
+            "source_curriculum_profile": curriculum.get("profile_name"),
+            "optimizer_restored": False,
+            "history_optimizer_restored": False,
+            "exploration_std_restored": False,
+            "runner_state_restored": False,
+            "environment_state_restored": False,
+            "new_run_start_iteration": 0,
+            "preserved_current_parameters": preserved_parameters,
+            "compatibility": compatibility,
+        }
+        print(
+            "Warm-started compatible model weights from "
+            f"{path} (source iteration {source_iteration}); optimizer/std/curriculum reset"
+        )
+        return dict(self.warm_start_provenance)
 
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path, map_location=self.device)
@@ -375,6 +492,8 @@ class OnPolicyRunner:
         runner_state = loaded_dict.get('runner_state') or {}
         self.tot_timesteps = int(runner_state.get('tot_timesteps', 0))
         self.tot_time = float(runner_state.get('tot_time', 0.0))
+        metadata = loaded_dict.get('metadata') or {}
+        self.warm_start_provenance = metadata.get('warm_start')
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None, stochastic=False):

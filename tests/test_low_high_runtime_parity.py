@@ -170,6 +170,7 @@ def test_schema_v2_smoke_checkpoint_metadata_shape_and_purpose():
             "purpose": "runtime_parity_smoke_only", "trained": False,
             "go2x5_alignment": {
                 "schema_version": 2, "action_dim": 12, "num_arm_actions": 0,
+                "policy_output_tanh": True,
                 "purpose": "parity_smoke", "contract_profile": "simple_deployment_smoke_v1",
                 "control_contract": contract,
                 "control_contract_sha256": canonical_json_sha256(contract),

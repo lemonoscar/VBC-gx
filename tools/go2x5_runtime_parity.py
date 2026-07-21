@@ -68,6 +68,8 @@ def validate_schema_v2_checkpoint(checkpoint: Mapping[str, Any], expected_action
         raise ValueError(f"checkpoint action_dim must be {expected_action_dim}")
     if alignment.get("num_arm_actions") != 0:
         raise ValueError("checkpoint num_arm_actions must be 0")
+    if alignment.get("policy_output_tanh") is not True:
+        raise ValueError("checkpoint policy_output_tanh must be true")
     contract = alignment.get("control_contract")
     if not isinstance(contract, Mapping):
         raise ValueError("checkpoint has no control_contract")
@@ -82,7 +84,7 @@ def smoke_actor_critic_kwargs() -> Dict[str, Any]:
     return {
         "continue_from_last_std": True, "init_std": [[0.8, 1.0, 1.0] * 4],
         "actor_hidden_dims": [128], "critic_hidden_dims": [128], "activation": "elu",
-        "output_tanh": False, "leg_control_head_hidden_dims": [128, 128],
+        "output_tanh": True, "leg_control_head_hidden_dims": [128, 128],
         "arm_control_head_hidden_dims": [128, 128], "priv_encoder_dims": [64, 20],
         "num_leg_actions": 12, "num_arm_actions": 0, "adaptive_arm_gains": False,
         "adaptive_arm_gains_scale": 10.0,

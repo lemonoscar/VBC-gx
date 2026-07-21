@@ -77,7 +77,17 @@ import torch
 import wandb
 
 def train(args):
+    warm_start_checkpoint = getattr(args, "warm_start_checkpoint", None)
+    if warm_start_checkpoint and (args.resume or args.resumeid):
+        raise ValueError(
+            "--warm_start_checkpoint cannot be combined with --resume or --resumeid"
+        )
     log_pth = LEGGED_GYM_ROOT_DIR + "/logs/{}/".format(args.proj_name) + args.exptid
+    if warm_start_checkpoint and os.path.isdir(log_pth) and os.listdir(log_pth):
+        raise RuntimeError(
+            "weights-only warm-start requires an empty output directory; "
+            f"refusing to reuse {log_pth}"
+        )
     try:
         os.makedirs(log_pth)
     except:
@@ -107,6 +117,12 @@ def train(args):
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
     ppo_runner, train_cfg, _ = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
+    if warm_start_checkpoint:
+        if bool(train_cfg.runner.resume) or ppo_runner.current_learning_iteration != 0:
+            raise RuntimeError(
+                "weights-only warm-start requires a fresh runner; full resume state was already loaded"
+            )
+        ppo_runner.warm_start(warm_start_checkpoint)
     remaining_iterations = max(
         int(train_cfg.runner.max_iterations) - int(ppo_runner.current_learning_iteration),
         0,

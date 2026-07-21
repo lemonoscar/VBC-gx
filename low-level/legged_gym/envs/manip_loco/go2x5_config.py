@@ -91,6 +91,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         num_commands = 3
         resampling_time = 3.
         standing_probability = 0.25
+        turn_in_place_probability = 0.20
+        turn_in_place_min_abs_yaw = 0.15
 
         lin_vel_x_schedule = [0, 0]
         ang_vel_yaw_schedule = [0, 0]
@@ -111,7 +113,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             dof_vel = 0.05
             height_measurements = 5.0
         clip_observations = 100.
-        clip_actions = 100.
+        # Keep stochastic exploration inside the deployed tanh action contract.
+        clip_actions = 1.0
 
     class env:
         num_envs = 4096
@@ -147,6 +150,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # No named gait is prescribed. The policy learns any stable locomotion
         # pattern that satisfies velocity, contact, and drag objectives.
         observe_gait_commands = False
+        policy_output_tanh = True
         require_training_metadata = True
         frequencies = 2
 
@@ -230,8 +234,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class rewards:
         reward_container_name = "maniploco_rewards"
         only_positive_rewards = False
-        tracking_sigma = 0.2
-        tracking_ee_sigma = 1.0
+        # Exact command tracking penalizes both underspeed and overspeed.
+        tracking_sigma = 0.05
+        # Metres in exp(-2 * L1_error / sigma).
+        tracking_ee_sigma = 0.15
         soft_dof_pos_limit = 1.
         soft_dof_vel_limit = 1.
         soft_torque_limit = 0.4
@@ -263,7 +269,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         safety_base_height_floor = 0.20
         dof_error_deadzone = 0.12
         leg_action_deadzone = 0.20
-        min_body_height = 0.15        # Minimum crouching height (~full knee bend)
+        min_body_height = 0.24        # Safely above the 0.18 m termination threshold.
+        height_adaptation_goal_z_low = 0.10
+        height_adaptation_goal_z_high = 0.35
+        max_forward_body_pitch = 0.12 # Positive pitch lowers the Go2 front/arm mount.
         low_goal_height_thresh = 0.35 # Only trigger posture shaping when EE goal is low
         low_goal_hind_force_ratio_target = 0.30  # For low goals, hind legs should still carry a meaningful fraction of load
         pitch_soft_limit = 0.35
@@ -276,13 +285,15 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_height = 0.0
 
             # -------Tracking rewards ----------
-            tracking_lin_vel_max = 2.0
+            tracking_lin_vel_max = 0.0
             tracking_lin_vel_x_l1 = 0.
-            tracking_lin_vel_x_exp = 0
-            tracking_ang_vel = 0.5
+            tracking_lin_vel_x_exp = 2.0
+            tracking_ang_vel = 0.0
+            tracking_ang_vel_yaw_exp = 1.0
 
             torques = -2.5e-5
-            stand_still = 1.0
+            # Standing targets may still require coordinated crouching.
+            stand_still = 0.0
             walking_dof = 0.0
             dof_default_pos = 0.0
             dof_error = 0.0
@@ -304,7 +315,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_drag = -0.15
             foot_lateral_spacing = 0.0
             feet_contact_forces = -0.001
-            height_adaptation = 0.0
+            height_adaptation = -5.0
+            pitch_adaptation = -2.0
             low_goal_front_leg_bend = 0.0
             low_goal_posture_asymmetry = 0.0
             low_goal_hind_leg_extension = 0.0
@@ -316,9 +328,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             orientation = 0.0
             orientation_walking = 0.0
             orientation_standing = 0.0
-            # A soft nominal-height term keeps normal walking near 0.32 m while
-            # leaving enough authority to crouch for low terrain-fixed EE goals.
-            base_height = -1.0
+            # The target-dependent height term replaces a conflicting fixed height.
+            base_height = 0.0
             stability_safety = 0.0
             dof_error_deadzone = 0.0
             # Do not prescribe a gait, but prevent an unbounded actor mean from
@@ -337,7 +348,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         class arm_scales:
             arm_termination = None
             tracking_ee_sphere = 0.
-            tracking_ee_world = 0.4
+            tracking_ee_world = 1.5
             tracking_ee_world_stable = 0.0
             tracking_ee_sphere_walking = 0.0
             tracking_ee_sphere_standing = 0.0
@@ -410,41 +421,45 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class auto_curriculum:
         enabled = True
-        profile_name = "go2x5_simple_locomotion_reach_v2_bounded_action"
+        profile_name = "go2x5_velocity_ee_coordination_v4_explicit_turn"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
         current_stage_index = 0
-        current_stage_name = "S0_locomotion_center_reach"
+        current_stage_name = "S0_slow_velocity_coordinated_reach"
         stages = [
             {
-                "name": "S0_locomotion_center_reach",
-                "min_iterations": 6000,
+                "name": "S0_slow_velocity_coordinated_reach",
+                "min_iterations": 8000,
                 "action_scale": robot_spec.LOW_ACTION_SCALE,
-                "lin_vel_x_range": [0.0, 0.25],
+                "lin_vel_x_range": [-0.12, 0.12],
                 "ang_vel_yaw_range": [-0.15, 0.15],
-                "goal_pos_x": [0.315, 0.415],
-                "goal_pos_y_cart": [-0.08, 0.08],
-                "goal_pos_z": [-0.214, -0.064],
-                "traj_time": [3.0, 5.0],
-                "hold_time": [1.0, 3.0],
-                "base_height_scale": -1.0,
-                "ee_tracking_weight": 0.4,
+                "standing_probability": 0.40,
+                "turn_in_place_probability": 0.20,
+                "turn_in_place_min_abs_yaw": 0.10,
+                "goal_pos_x": [0.265, 0.415],
+                "goal_pos_y_cart": [-0.10, 0.10],
+                "goal_pos_z": [-0.314, -0.054],
+                "traj_time": [4.0, 6.0],
+                "hold_time": [2.0, 3.0],
+                "ee_tracking_weight": 1.5,
                 "advance": {},
             },
             {
-                "name": "S1_bidirectional_coordinated_reach",
-                "min_iterations": 6000,
+                "name": "S1_full_velocity_coordinated_reach",
+                "min_iterations": 8000,
                 "action_scale": robot_spec.LOW_ACTION_SCALE,
                 "lin_vel_x_range": [-0.30, 0.30],
                 "ang_vel_yaw_range": [-0.40, 0.40],
+                "standing_probability": 0.25,
+                "turn_in_place_probability": 0.20,
+                "turn_in_place_min_abs_yaw": 0.15,
                 "goal_pos_x": robot_spec.EE_GOAL_LOCAL_RANGES[0],
                 "goal_pos_y_cart": robot_spec.EE_GOAL_LOCAL_RANGES[1],
                 "goal_pos_z": robot_spec.EE_GOAL_LOCAL_RANGES[2],
-                "traj_time": [2.5, 4.0],
-                "hold_time": [1.0, 2.5],
-                "base_height_scale": -0.2,
-                "ee_tracking_weight": 0.8,
+                "traj_time": [3.0, 5.0],
+                "hold_time": [1.5, 3.0],
+                "ee_tracking_weight": 2.0,
                 "advance": {},
             },
         ]
@@ -455,11 +470,13 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        init_std = [[0.8, 1.0, 1.0] * 4]
+        # Larger values caused roll-dominated resets before the policy could
+        # learn the standing manifold in from-scratch smoke tests.
+        init_std = [[0.15, 0.20, 0.20] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'
-        output_tanh = False
+        output_tanh = True
 
         leg_control_head_hidden_dims = [128, 128]
         arm_control_head_hidden_dims = [128, 128]
@@ -486,9 +503,11 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         lam = 0.95
         desired_kl = None
         max_grad_norm = 1.
-        min_policy_std = [[0.15, 0.25, 0.25] * 4]
+        min_policy_std = [[0.08, 0.12, 0.12] * 4]
 
-        mixing_schedule = [1.0, 0, 3000]
+        # A 12D policy has no arm action head; EE advantage must reach the leg
+        # policy from the first actual PPO update.
+        mixing_schedule = [1.0, 0, 1]
         torque_supervision = Go2X5RoughCfg.control.torque_supervision
         torque_supervision_schedule = [0.0, 1000, 1000]
         adaptive_arm_gains = Go2X5RoughCfg.control.adaptive_arm_gains

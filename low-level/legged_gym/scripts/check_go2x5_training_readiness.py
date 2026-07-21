@@ -33,7 +33,11 @@ for path in (LOW_LEVEL_ROOT, REPO_ROOT / "third_party/isaacgym/python", REPO_ROO
         sys.path.insert(0, str(path))
 
 import isaacgym  # noqa: E402,F401
-from isaacgym.torch_utils import orientation_error  # noqa: E402
+from isaacgym.torch_utils import (  # noqa: E402
+    orientation_error,
+    quat_apply,
+    quat_from_euler_xyz,
+)
 import torch  # noqa: E402
 
 from legged_gym.envs import *  # noqa: E402,F401,F403
@@ -189,26 +193,51 @@ def probe_rewards(env, checks):
         "contract/simple_emergent_locomotion",
         env.cfg.env.num_proprio == 66
         and not env.cfg.env.observe_gait_commands
+        and env.cfg.env.policy_output_tanh
+        and abs(float(env.cfg.normalization.clip_actions) - 1.0) <= 1e-9
         and not env.cfg.asset.replace_cylinder_with_capsule
         and "walking_dof" not in env.reward_scales
         and "tracking_contacts_shaped_force" not in env.reward_scales
         and "tracking_contacts_shaped_vel" not in env.reward_scales
         and "feet_height" not in env.reward_scales
         and "stability_safety" not in env.reward_scales
+        and "stand_still" not in env.reward_scales
+        and "base_height" not in env.reward_scales
+        and "tracking_lin_vel_max" not in env.reward_scales
         and abs(float(env.reward_scales["leg_action_l2_deadzone"]) + 0.02) <= 1e-9
-        and abs(float(env.reward_scales["tracking_lin_vel_max"]) - 2.0) <= 1e-9
-        and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9
+        and abs(float(env.reward_scales["tracking_lin_vel_x_exp"]) - 2.0) <= 1e-9
+        and abs(float(env.reward_scales["height_adaptation"]) + 5.0) <= 1e-9
+        and abs(float(env.reward_scales["pitch_adaptation"]) + 2.0) <= 1e-9
+        and "tracking_ang_vel" not in env.reward_scales
+        and abs(float(env.reward_scales["tracking_ang_vel_yaw_exp"]) - 1.0) <= 1e-9
         and abs(float(env.reward_scales["feet_air_time"]) - 1.0) <= 1e-9
-        and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 0.8) <= 1e-9
+        and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 2.0) <= 1e-9
         and "tracking_ee_world_stable" not in env.arm_reward_scales,
         num_proprio=int(env.cfg.env.num_proprio),
         observe_gait=bool(env.cfg.env.observe_gait_commands),
         replace_capsules=bool(env.cfg.asset.replace_cylinder_with_capsule),
-        tracking_lin_vel=float(env.reward_scales["tracking_lin_vel_max"]),
-        tracking_ang_vel=float(env.reward_scales["tracking_ang_vel"]),
+        tracking_lin_vel=float(env.reward_scales["tracking_lin_vel_x_exp"]),
+        height_adaptation=float(env.reward_scales["height_adaptation"]),
+        pitch_adaptation=float(env.reward_scales["pitch_adaptation"]),
+        tracking_ang_vel=float(env.reward_scales["tracking_ang_vel_yaw_exp"]),
         feet_air_time=float(env.reward_scales["feet_air_time"]),
         action_bound=float(env.reward_scales["leg_action_l2_deadzone"]),
         ee_tracking=float(env.arm_reward_scales["tracking_ee_world"]),
+    )
+
+    zero = torch.zeros(1, device=env.device)
+    forward_pitch = torch.full((1,), float(env.cfg.rewards.max_forward_body_pitch), device=env.device)
+    pitched_quat = quat_from_euler_xyz(zero, forward_pitch, zero)
+    arm_mount = torch.tensor(
+        [go2x5_robot_spec.ARM_BASE_OFFSET], device=env.device, dtype=pitched_quat.dtype
+    )
+    pitched_mount_z = float(quat_apply(pitched_quat, arm_mount)[0, 2].item())
+    checks.require(
+        "contract/positive_pitch_lowers_arm_mount",
+        pitched_mount_z < float(go2x5_robot_spec.ARM_BASE_OFFSET[2]),
+        flat_mount_z=float(go2x5_robot_spec.ARM_BASE_OFFSET[2]),
+        pitched_mount_z=pitched_mount_z,
+        pitch_rad=float(forward_pitch.item()),
     )
 
     env.commands.zero_()
@@ -224,14 +253,59 @@ def probe_rewards(env, checks):
     env.commands.zero_()
     env.commands[:, 0] = 0.10
     env.base_lin_vel[:, 0] = 0.10
-    velocity_best, _ = reward._reward_tracking_lin_vel_max()
+    velocity_best, _ = reward._reward_tracking_lin_vel_x_exp()
     env.base_lin_vel[:, 0] = 0.0
-    velocity_bad, _ = reward._reward_tracking_lin_vel_max()
+    velocity_under, _ = reward._reward_tracking_lin_vel_x_exp()
+    env.base_lin_vel[:, 0] = 0.20
+    velocity_over, _ = reward._reward_tracking_lin_vel_x_exp()
     checks.require(
-        "reward/velocity_tracking_monotonic",
-        bool(torch.all(velocity_best > velocity_bad)),
+        "reward/velocity_tracking_symmetric",
+        bool(torch.all(velocity_best > velocity_under) and torch.allclose(velocity_under, velocity_over)),
         best=float(velocity_best.mean().item()),
-        bad=float(velocity_bad.mean().item()),
+        underspeed=float(velocity_under.mean().item()),
+        overspeed=float(velocity_over.mean().item()),
+    )
+
+    env.commands[:, 2] = 0.10
+    env.base_ang_vel[:, 2] = 0.10
+    yaw_best, _ = reward._reward_tracking_ang_vel_yaw_exp()
+    env.base_ang_vel[:, 2] = 0.0
+    yaw_under, _ = reward._reward_tracking_ang_vel_yaw_exp()
+    env.base_ang_vel[:, 2] = 0.20
+    yaw_over, _ = reward._reward_tracking_ang_vel_yaw_exp()
+    checks.require(
+        "reward/yaw_tracking_symmetric",
+        bool(torch.all(yaw_best > yaw_under) and torch.allclose(yaw_under, yaw_over)),
+        best=float(yaw_best.mean().item()),
+        underspeed=float(yaw_under.mean().item()),
+        overspeed=float(yaw_over.mean().item()),
+    )
+
+    terrain_height = reward._terrain_height()
+    env.curr_ee_goal_cart_world[:, 2] = terrain_height + 0.10
+    low_height_target = reward._adaptive_body_height_target()
+    env.curr_ee_goal_cart_world[:, 2] = terrain_height + 0.225
+    middle_height_target = reward._adaptive_body_height_target()
+    env.curr_ee_goal_cart_world[:, 2] = terrain_height + 0.35
+    high_height_target = reward._adaptive_body_height_target()
+    high_pitch_target = reward._adaptive_body_pitch_target()
+    env.curr_ee_goal_cart_world[:, 2] = terrain_height + 0.10
+    low_pitch_target = reward._adaptive_body_pitch_target()
+    checks.require(
+        "reward/safe_adaptive_height_mapping",
+        bool(
+            torch.allclose(low_height_target, torch.full_like(low_height_target, 0.24))
+            and torch.allclose(middle_height_target, torch.full_like(middle_height_target, 0.28))
+            and torch.allclose(high_height_target, torch.full_like(high_height_target, 0.32))
+            and torch.allclose(low_pitch_target, torch.full_like(low_pitch_target, 0.12))
+            and torch.allclose(high_pitch_target, torch.zeros_like(high_pitch_target))
+            and float(low_height_target.min().item()) > env.cfg.termination.z_threshold
+        ),
+        low=float(low_height_target.mean().item()),
+        middle=float(middle_height_target.mean().item()),
+        high=float(high_height_target.mean().item()),
+        low_pitch=float(low_pitch_target.mean().item()),
+        high_pitch=float(high_pitch_target.mean().item()),
     )
 
     env.curr_ee_goal_cart_world[:] = env.ee_pos
@@ -260,17 +334,49 @@ def probe_rewards(env, checks):
     )
 
     zero_commands = 0
+    turn_commands = 0
+    positive_turn_commands = 0
+    negative_turn_commands = 0
     sample_count = 0
     ids = torch.arange(env.num_envs, device=env.device)
     for _ in range(100):
         env._resample_commands(ids)
         zero_commands += int((torch.abs(env.commands).sum(dim=1) == 0).sum().item())
+        turn_mask = (torch.abs(env.commands[:, 0]) <= 1e-7) & (
+            torch.abs(env.commands[:, 2])
+            >= float(env.cfg.commands.turn_in_place_min_abs_yaw) - 1e-7
+        )
+        turn_commands += int(turn_mask.sum().item())
+        positive_turn_commands += int(
+            (turn_mask & (env.commands[:, 2] > 0.0)).sum().item()
+        )
+        negative_turn_commands += int(
+            (turn_mask & (env.commands[:, 2] < 0.0)).sum().item()
+        )
         sample_count += env.num_envs
     standing_fraction = zero_commands / sample_count
+    expected_standing = float(env.cfg.commands.standing_probability)
     checks.require(
         "commands/explicit_standing_population",
-        0.15 <= standing_fraction <= 0.40,
+        expected_standing - 0.08 <= standing_fraction <= expected_standing + 0.15,
         fraction=standing_fraction,
+        configured=expected_standing,
+    )
+    turn_fraction = turn_commands / sample_count
+    expected_turn = float(env.cfg.commands.turn_in_place_probability)
+    checks.require(
+        "commands/explicit_turn_in_place_population",
+        expected_turn - 0.08 <= turn_fraction <= expected_turn + 0.08,
+        fraction=turn_fraction,
+        configured=expected_turn,
+    )
+    positive_turn_fraction = positive_turn_commands / max(turn_commands, 1)
+    checks.require(
+        "commands/turn_in_place_sign_balance",
+        turn_commands > 0 and 0.30 <= positive_turn_fraction <= 0.70,
+        positive_fraction=positive_turn_fraction,
+        positive=positive_turn_commands,
+        negative=negative_turn_commands,
     )
 
     env.episode_length_buf.fill_(51)
@@ -347,11 +453,29 @@ def probe_ik(env, checks):
     rotated = torch.tensor([0.0, 0.0, 0.70710678, 0.70710678], device=env.device).repeat(env.num_envs, 1)
     first, lower, upper = target_for(identity)
     second, _, _ = target_for(rotated)
+    translation_jacobian = env.ee_j_eef[:, :3, :]
+    translation_jacobian_t = torch.transpose(translation_jacobian, 1, 2)
+    damping = torch.eye(3, device=env.device) * (0.05 ** 2)
+    translation_oracle = torch.bmm(
+        translation_jacobian_t,
+        torch.linalg.solve(
+            torch.bmm(translation_jacobian, translation_jacobian_t) + damping[None, ...],
+            dpos.unsqueeze(-1),
+        ),
+    ).squeeze(-1)
+    actual_delta = env._control_ik(
+        torch.cat([dpos, torch.ones_like(dpos)], dim=-1).unsqueeze(-1)
+    )
     require_finite(checks, "arm_q_target", first)
     checks.require(
         "ik/position_only_orientation_invariant",
         bool(torch.allclose(first, second, atol=1.0e-7, rtol=0.0)),
         max_abs_error=scalar_max_abs(first - second),
+    )
+    checks.require(
+        "ik/position_only_uses_translation_jacobian",
+        bool(torch.allclose(actual_delta, translation_oracle, atol=1.0e-7, rtol=0.0)),
+        max_abs_error=scalar_max_abs(actual_delta - translation_oracle),
     )
     checks.require(
         "ik/joint_limits",
@@ -455,9 +579,9 @@ def probe_curriculum(env, checks):
         env.command_ranges["lin_vel_x"][1] > env.cfg.commands.lin_vel_x_clip,
         command_range=list(env.command_ranges["lin_vel_x"]),
     )
-    env.update_auto_curriculum(5999, {})
+    env.update_auto_curriculum(7999, {})
     checks.require("curriculum/respects_min_iterations", env.curriculum_stage_index == 0)
-    env.update_auto_curriculum(6000, {})
+    env.update_auto_curriculum(8000, {})
     checks.require(
         "curriculum/advances_once_to_coordinated_reach",
         env.curriculum_stage_index == 1,
@@ -469,7 +593,7 @@ def probe_curriculum(env, checks):
         and [
             list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
         ] == go2x5_robot_spec.EE_GOAL_LOCAL_RANGES
-        and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 0.8) <= 1e-9,
+        and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 2.0) <= 1e-9,
         command_range=list(env.command_ranges["lin_vel_x"]),
         goal_ranges=[
             list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")

@@ -95,6 +95,8 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["lowPolicyNumActions"] == spec.ACTION_DIM
     assert env_cfg["lowPolicyObserveGaitCommands"] is False
     assert env_cfg["lowPolicyReorderDofs"] is True
+    assert env_cfg["lowPolicyOutputTanh"] is True
+    assert env_cfg["lowPolicyActionClip"] == 1.0
     assert env_cfg["requireLowPolicyMetadata"] is True
     assert env_cfg["numGripperDof"] == spec.NUM_GRIPPER_DOFS
     assert env_cfg["numPhysicalGripperDof"] == spec.NUM_PHYSICAL_GRIPPER_DOFS
@@ -253,6 +255,8 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "self.ee_jacobian_idx = self.gripper_idx - 1" in b1z1_base
     assert 'self.num_physical_gripper_dof = self.cfg["env"].get("numPhysicalGripperDof", self.num_gripper_dof)' in b1z1_base
     assert "lowActionScale length must match lowPolicyNumActions" in b1z1_base
+    assert 'self.low_policy_output_tanh_configured = "lowPolicyOutputTanh" in self.cfg["env"]' in b1z1_base
+    assert 'if self.low_policy_output_tanh_configured or "policy_output_tanh" in alignment:' in b1z1_base
     assert "open_target = upper if self.gripper_open_at_upper else lower" in b1z1_base
     assert "self.gripper_dof_pos[:] = torch.where(u_gripper >= 0, open_target, close_target)" in b1z1_base
     assert 'control_cfg.get("armPositionDriveStiffness", 400.0)' in b1z1_base
@@ -270,22 +274,30 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_simple_locomotion_reach_v2_bounded_action"' in go2x5_config
+    assert 'profile_name = "go2x5_velocity_ee_coordination_v4_explicit_turn"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
-    assert go2x5_config.count('"name": "S0_locomotion_center_reach"') == 1
-    assert go2x5_config.count('"name": "S1_bidirectional_coordinated_reach"') == 1
+    assert go2x5_config.count('"name": "S0_slow_velocity_coordinated_reach"') == 1
+    assert go2x5_config.count('"name": "S1_full_velocity_coordinated_reach"') == 1
     assert '"name": "S2_' not in go2x5_config
     assert "safety_min_feet_contacts_standing = 3.0" in go2x5_config
     assert "safety_min_feet_contacts_walking = 2.0" in go2x5_config
     assert "feet_height_target = 0.12" in go2x5_config
     assert "standing_probability = 0.25" in go2x5_config
-    assert "lin_vel_x = [0.0, 0.25]" in go2x5_config
-    assert "ang_vel_yaw = [-0.15, 0.15]" in go2x5_config
-    assert "base_height = -1.0" in go2x5_config
+    assert "turn_in_place_probability = 0.20" in go2x5_config
+    assert '"turn_in_place_min_abs_yaw": 0.10' in go2x5_config
+    assert '"turn_in_place_min_abs_yaw": 0.15' in go2x5_config
+    assert '"lin_vel_x_range": [-0.12, 0.12]' in go2x5_config
+    assert '"lin_vel_x_range": [-0.30, 0.30]' in go2x5_config
+    assert "base_height = 0.0" in go2x5_config
+    assert "height_adaptation = -5.0" in go2x5_config
+    assert "pitch_adaptation = -2.0" in go2x5_config
+    assert "stand_still = 0.0" in go2x5_config
     assert "termination = -100.0" in go2x5_config
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
-    assert "tracking_lin_vel_max = 2.0" in go2x5_config
-    assert "tracking_ee_world = 0.4" in go2x5_config
+    assert "tracking_lin_vel_max = 0.0" in go2x5_config
+    assert "tracking_lin_vel_x_exp = 2.0" in go2x5_config
+    assert "tracking_ang_vel_yaw_exp = 1.0" in go2x5_config
+    assert "tracking_ee_world = 1.5" in go2x5_config
     assert "tracking_ee_world_stable = 0.0" in go2x5_config
     assert "observe_gait_commands = False" in go2x5_config
     assert "replace_cylinder_with_capsule = False" in go2x5_config
@@ -297,7 +309,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "leg_motor_strength_range = [1.0, 1.0]" in go2x5_config
     assert "push_robots = False" in go2x5_config
     assert "max_push_vel_xy = 0.0" in go2x5_config
-    assert "tracking_ee_sigma = 1.0" in go2x5_config
+    assert "tracking_ee_sigma = 0.15" in go2x5_config
     assert "ik_gain = 0.25" in go2x5_config
     assert "track_ee_orientation = False" in go2x5_config
     reward_file = (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
@@ -311,6 +323,8 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "if not self.cfg.env.reorder_dofs:" in manip_loco
     assert "self.ee_jacobian_idx = self.gripper_idx - 1" in manip_loco
     assert 'getattr(self.cfg.arm, "track_ee_orientation", True)' in manip_loco
+    assert "task_jacobian = self.ee_j_eef[:, :3, :]" in manip_loco
+    assert "task_error = dpose[:, :3, :]" in manip_loco
     assert "def _reward_termination(self):" in manip_loco
     assert '"reset_roll_buf"' in manip_loco
     assert 'self.extras["episode"]["reset_" + name]' in manip_loco
@@ -344,7 +358,10 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "leg_action_l2_deadzone = -0.02" in go2x5_config
     assert "tracking_ee_world_stable = 0.0" in go2x5_config
 
-    assert "base_height = -1.0" in go2x5_config
+    assert "base_height = 0.0" in go2x5_config
+    assert "height_adaptation = -5.0" in go2x5_config
+    assert "pitch_adaptation = -2.0" in go2x5_config
+    assert "tracking_lin_vel_x_exp = 2.0" in go2x5_config
     assert "termination = -100.0" in go2x5_config
     assert "lin_vel_z = -1.5" in go2x5_config
     assert "roll = -2.0" in go2x5_config
@@ -353,8 +370,10 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "feet_drag = -0.15" in go2x5_config
     assert "action_scale = robot_spec.LOW_ACTION_SCALE" in go2x5_config
     assert '"action_scale": robot_spec.LOW_ACTION_SCALE' in go2x5_config
-    assert "init_std = [[0.8, 1.0, 1.0] * 4]" in go2x5_config
-    assert "min_policy_std = [[0.15, 0.25, 0.25] * 4]" in go2x5_config
+    assert "output_tanh = True" in go2x5_config
+    assert "clip_actions = 1.0" in go2x5_config
+    assert "init_std = [[0.15, 0.20, 0.20] * 4]" in go2x5_config
+    assert "min_policy_std = [[0.08, 0.12, 0.12] * 4]" in go2x5_config
 
 
 def test_go2x5_runtime_contract_is_deterministic_and_name_based():
@@ -387,6 +406,8 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert env_cfg["eeFrame"] == contract["ee_frame"] == "TERRAIN_INVARIANT_YAW"
     assert env_cfg["armIkGain"] == contract["ik_gain"] == 0.25
     assert env_cfg["trackEeOrientation"] is contract["track_ee_orientation"] is False
+    assert contract["ik_task"] == "position_only_translation_3d"
+    assert "task_jacobian = self.ee_j_eef[:, :3, :]" in high_level
     assert env_cfg["armTargetUpdatePeriod"] == contract["arm_target_update_period"] == 4
     assert env_cfg["lowFootContactThreshold"] == contract["foot_contact_threshold"] == 1.5
     assert contract["gripper_position_stiffness"] == 110.0
@@ -401,11 +422,15 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert env_cfg["lowPolicyObserveGaitCommands"] is False
     assert "gait_frequency" not in contract
     assert contract["replace_cylinder_with_capsule"] is False
+    assert contract["policy_action_clip"] == env_cfg["lowPolicyActionClip"] == 1.0
     assert '"control_contract_sha256": control_contract_hash' in low_level
     assert "Low-level checkpoint control contract mismatch" in high_level
     assert "resolve_robot_start_pose(" in high_level
     assert "robot_start_pose=None" in high_level
     assert '"num_arm_actions": max(int(self.cfg.env.num_actions) - 12, 0)' in low_level
+    assert '"policy_output_tanh": bool(self.cfg.env.policy_output_tanh)' in low_level
+    assert '"output_tanh": self.low_policy_output_tanh' in high_level
+    assert "low_actions = torch.clamp(" in high_level
     assert "torch.nan_to_num" not in low_level
     assert "(self.num_envs, self.low_policy_num_actions)" in high_level
 

@@ -27,6 +27,8 @@ env:
   lowPolicyNumActions: 12
   lowPolicyObserveGaitCommands: False
   lowPolicyReorderDofs: True
+  lowPolicyOutputTanh: True
+  lowPolicyActionClip: 1.0
   lowActionScale: [0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25]
   lowLevelLinVelClip: 0.05
   lowLevelAngVelYawClip: 0.05
@@ -83,6 +85,7 @@ env:
       max_depenetration_velocity: 1.0
       default_buffer_size_multiplier: 5.0
     action_delay_steps: 0
+    policy_action_clip: 1.0
     replace_cylinder_with_capsule: false
     command_ranges:
       lin_vel_x: [-0.3, 0.3]
@@ -95,6 +98,7 @@ env:
     ik_gain: 0.25
     ik_damping: 0.05
     track_ee_orientation: false
+    ik_task: "position_only_translation_3d"
     arm_target_update_period: 4
     domain_randomization:
       friction: [1.0, 1.0]

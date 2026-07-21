@@ -50,6 +50,7 @@ def build_metadata(cfg, asset_path: Path, seed: int):
         "asset_sha256": hashlib.sha256(asset_path.read_bytes()).hexdigest(),
         "action_dim": 12,
         "num_arm_actions": 0,
+        "policy_output_tanh": True,
         "num_torques": 12,
         "num_gripper_joints": 2,
         "num_proprio": SMOKE_NUM_PROP,

@@ -38,6 +38,11 @@ class FakeEnv:
                 safety_min_feet_contacts_standing=3.0,
                 safety_min_feet_contacts_walking=2.0,
                 base_height_target=0.32,
+                min_body_height=0.24,
+                height_adaptation_goal_z_low=0.10,
+                height_adaptation_goal_z_high=0.35,
+                max_forward_body_pitch=0.12,
+                tracking_sigma=0.05,
                 tracking_ee_sigma=1.0,
                 gait_force_sigma=0.5,
             ),
@@ -58,9 +63,11 @@ class FakeEnv:
         self.contact_forces = torch.zeros(self.num_envs, 4, 3)
         self.feet_indices = torch.arange(4)
         self.base_lin_vel = torch.zeros(self.num_envs, 3)
+        self.base_ang_vel = torch.zeros(self.num_envs, 3)
+        self.body_orientation = torch.zeros(self.num_envs, 2)
 
     def _get_body_orientation(self):
-        return torch.zeros(self.num_envs, 2)
+        return self.body_orientation
 
     def _get_walking_cmd_mask(self):
         return torch.logical_or(
@@ -111,6 +118,60 @@ def test_vertical_velocity_penalty_does_not_consume_yaw_command():
     second, _ = reward._reward_tracking_lin_vel_z_l2()
     assert torch.equal(first, second)
     assert torch.allclose(first, torch.tensor([0.04, 0.09]))
+
+
+def test_exact_velocity_reward_penalizes_under_and_overspeed_symmetrically():
+    env, reward = make_reward()
+    env.commands[:, 0] = 0.10
+
+    env.base_lin_vel[:, 0] = torch.tensor([0.10, 0.10])
+    exact, exact_error = reward._reward_tracking_lin_vel_x_exp()
+    env.base_lin_vel[:, 0] = torch.tensor([0.00, 0.20])
+    symmetric, symmetric_error = reward._reward_tracking_lin_vel_x_exp()
+
+    assert torch.equal(exact_error, torch.zeros_like(exact_error))
+    assert torch.all(exact > symmetric)
+    assert torch.allclose(symmetric_error, torch.tensor([0.10, 0.10]))
+    assert torch.allclose(symmetric[0], symmetric[1])
+
+    env.commands[:, 2] = 0.10
+    env.base_ang_vel[:, 2] = torch.tensor([0.00, 0.20])
+    symmetric_yaw, symmetric_yaw_error = reward._reward_tracking_ang_vel_yaw_exp()
+    assert torch.allclose(symmetric_yaw_error, torch.tensor([0.10, 0.10]))
+    assert torch.allclose(symmetric_yaw[0], symmetric_yaw[1])
+
+
+def test_adaptive_height_target_is_safe_monotonic_and_terrain_relative():
+    env, reward = make_reward()
+    env.curr_ee_goal_cart_world[:, 2] = torch.tensor([0.10, 0.35])
+    endpoints = reward._adaptive_body_height_target()
+    assert torch.allclose(endpoints, torch.tensor([0.24, 0.32]))
+
+    env.curr_ee_goal_cart_world[:, 2] = 0.225
+    midpoint = reward._adaptive_body_height_target()
+    assert torch.allclose(midpoint, torch.full((2,), 0.28))
+
+    env.measured_heights.fill_(0.20)
+    env.root_states[:, 2] += 0.20
+    env.curr_ee_goal_cart_world[:, 2] += 0.20
+    shifted_midpoint = reward._adaptive_body_height_target()
+    height_error, _ = reward._reward_height_adaptation()
+    assert torch.allclose(shifted_midpoint, midpoint)
+    assert torch.allclose(height_error, torch.full((2,), 0.04))
+    assert torch.all(shifted_midpoint >= 0.24)
+
+
+def test_adaptive_pitch_lowers_front_for_low_goals_and_relaxes_for_high_goals():
+    env, reward = make_reward()
+    env.curr_ee_goal_cart_world[:, 2] = torch.tensor([0.10, 0.35])
+    pitch_targets = reward._adaptive_body_pitch_target()
+    pitch_error, _ = reward._reward_pitch_adaptation()
+
+    assert torch.allclose(pitch_targets, torch.tensor([0.12, 0.00]))
+    assert torch.allclose(pitch_error, pitch_targets)
+    env.body_orientation[:, 1] = pitch_targets
+    matched_error, _ = reward._reward_pitch_adaptation()
+    assert torch.equal(matched_error, torch.zeros_like(matched_error))
 
 
 def test_disabled_gait_branch_preserves_reward_tensor_contract():

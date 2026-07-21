@@ -97,6 +97,11 @@ class B1Z1Base(RewardVecTask):
             raise ValueError("armTargetUpdatePeriod must be >= 1")
         self.low_policy_num_actions = int(self.cfg["env"].get("lowPolicyNumActions", 18))
         self.low_policy_reorder_dofs = bool(self.cfg["env"].get("lowPolicyReorderDofs", True))
+        self.low_policy_output_tanh_configured = "lowPolicyOutputTanh" in self.cfg["env"]
+        self.low_policy_output_tanh = bool(self.cfg["env"].get("lowPolicyOutputTanh", False))
+        self.low_policy_action_clip = float(self.cfg["env"].get("lowPolicyActionClip", 100.0))
+        if self.low_policy_action_clip <= 0.0:
+            raise ValueError("lowPolicyActionClip must be positive")
         self.low_policy_metadata_required = bool(self.cfg["env"].get("requireLowPolicyMetadata", True))
         cfg_observe_gait = self.cfg["env"].get("lowPolicyObserveGaitCommands", None)
         if cfg_observe_gait is not None and (not self.floating_base):
@@ -638,6 +643,10 @@ class B1Z1Base(RewardVecTask):
             ("reorder_dofs", alignment.get("reorder_dofs"), self.low_policy_reorder_dofs),
             ("ee_body_name", alignment.get("ee_body_name"), self.cfg["env"].get("eeBodyName", "ee_gripper_link")),
         ]
+        if self.low_policy_output_tanh_configured or "policy_output_tanh" in alignment:
+            checks.append(
+                ("policy_output_tanh", alignment.get("policy_output_tanh"), self.low_policy_output_tanh)
+            )
         for name, actual, expected in checks:
             if actual != expected:
                 raise RuntimeError(f"Low-level checkpoint metadata mismatch for {name}: checkpoint={actual}, high-level={expected}")
@@ -888,7 +897,7 @@ class B1Z1Base(RewardVecTask):
             "actor_hidden_dims": [128],
             "critic_hidden_dims": [128],
             "activation": 'elu', # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
-            "output_tanh": False,
+            "output_tanh": self.low_policy_output_tanh,
             "leg_control_head_hidden_dims": [128, 128],
             "arm_control_head_hidden_dims": [128, 128],
             "priv_encoder_dims": [64, 20],
@@ -903,6 +912,9 @@ class B1Z1Base(RewardVecTask):
         self.num_proprio = 2 + 3 + 18 + 18 + 12 + 4 + 3 + 3 + 3
         self.num_proprio += 5 if self.observe_gait_commands else 0
         self.history_len = 10
+        policy_path = self.cfg["env"]["low_policy_path"]
+        loaded_dict = torch.load(policy_path, map_location=self.device)
+        self._validate_low_level_metadata(loaded_dict, policy_path)
         low_actor_critic: ActorCritic = ActorCritic(self.num_proprio,
                                                     self.num_proprio,
                                                     num_actions,
@@ -911,9 +923,6 @@ class B1Z1Base(RewardVecTask):
                                                     num_hist=self.history_len,
                                                     num_prop=self.num_proprio,
                                                     )
-        policy_path = self.cfg["env"]["low_policy_path"]
-        loaded_dict = torch.load(policy_path, map_location=self.device)
-        self._validate_low_level_metadata(loaded_dict, policy_path)
         low_actor_critic.load_state_dict(loaded_dict["model_state_dict"])
         low_actor_critic = low_actor_critic.to(self.device)
         low_actor_critic.eval()
@@ -1157,10 +1166,16 @@ class B1Z1Base(RewardVecTask):
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
         
     def control_ik(self, dpose):
-        j_eef_T = torch.transpose(self.ee_j_eef, 1, 2)
-        lmbda = torch.eye(6, device=self.device) * (0.05 ** 2)
-        A = torch.bmm(self.ee_j_eef, j_eef_T) + lmbda[None, ...]
-        u = torch.bmm(j_eef_T, torch.linalg.solve(A, dpose))
+        if self.track_ee_orientation:
+            task_jacobian = self.ee_j_eef
+            task_error = dpose
+        else:
+            task_jacobian = self.ee_j_eef[:, :3, :]
+            task_error = dpose[:, :3, :]
+        j_eef_T = torch.transpose(task_jacobian, 1, 2)
+        lmbda = torch.eye(task_jacobian.shape[1], device=self.device) * (0.05 ** 2)
+        A = torch.bmm(task_jacobian, j_eef_T) + lmbda[None, ...]
+        u = torch.bmm(j_eef_T, torch.linalg.solve(A, task_error))
         return u.squeeze(-1)
     
     def _draw_camera_sensors(self):
@@ -1517,6 +1532,9 @@ class B1Z1Base(RewardVecTask):
                 self._compute_low_level_observations()
                 with torch.no_grad():
                     low_actions = self.low_level_policy(self.low_obs_buf.detach(), hist_encoding=True)
+                low_actions = torch.clamp(
+                    low_actions, -self.low_policy_action_clip, self.low_policy_action_clip
+                )
                 low_actions = self._reindex_low_all(low_actions)
             
                 self.last_low_actions[:] = low_actions[:]

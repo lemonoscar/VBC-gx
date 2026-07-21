@@ -166,6 +166,15 @@ def get_args(test=False):
     custom_parameters = [
         {"name": "--task", "type": str, "default": "widowGo1", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
         {"name": "--resume", "action": "store_true", "default": False,  "help": "Resume training from a checkpoint"},
+        {
+            "name": "--warm_start_checkpoint",
+            "type": str,
+            "default": None,
+            "help": (
+                "Initialize a new run from compatible model weights only. "
+                "Optimizer, exploration std, iteration, and curriculum state are reset."
+            ),
+        },
         {"name": "--experiment_name", "type": str,  "help": "Name of the experiment to run or load. Overrides config file if provided."},
         {"name": "--run_name", "type": str,  "required": False,  "help": "Name of the run. Overrides config file if provided."},
         {"name": "--load_run", "type": str, "default": "", "help": "Name of the run to load when resume=True. If -1: will load the last run. Overrides config file if provided."},

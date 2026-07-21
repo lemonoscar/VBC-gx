@@ -108,6 +108,12 @@ class ManipLoco(LeggedRobot):
             cfg.commands.ranges.lin_vel_x = stage_cfg["lin_vel_x_range"]
         if "ang_vel_yaw_range" in stage_cfg:
             cfg.commands.ranges.ang_vel_yaw = stage_cfg["ang_vel_yaw_range"]
+        if "standing_probability" in stage_cfg:
+            cfg.commands.standing_probability = stage_cfg["standing_probability"]
+        if "turn_in_place_probability" in stage_cfg:
+            cfg.commands.turn_in_place_probability = stage_cfg["turn_in_place_probability"]
+        if "turn_in_place_min_abs_yaw" in stage_cfg:
+            cfg.commands.turn_in_place_min_abs_yaw = stage_cfg["turn_in_place_min_abs_yaw"]
         if "lin_vel_x_clip" in stage_cfg:
             cfg.commands.lin_vel_x_clip = stage_cfg["lin_vel_x_clip"]
         if "ang_vel_yaw_clip" in stage_cfg:
@@ -273,7 +279,7 @@ class ManipLoco(LeggedRobot):
     def get_curriculum_log_info(self):
         if not getattr(self, "auto_curriculum_enabled", False):
             return {}
-        return {
+        info = {
             "Curriculum/stage_index": self.curriculum_stage_index,
             "Curriculum/stage_min_iterations": self.curriculum_stage_cfg.get("min_iterations", 0),
             "Curriculum/max_terrain_level": self.curriculum_stage_cfg.get("max_terrain_level", 0),
@@ -282,7 +288,68 @@ class ManipLoco(LeggedRobot):
             "Curriculum/action_scale_thigh": float(self.cfg.control.action_scale[1]),
             "Curriculum/ee_tracking_weight": float(getattr(self.cfg.rewards.arm_scales, "tracking_ee_world", 0.0)),
             "Curriculum/lin_vel_x_max": float(self.command_ranges.get("lin_vel_x", [0.0, 0.0])[1]),
+            "Curriculum/standing_probability": float(self.cfg.commands.standing_probability),
+            "Curriculum/turn_in_place_probability": float(
+                self.cfg.commands.turn_in_place_probability
+            ),
         }
+        terrain_height = self.reward_container._terrain_height()
+        base_height = self.root_states[:, 2] - terrain_height
+        goal_height = self.curr_ee_goal_cart_world[:, 2] - terrain_height
+        adaptive_height = self.reward_container._adaptive_body_height_target()
+        body_pitch = self._get_body_orientation()[:, 1]
+        adaptive_pitch = self.reward_container._adaptive_body_pitch_target()
+        ee_error = torch.norm(self.ee_pos - self.curr_ee_goal_cart_world, dim=-1)
+        vx_error = torch.abs(self.base_lin_vel[:, 0] - self.commands[:, 0])
+        yaw_error = torch.abs(self.base_ang_vel[:, 2] - self.commands[:, 2])
+        turn_in_place_mask = (torch.abs(self.commands[:, 0]) <= 1e-7) & (
+            torch.abs(self.commands[:, 2]) > self.cfg.commands.ang_vel_yaw_clip
+        )
+        turn_in_place_fraction = turn_in_place_mask.float().mean()
+        turn_in_place_yaw_error = (
+            yaw_error[turn_in_place_mask].mean()
+            if bool(torch.any(turn_in_place_mask))
+            else torch.zeros((), device=self.device)
+        )
+        goal_centered = goal_height - goal_height.mean()
+        height_centered = base_height - base_height.mean()
+        correlation_denominator = torch.sqrt(
+            torch.sum(goal_centered ** 2) * torch.sum(height_centered ** 2)
+        )
+        correlation = torch.sum(goal_centered * height_centered) / torch.clamp(
+            correlation_denominator, min=1e-9
+        )
+        pitch_centered = body_pitch - body_pitch.mean()
+        pitch_correlation_denominator = torch.sqrt(
+            torch.sum(goal_centered ** 2) * torch.sum(pitch_centered ** 2)
+        )
+        pitch_correlation = torch.sum(goal_centered * pitch_centered) / torch.clamp(
+            pitch_correlation_denominator, min=1e-9
+        )
+        info.update({
+            "Diagnostics/ee_error_l2_m": float(ee_error.mean().item()),
+            "Diagnostics/vx_abs_error_mps": float(vx_error.mean().item()),
+            "Diagnostics/yaw_abs_error_radps": float(yaw_error.mean().item()),
+            "Diagnostics/turn_in_place_fraction": float(
+                turn_in_place_fraction.item()
+            ),
+            "Diagnostics/turn_in_place_yaw_abs_error_radps": float(
+                turn_in_place_yaw_error.item()
+            ),
+            "Diagnostics/base_height_m": float(base_height.mean().item()),
+            "Diagnostics/adaptive_height_target_m": float(adaptive_height.mean().item()),
+            "Diagnostics/base_pitch_rad": float(body_pitch.mean().item()),
+            "Diagnostics/adaptive_pitch_target_rad": float(adaptive_pitch.mean().item()),
+            "Diagnostics/pitch_adaptation_error_rad": float(
+                torch.abs(body_pitch - adaptive_pitch).mean().item()
+            ),
+            "Diagnostics/goal_z_base_height_correlation": float(correlation.item()),
+            "Diagnostics/goal_z_base_pitch_correlation": float(pitch_correlation.item()),
+            "Diagnostics/action_saturation_fraction": float(
+                (torch.abs(self.actions[:, :12]) >= self.clip_actions - 1e-6).float().mean().item()
+            ),
+        })
+        return info
 
     def _asset_sha256(self):
         asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
@@ -314,6 +381,7 @@ class ManipLoco(LeggedRobot):
                 "default_buffer_size_multiplier": float(self.cfg.sim.physx.default_buffer_size_multiplier),
             },
             "action_delay_steps": int(self.cfg.env.action_delay),
+            "policy_action_clip": float(self.cfg.normalization.clip_actions),
             "replace_cylinder_with_capsule": bool(self.cfg.asset.replace_cylinder_with_capsule),
             "command_ranges": {
                 "lin_vel_x": list(self.cfg.commands.ranges.lin_vel_x),
@@ -329,6 +397,9 @@ class ManipLoco(LeggedRobot):
             "ik_gain": float(self.cfg.arm.ik_gain),
             "ik_damping": 0.05,
             "track_ee_orientation": bool(self.cfg.arm.track_ee_orientation),
+            "ik_task": "pose_6d"
+            if self.cfg.arm.track_ee_orientation
+            else "position_only_translation_3d",
             "arm_target_update_period": int(self.cfg.control.decimation),
             "domain_randomization": {
                 "friction": list(self.cfg.domain_rand.friction_range),
@@ -351,6 +422,7 @@ class ManipLoco(LeggedRobot):
                 "asset_sha256": self._asset_sha256(),
                 "action_dim": self.cfg.env.num_actions,
                 "num_arm_actions": max(int(self.cfg.env.num_actions) - 12, 0),
+                "policy_output_tanh": bool(self.cfg.env.policy_output_tanh),
                 "num_torques": self.cfg.env.num_torques,
                 "num_gripper_joints": self.cfg.env.num_gripper_joints,
                 "num_proprio": self.cfg.env.num_proprio,
@@ -385,6 +457,146 @@ class ManipLoco(LeggedRobot):
             }
         }
 
+    @staticmethod
+    def _warm_start_values_equal(actual, expected, atol=1e-9):
+        if isinstance(expected, dict):
+            return (
+                isinstance(actual, dict)
+                and set(actual) == set(expected)
+                and all(
+                    ManipLoco._warm_start_values_equal(actual[key], value, atol=atol)
+                    for key, value in expected.items()
+                )
+            )
+        if isinstance(expected, (list, tuple)):
+            return (
+                isinstance(actual, (list, tuple))
+                and len(actual) == len(expected)
+                and all(
+                    ManipLoco._warm_start_values_equal(a, e, atol=atol)
+                    for a, e in zip(actual, expected)
+                )
+            )
+        if (
+            isinstance(actual, (int, float))
+            and not isinstance(actual, bool)
+            and isinstance(expected, (int, float))
+            and not isinstance(expected, bool)
+        ):
+            return abs(float(actual) - float(expected)) <= atol
+        return actual == expected
+
+    def validate_warm_start_metadata(self, metadata, checkpoint_path=None):
+        """Validate only the invariants required to transfer network weights.
+
+        Reward/curriculum/command-range changes are intentional for a warm
+        start.  Robot topology, observations, action semantics, PD, IK, and
+        physics must remain identical and are checked independently of the
+        normal full-resume contract.
+        """
+        if not isinstance(metadata, dict):
+            raise RuntimeError("Go2-X5 warm-start checkpoint has no metadata")
+        alignment = metadata.get("go2x5_alignment")
+        if not isinstance(alignment, dict):
+            raise RuntimeError("Go2-X5 warm-start checkpoint has no go2x5_alignment metadata")
+        expected = self.get_training_metadata()["go2x5_alignment"]
+        core_fields = [
+            "schema_version",
+            "asset_sha256",
+            "action_dim",
+            "num_arm_actions",
+            "num_torques",
+            "num_gripper_joints",
+            "num_proprio",
+            "num_priv",
+            "history_len",
+            "num_observations",
+            "observe_gait_commands",
+            "reorder_dofs",
+            "policy_leg_joint_order",
+            "foot_order",
+            "ee_body_name",
+            "arm_base_offset",
+            "spec_action_dim",
+            "spec_proprio_without_gait",
+        ]
+        for field in core_fields:
+            actual_value = alignment.get(field)
+            expected_value = expected.get(field)
+            if not self._warm_start_values_equal(actual_value, expected_value):
+                raise RuntimeError(
+                    f"Go2-X5 warm-start metadata mismatch for {field}: "
+                    f"checkpoint={actual_value}, current={expected_value}"
+                )
+
+        contract = alignment.get("control_contract")
+        contract_hash = alignment.get("control_contract_sha256")
+        if not isinstance(contract, dict) or not isinstance(contract_hash, str):
+            raise RuntimeError("Go2-X5 warm-start checkpoint has no control contract")
+        actual_hash = hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if actual_hash != contract_hash:
+            raise RuntimeError("Go2-X5 warm-start checkpoint control contract hash is corrupt")
+
+        expected_contract = expected["control_contract"]
+        invariant_contract_fields = [
+            "action_scale",
+            "leg_stiffness",
+            "leg_damping",
+            "arm_position_stiffness",
+            "arm_position_damping",
+            "gripper_position_stiffness",
+            "gripper_position_damping",
+            "sim_dt",
+            "physics_decimation",
+            "physx",
+            "action_delay_steps",
+            "replace_cylinder_with_capsule",
+            "command_dead_zone",
+            "foot_contact_threshold",
+            "ee_frame",
+            "ik_gain",
+            "ik_damping",
+            "track_ee_orientation",
+            "arm_target_update_period",
+        ]
+        for field in invariant_contract_fields:
+            if field not in contract:
+                raise RuntimeError(
+                    f"Go2-X5 warm-start control contract is missing {field}"
+                )
+            if not self._warm_start_values_equal(contract[field], expected_contract[field]):
+                raise RuntimeError(
+                    f"Go2-X5 warm-start control contract mismatch for {field}: "
+                    f"checkpoint={contract[field]}, current={expected_contract[field]}"
+                )
+        if "ik_task" in contract and not self._warm_start_values_equal(
+            contract["ik_task"], expected_contract["ik_task"]
+        ):
+            raise RuntimeError(
+                "Go2-X5 warm-start control contract mismatch for ik_task: "
+                f"checkpoint={contract['ik_task']}, current={expected_contract['ik_task']}"
+            )
+
+        source_curriculum = alignment.get("curriculum", {})
+        target_curriculum = expected.get("curriculum", {})
+        return {
+            "validated": True,
+            "source_policy_output_tanh": alignment.get("policy_output_tanh"),
+            "target_policy_output_tanh": expected.get("policy_output_tanh"),
+            "source_curriculum_profile": source_curriculum.get("profile_name"),
+            "target_curriculum_profile": target_curriculum.get("profile_name"),
+            "allowed_changes": [
+                "reward_and_curriculum",
+                "command_ranges",
+                "domain_randomization",
+                "policy_output_tanh",
+                "policy_action_clip",
+                "legacy_ik_task_dimension",
+            ],
+        }
+
     def load_training_metadata(self, metadata):
         require_metadata = bool(getattr(self.cfg.env, "require_training_metadata", False))
         if not metadata:
@@ -397,6 +609,7 @@ class ManipLoco(LeggedRobot):
                 ("schema_version", alignment.get("schema_version"), 2),
                 ("action_dim", alignment.get("action_dim"), int(self.cfg.env.num_actions)),
                 ("num_arm_actions", alignment.get("num_arm_actions"), 0),
+                ("policy_output_tanh", alignment.get("policy_output_tanh"), bool(self.cfg.env.policy_output_tanh)),
                 ("num_proprio", alignment.get("num_proprio"), int(self.cfg.env.num_proprio)),
                 ("num_priv", alignment.get("num_priv"), int(self.cfg.env.num_priv)),
                 ("history_len", alignment.get("history_len"), int(self.cfg.env.history_len)),
@@ -506,7 +719,12 @@ class ManipLoco(LeggedRobot):
         arm_pos_targets = ik_gain * self._control_ik(dpose) + self.dof_pos[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints]
         arm_lower = self.dof_pos_limits[-(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints, 0]
         arm_upper = self.dof_pos_limits[-(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints, 1]
+        self.arm_q_target_unclamped = arm_pos_targets.clone()
         arm_pos_targets = torch.clamp(arm_pos_targets, arm_lower, arm_upper)
+        self.arm_q_target = arm_pos_targets.clone()
+        self.arm_q_target_clamped = torch.abs(
+            self.arm_q_target - self.arm_q_target_unclamped
+        ) > 1e-7
         all_pos_targets = torch.zeros_like(self.dof_pos)
         all_pos_targets[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints] = arm_pos_targets
 
@@ -1498,10 +1716,51 @@ class ManipLoco(LeggedRobot):
 
         self.commands[env_ids, 1] = 0
         self.commands[env_ids, 2] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        # Preserve an explicit standing population instead of relying on the
-        # probability that two independently sampled commands hit a dead zone.
+        # Preserve explicit standing and in-place-turning populations instead
+        # of relying on two independently sampled commands to hit those modes.
         standing_probability = float(getattr(self.cfg.commands, "standing_probability", 0.0))
-        standing = torch.rand(len(env_ids), device=self.device) < standing_probability
+        turn_probability = float(
+            getattr(self.cfg.commands, "turn_in_place_probability", 0.0)
+        )
+        if not 0.0 <= standing_probability <= 1.0:
+            raise ValueError("standing_probability must be in [0, 1]")
+        if not 0.0 <= turn_probability <= 1.0:
+            raise ValueError("turn_in_place_probability must be in [0, 1]")
+        if standing_probability + turn_probability > 1.0:
+            raise ValueError(
+                "standing_probability + turn_in_place_probability must be <= 1"
+            )
+        mode_sample = torch.rand(len(env_ids), device=self.device)
+        standing = mode_sample < standing_probability
+        turn_in_place = (mode_sample >= standing_probability) & (
+            mode_sample < standing_probability + turn_probability
+        )
+        if turn_probability > 0.0:
+            min_abs_yaw = float(self.cfg.commands.turn_in_place_min_abs_yaw)
+            yaw_low, yaw_high = self.command_ranges["ang_vel_yaw"]
+            max_abs_yaw = min(abs(float(yaw_low)), abs(float(yaw_high)))
+            if min_abs_yaw <= self.cfg.commands.ang_vel_yaw_clip:
+                raise ValueError(
+                    "turn_in_place_min_abs_yaw must exceed the yaw command dead zone"
+                )
+            if max_abs_yaw < min_abs_yaw:
+                raise ValueError(
+                    "turn_in_place_min_abs_yaw is outside the symmetric yaw command range"
+                )
+            turn_magnitude = torch_rand_float(
+                min_abs_yaw,
+                max_abs_yaw,
+                (len(env_ids), 1),
+                device=self.device,
+            ).squeeze(1)
+            turn_sign = torch.where(
+                torch.rand(len(env_ids), device=self.device) < 0.5,
+                -torch.ones(len(env_ids), device=self.device),
+                torch.ones(len(env_ids), device=self.device),
+            )
+            turn_ids = env_ids[turn_in_place]
+            self.commands[turn_ids, 0] = 0.0
+            self.commands[turn_ids, 2] = (turn_sign * turn_magnitude)[turn_in_place]
         moving = torch.logical_or(
             torch.abs(self.commands[env_ids, 0]) > self.cfg.commands.lin_vel_x_clip,
             torch.abs(self.commands[env_ids, 2]) > self.cfg.commands.ang_vel_yaw_clip,
@@ -1758,11 +2017,18 @@ class ManipLoco(LeggedRobot):
                 gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], pose)
 
     def _control_ik(self, dpose):
-        # solve damped least squares
-        j_eef_T = torch.transpose(self.ee_j_eef, 1, 2)
-        lmbda = torch.eye(6, device=self.device) * (0.05 ** 2)
-        A = torch.bmm(self.ee_j_eef, j_eef_T) + lmbda[None, ...]
-        u = torch.bmm(j_eef_T, torch.linalg.solve(A, dpose))#.view(self.num_envs, 6)
+        # True position-only IK must remove the angular Jacobian rows. Merely
+        # setting rotational error to zero still constrains angular velocity.
+        if getattr(self.cfg.arm, "track_ee_orientation", True):
+            task_jacobian = self.ee_j_eef
+            task_error = dpose
+        else:
+            task_jacobian = self.ee_j_eef[:, :3, :]
+            task_error = dpose[:, :3, :]
+        j_eef_T = torch.transpose(task_jacobian, 1, 2)
+        lmbda = torch.eye(task_jacobian.shape[1], device=self.device) * (0.05 ** 2)
+        A = torch.bmm(task_jacobian, j_eef_T) + lmbda[None, ...]
+        u = torch.bmm(j_eef_T, torch.linalg.solve(A, task_error))#.view(self.num_envs, 6)
         return u.squeeze(-1)
 
     def _compute_torques(self, actions):
