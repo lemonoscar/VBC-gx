@@ -400,6 +400,15 @@ class ManipLoco(LeggedRobot):
             "ik_task": "pose_6d"
             if self.cfg.arm.track_ee_orientation
             else "position_only_translation_3d",
+            "arm_target_mode": getattr(
+                self.cfg.arm, "target_mode", "measured_joint_increment"
+            ),
+            "arm_target_max_step": float(
+                getattr(self.cfg.arm, "target_max_step", 0.0)
+            ),
+            "gripper_hold_mode": getattr(
+                self.cfg.arm, "gripper_hold_mode", "zero"
+            ),
             "arm_target_update_period": int(self.cfg.control.decimation),
             "domain_randomization": {
                 "friction": list(self.cfg.domain_rand.friction_range),
@@ -489,10 +498,10 @@ class ManipLoco(LeggedRobot):
     def validate_warm_start_metadata(self, metadata, checkpoint_path=None):
         """Validate only the invariants required to transfer network weights.
 
-        Reward/curriculum/command-range changes are intentional for a warm
-        start.  Robot topology, observations, action semantics, PD, IK, and
-        physics must remain identical and are checked independently of the
-        normal full-resume contract.
+        Reward/curriculum/command-range and leg-independent arm-controller
+        changes are intentional for a weights-only warm start. Robot topology,
+        observations, leg action semantics, PD, IK task/frame, and physics
+        remain fail-closed independently of the normal full-resume contract.
         """
         if not isinstance(metadata, dict):
             raise RuntimeError("Go2-X5 warm-start checkpoint has no metadata")
@@ -556,11 +565,12 @@ class ManipLoco(LeggedRobot):
             "command_dead_zone",
             "foot_contact_threshold",
             "ee_frame",
-            "ik_gain",
             "ik_damping",
             "track_ee_orientation",
             "arm_target_update_period",
         ]
+        if int(expected.get("num_arm_actions", 0)) != 0:
+            invariant_contract_fields.append("ik_gain")
         for field in invariant_contract_fields:
             if field not in contract:
                 raise RuntimeError(
@@ -594,6 +604,9 @@ class ManipLoco(LeggedRobot):
                 "policy_output_tanh",
                 "policy_action_clip",
                 "legacy_ik_task_dimension",
+                "arm_target_controller",
+                "gripper_hold_mode",
+                "collision_model",
             ],
         }
 
@@ -715,18 +728,14 @@ class ManipLoco(LeggedRobot):
         if not getattr(self.cfg.arm, "track_ee_orientation", True):
             drot = torch.zeros_like(drot)
         dpose = torch.cat([dpos, drot], -1).unsqueeze(-1)
-        ik_gain = getattr(self.cfg.arm, "ik_gain", 0.5)  # Scale IK delta per step to prevent overshoot
-        arm_pos_targets = ik_gain * self._control_ik(dpose) + self.dof_pos[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints]
-        arm_lower = self.dof_pos_limits[-(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints, 0]
-        arm_upper = self.dof_pos_limits[-(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints, 1]
-        self.arm_q_target_unclamped = arm_pos_targets.clone()
-        arm_pos_targets = torch.clamp(arm_pos_targets, arm_lower, arm_upper)
-        self.arm_q_target = arm_pos_targets.clone()
-        self.arm_q_target_clamped = torch.abs(
-            self.arm_q_target - self.arm_q_target_unclamped
-        ) > 1e-7
+        arm_pos_targets = self._compute_arm_position_targets(dpose)
         all_pos_targets = torch.zeros_like(self.dof_pos)
         all_pos_targets[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints] = arm_pos_targets
+        if (
+            self.cfg.env.num_gripper_joints > 0
+            and getattr(self.cfg.arm, "gripper_hold_mode", "zero") == "open_upper_limit"
+        ):
+            all_pos_targets[:, -self.cfg.env.num_gripper_joints:] = self.gripper_q_target
 
         for t in range(self.cfg.control.decimation):
             self.torques = self._compute_torques(self.actions)
@@ -960,6 +969,9 @@ class ManipLoco(LeggedRobot):
 
         # reset robot states
         self._reset_dofs(env_ids)
+        num_gripper = self.cfg.env.num_gripper_joints
+        arm_slice = slice(-(6 + num_gripper), -num_gripper)
+        self.arm_q_command[env_ids] = self.dof_pos[env_ids, arm_slice]
         self._reset_root_states(env_ids)
 
         if start:
@@ -1622,6 +1634,24 @@ class ManipLoco(LeggedRobot):
                     raise Exception(f"PD gain of joint {name} were not defined, setting them to zero")
         # self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
         self.default_dof_pos_wo_gripper = self.default_dof_pos[:-self.cfg.env.num_gripper_joints] if self.cfg.env.num_gripper_joints > 0 else self.default_dof_pos
+        arm_slice = slice(
+            -(6 + self.cfg.env.num_gripper_joints),
+            -self.cfg.env.num_gripper_joints,
+        )
+        self.arm_q_command = self.dof_pos[:, arm_slice].clone()
+        if (
+            self.cfg.env.num_gripper_joints > 0
+            and getattr(self.cfg.arm, "gripper_hold_mode", "zero") == "open_upper_limit"
+        ):
+            self.gripper_q_target = self.dof_pos_limits[
+                -self.cfg.env.num_gripper_joints:, 1
+            ].repeat(self.num_envs, 1)
+        else:
+            self.gripper_q_target = torch.zeros(
+                self.num_envs,
+                self.cfg.env.num_gripper_joints,
+                device=self.device,
+            )
 
         self.global_steps = 0
 
@@ -1688,6 +1718,13 @@ class ManipLoco(LeggedRobot):
 
         self.dof_pos[env_ids, :num_leg_dofs] = self.default_dof_pos[:num_leg_dofs] * leg_noise
         self.dof_pos[env_ids, num_leg_dofs:] = self.default_dof_pos[num_leg_dofs:] + arm_noise
+        if (
+            self.cfg.env.num_gripper_joints > 0
+            and getattr(self.cfg.arm, "gripper_hold_mode", "zero") == "open_upper_limit"
+        ):
+            self.dof_pos[env_ids, -self.cfg.env.num_gripper_joints:] = self.dof_pos_limits[
+                -self.cfg.env.num_gripper_joints:, 1
+            ]
         self.dof_vel[env_ids] = 0.
 
         self.gym.set_dof_state_tensor(self.sim, gymtorch.unwrap_tensor(self.dof_state))
@@ -2031,6 +2068,40 @@ class ManipLoco(LeggedRobot):
         u = torch.bmm(j_eef_T, torch.linalg.solve(A, task_error))#.view(self.num_envs, 6)
         return u.squeeze(-1)
 
+    def _compute_arm_position_targets(self, dpose):
+        """Advance the arm command without losing gravity compensation state."""
+        num_gripper = self.cfg.env.num_gripper_joints
+        arm_slice = slice(-(6 + num_gripper), -num_gripper)
+        current_arm_q = self.dof_pos[:, arm_slice]
+        delta = getattr(self.cfg.arm, "ik_gain", 0.5) * self._control_ik(dpose)
+        max_step = float(getattr(self.cfg.arm, "target_max_step", 0.0))
+        if max_step > 0.0:
+            delta = torch.clamp(delta, -max_step, max_step)
+
+        target_mode = getattr(
+            self.cfg.arm, "target_mode", "measured_joint_increment"
+        )
+        if target_mode == "persistent_joint_command":
+            target_base = self.arm_q_command
+        elif target_mode == "measured_joint_increment":
+            target_base = current_arm_q
+        else:
+            raise ValueError(f"Unsupported arm target mode: {target_mode}")
+
+        arm_lower = self.dof_pos_limits[arm_slice, 0]
+        arm_upper = self.dof_pos_limits[arm_slice, 1]
+        self.arm_q_target_unclamped = target_base + delta
+        arm_pos_targets = torch.clamp(
+            self.arm_q_target_unclamped, arm_lower, arm_upper
+        )
+        if target_mode == "persistent_joint_command":
+            self.arm_q_command.copy_(arm_pos_targets)
+        self.arm_q_target = arm_pos_targets.clone()
+        self.arm_q_target_clamped = torch.abs(
+            self.arm_q_target - self.arm_q_target_unclamped
+        ) > 1e-7
+        return arm_pos_targets
+
     def _compute_torques(self, actions):
         """ Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
@@ -2129,6 +2200,11 @@ class ManipLoco(LeggedRobot):
                     env_ids = env_ids[collision_mask]
                     if len(env_ids) == 0:
                         break
+                if len(env_ids) > 0:
+                    # Fail closed after exhausting resamples: hold the previous
+                    # valid target instead of accepting the final collision.
+                    self.ee_goal_cart[env_ids] = self.ee_start_cart[env_ids]
+                    self.ee_goal_sphere[env_ids] = self.ee_start_sphere[env_ids]
             if self.cfg.goal_ee.command_mode == "sphere":
                 self.ee_goal_cart[init_env_ids, :] = sphere2cart(self.ee_goal_sphere[init_env_ids, :])
             else:

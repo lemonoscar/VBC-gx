@@ -92,6 +92,18 @@ class B1Z1Base(RewardVecTask):
         self.ee_frame = self.cfg["env"].get("eeFrame", "ARM_BASE_FULL_ORIENTATION")
         self.arm_ik_gain = float(self.cfg["env"].get("armIkGain", 1.0))
         self.track_ee_orientation = bool(self.cfg["env"].get("trackEeOrientation", True))
+        self.arm_target_mode = self.cfg["env"].get(
+            "armTargetMode", "measured_joint_increment"
+        )
+        if self.arm_target_mode not in {
+            "measured_joint_increment", "persistent_joint_command"
+        }:
+            raise ValueError(f"Unsupported armTargetMode: {self.arm_target_mode}")
+        self.arm_target_max_step = float(
+            self.cfg["env"].get("armTargetMaxStep", 0.0)
+        )
+        if self.arm_target_max_step < 0.0:
+            raise ValueError("armTargetMaxStep must be non-negative")
         self.arm_target_update_period = int(self.cfg["env"].get("armTargetUpdatePeriod", 1))
         if self.arm_target_update_period < 1:
             raise ValueError("armTargetUpdatePeriod must be >= 1")
@@ -356,6 +368,10 @@ class B1Z1Base(RewardVecTask):
 
         self.gripper_dof_pos = torch.zeros(self.num_envs, self.num_physical_gripper_dof, device=self.device)
         self.gripper_dof_vel = torch.zeros(self.num_envs, self.num_physical_gripper_dof, device=self.device)
+        arm_slice = slice(
+            -(6 + self.num_gripper_joints), -self.num_gripper_joints
+        )
+        self.arm_q_command = self._dof_pos[:, arm_slice].clone()
         
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, device=self.device, dtype=torch.float32)
         self.actions = torch.zeros(self.num_envs, self.num_actions, device=self.device, dtype=torch.float32)
@@ -975,6 +991,10 @@ class B1Z1Base(RewardVecTask):
         # self._dof_pos[env_ids] = self._initial_dof_pos[env_ids] * torch_rand_float(0.8, 1.2, (len(env_ids), 1), device=self.device)
         self._dof_pos[env_ids] = self._initial_dof_pos[env_ids]
         self._dof_vel[env_ids] = self._initial_dof_vel[env_ids]
+        arm_slice = slice(
+            -(6 + self.num_gripper_joints), -self.num_gripper_joints
+        )
+        self.arm_q_command[env_ids] = self._dof_pos[env_ids, arm_slice]
         
         # Randomize the semantic gripper opening while keeping mirrored physical joints synchronized.
         gripper_alpha = torch_rand_float(0.0, 1.0, (len(env_ids), 1), device=self.device)
@@ -1465,12 +1485,25 @@ class B1Z1Base(RewardVecTask):
         if not self.track_ee_orientation:
             drot = torch.zeros_like(drot)
         dpose = torch.cat([dpos, drot], dim=-1).unsqueeze(-1)
-        arm_pos_targets = self.arm_ik_gain * self.control_ik(dpose) + self._dof_pos[:, -(6 + self.num_gripper_joints):-self.num_gripper_joints]
-        arm_lower = self.dof_limits_lower[-(6 + self.num_gripper_joints):-self.num_gripper_joints]
-        arm_upper = self.dof_limits_upper[-(6 + self.num_gripper_joints):-self.num_gripper_joints]
-        arm_pos_targets = torch.clamp(arm_pos_targets, arm_lower, arm_upper)
+        arm_slice = slice(
+            -(6 + self.num_gripper_joints), -self.num_gripper_joints
+        )
+        delta = self.arm_ik_gain * self.control_ik(dpose)
+        if self.arm_target_max_step > 0.0:
+            delta = torch.clamp(
+                delta, -self.arm_target_max_step, self.arm_target_max_step
+            )
+        if self.arm_target_mode == "persistent_joint_command":
+            target_base = self.arm_q_command
+        else:
+            target_base = self._dof_pos[:, arm_slice]
+        arm_lower = self.dof_limits_lower[arm_slice]
+        arm_upper = self.dof_limits_upper[arm_slice]
+        arm_pos_targets = torch.clamp(target_base + delta, arm_lower, arm_upper)
+        if self.arm_target_mode == "persistent_joint_command":
+            self.arm_q_command.copy_(arm_pos_targets)
         all_pos_targets = torch.zeros_like(self._dof_pos)
-        all_pos_targets[:, -(6 + self.num_gripper_joints):-self.num_gripper_joints] = arm_pos_targets
+        all_pos_targets[:, arm_slice] = arm_pos_targets
         all_pos_targets[:, -self.num_gripper_joints:] = self.gripper_dof_pos
         
         return all_pos_targets

@@ -39,7 +39,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         num_commands = 3
         traj_time = [2.5, 4.0]
         hold_time = [1.0, 2.5]
-        collision_upper_limits = [0.1, 0.2, -0.05]
+        # Reject trajectories that enter the near-body/head region.  The old
+        # x upper bound (0.1) predated the front-workspace retarget and could
+        # never reject the current local x range, whose minimum is 0.215.
+        collision_upper_limits = [0.24, 0.2, 0.05]
         collision_lower_limits = [-0.8, -0.2, -0.7]
         underground_limit = -0.6  # local cartesian z; keeps sampled EE goals from spending too much time below the terrain.
         num_collision_check_samples = 10
@@ -182,7 +185,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         foot_name = "foot"  # Go2 foot links are named *_foot
         gripper_name = robot_spec.EE_BODY_NAME  # End-effector frame from the Go2-X5-lab URDF
         # Note: Go2 has no "trunk" like B1, use "thigh" instead for penalization
-        penalize_contacts_on = ["thigh", "calf"]  # Changed from ["thigh", "trunk", "calf"] for Go2
+        # Cover every non-foot collision body.  In particular, arm/finger and
+        # head contacts must not be hidden behind a zero collision metric.
+        penalize_contacts_on = ["base", "Head", "hip", "thigh", "calf", "arm_link"]
         terminate_after_contacts_on = []
         self_collisions = 0
         flip_visual_attachments = False
@@ -205,8 +210,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # Go2-X5 zero-action checks show that simultaneous position+orientation
         # IK can roll the base over. Train the low-level controller with
         # position-only EE IK first, then reintroduce orientation later.
-        ik_gain = 0.25
+        ik_gain = robot_spec.ARM_IK_GAIN
         track_ee_orientation = False
+        target_mode = robot_spec.ARM_TARGET_MODE
+        target_max_step = robot_spec.ARM_TARGET_MAX_STEP
+        gripper_hold_mode = robot_spec.LOW_LEVEL_GRIPPER_HOLD_MODE
         osc_kp = np.array([100, 100, 100, 30, 30, 30])
         osc_kd = 2 * (osc_kp ** 0.5)
 
@@ -421,7 +429,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class auto_curriculum:
         enabled = True
-        profile_name = "go2x5_velocity_ee_coordination_v4_explicit_turn"
+        profile_name = "go2x5_velocity_ee_coordination_v5_persistent_arm"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True

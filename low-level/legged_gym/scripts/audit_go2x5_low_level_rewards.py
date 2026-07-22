@@ -176,8 +176,8 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is worse",
         expected_scale_sign="-",
         dependency="penalized_contact_indices from asset.penalize_contacts_on substrings",
-        migration_risk="Sign is correct, but current body set is thigh/calf only; base and arm contacts are not penalized here.",
-        verification="Print resolved penalized body names; manually create thigh/calf/base/arm contacts and confirm only intended bodies count.",
+        migration_risk="The resolved set must include base/head/leg and all arm/finger bodies while excluding the four feet.",
+        verification="Print resolved penalized body names; manually create base/head/leg/arm/finger contacts and confirm each intended body counts.",
     ),
     "action_rate": RewardAudit(
         raw_formula="sum(square(last_actions - actions) over leg actions)",
@@ -952,7 +952,7 @@ def build_report() -> str:
     contract_failures: list[str] = []
     if env_cfg.get("observe_gait_commands") is not False:
         contract_failures.append("simple locomotion must not prescribe a gait clock")
-    if auto_curriculum_cfg.get("profile_name") != "go2x5_velocity_ee_coordination_v4_explicit_turn":
+    if auto_curriculum_cfg.get("profile_name") != "go2x5_velocity_ee_coordination_v5_persistent_arm":
         contract_failures.append("curriculum profile must identify the simple two-stage contract")
     if commands_cfg.get("turn_in_place_probability") != 0.20:
         contract_failures.append("command sampling must retain an explicit in-place-turn population")
@@ -1115,7 +1115,7 @@ def build_report() -> str:
     lines.append("3. From iteration zero, S0 samples slow positive/negative velocity commands, a 40% explicit standing population, and a 20% explicit non-dead-zone in-place-turn population.")
     lines.append("4. Locomotion is rewarded through symmetric x/yaw velocity-error tracking with a dedicated yaw weight, plus generic all-foot air-time; foot drag, collision, vertical motion, roll, and action rate remain penalized.")
     lines.append("5. `tracking_ee_world` uses `arm_eef_link` world position and is an active raw PPO reward channel. It is not multiplied by a height/support gate, so crouching can improve low terrain-fixed reach targets.")
-    lines.append("6. `collision` sign is correct, but the resolved penalized set is thigh/calf only. Base, arm, wrist, and finger contacts are intentionally outside this term so future end-effector interaction is not forbidden.")
+    lines.append("6. `collision` is fail-visible for base, head, non-foot leg, arm, wrist, and finger contacts; the four feet remain outside this penalty.")
     lines.append("7. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.")
     lines.append("8. The curriculum has only two deterministic stages: S0 jointly learns slow exact velocity tracking and target-conditioned crouching, then S1 expands both to the final command and front-workspace ranges.")
     lines.append("")
@@ -1189,7 +1189,7 @@ def build_report() -> str:
     lines.append("1. Emergent-locomotion oracle: gait clocks must remain absent, contact-phase rewards must remain zero, and nonzero velocity commands must produce finite observations and rewards.")
     lines.append("2. Adaptive-height monotonicity: sweep terrain-relative EE goal z across `0.10--0.35 m`; the body target must increase monotonically from `0.24` to `0.32 m` and remain above termination height.")
     lines.append("3. Contact identity: touch `FL_foot, FR_foot, RL_foot, RR_foot` one at a time and confirm `force_sensor_tensor` order is `FL,FR,RL,RR`, while policy observation order is `FR,FL,RR,RL`.")
-    lines.append("4. Collision identity: create contact on a thigh, calf, base, arm link, and finger link; only thigh/calf should affect current `collision`.")
+    lines.append("4. Collision identity: create contact on a thigh, calf, base, head, arm link, and finger link; every non-foot contact should affect current `collision`.")
     lines.append("5. EE position monotonicity: set `curr_ee_goal_cart_world` equal to `arm_eef_link` position, then offset x/y/z; `tracking_ee_world` raw value must decay monotonically.")
     lines.append("6. Position-only IK invariant: vary `ee_goal_orn_quat` while holding the position target fixed; arm q-targets must not change when `track_ee_orientation=False`.")
     lines.append("7. All-function contract: call every `_reward_*` implementation and require a finite `(num_envs,)` raw tensor and metric tensor.")

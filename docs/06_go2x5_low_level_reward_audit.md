@@ -47,8 +47,8 @@ Reward aggregation details:
 - Runtime foot sensor/reward order: `FL_foot, FR_foot, RL_foot, RR_foot`
 - Policy-visible foot observation order after `_reindex_feet`: `FR_foot, FL_foot, RR_foot, RL_foot`
 - EE body: `arm_eef_link`
-- Penalized contact tokens: `['thigh', 'calf']`
-- Resolved penalized contact bodies: `FL_thigh, FL_thigh_rotor, FR_thigh, FR_thigh_rotor, RL_thigh, RL_thigh_rotor, RR_thigh, RR_thigh_rotor, FL_calf, FL_calflower, FL_calflower1, FL_calf_rotor, FR_calf, FR_calflower, FR_calflower1, FR_calf_rotor, RL_calf, RL_calflower, RL_calflower1, RL_calf_rotor, ... (24 total)`
+- Penalized contact tokens: `['base', 'Head', 'hip', 'thigh', 'calf', 'arm_link']`
+- Resolved penalized contact bodies: `base, arm_base_link, Head_upper, Head_lower, FL_hip, FL_hip_rotor, FR_hip, FR_hip_rotor, RL_hip, RL_hip_rotor, RR_hip, RR_hip_rotor, FL_thigh, FL_thigh_rotor, FR_thigh, FR_thigh_rotor, RL_thigh, RL_thigh_rotor, RR_thigh, RR_thigh_rotor, ... (44 total)`
 - Resolved termination contact bodies: `none`
 
 ## Main Findings
@@ -58,7 +58,7 @@ Reward aggregation details:
 3. From iteration zero, S0 samples slow positive/negative velocity commands, a 40% explicit standing population, and a 20% explicit non-dead-zone in-place-turn population.
 4. Locomotion is rewarded through symmetric x/yaw velocity-error tracking with a dedicated yaw weight, plus generic all-foot air-time; foot drag, collision, vertical motion, roll, and action rate remain penalized.
 5. `tracking_ee_world` uses `arm_eef_link` world position and is an active raw PPO reward channel. It is not multiplied by a height/support gate, so crouching can improve low terrain-fixed reach targets.
-6. `collision` sign is correct, but the resolved penalized set is thigh/calf only. Base, arm, wrist, and finger contacts are intentionally outside this term so future end-effector interaction is not forbidden.
+6. `collision` is fail-visible for base, head, non-foot leg, arm, wrist, and finger contacts; the four feet remain outside this penalty.
 7. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.
 8. The curriculum has only two deterministic stages: S0 jointly learns slow exact velocity tracking and target-conditioned crouching, then S1 expands both to the final command and front-workspace ranges.
 
@@ -76,7 +76,7 @@ Reward aggregation details:
 | `roll` | leg | -2.0 | abs(base roll) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:422` | base_quat to roll extraction | Sign is correct; pitch is not directly penalized by this active term. | Probe roll {0, 0.2, 0.5}; weighted reward should monotonically decrease. |
 | `ang_vel_xy` | leg | -0.2 | sum(square(base angular velocity x/y)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:214` | base_ang_vel x/y | Sign is correct; complements roll but does not replace pitch/orientation checks. | Inject roll/pitch angular velocity; weighted reward should become more negative. |
 | `dof_acc` | leg | -7.5e-07 | sum(square((last_dof_vel - dof_vel) / dt) over leg joints) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:227` | leg dof velocity order | Sign is correct; confirms smoothness, not migration correctness by itself. | Apply a velocity jump to one leg joint and confirm the expected joint contribution increases. |
-| `collision` | leg | -10.0 | sum(clamp(norm(contact_force on penalized bodies)-threshold, 0, soft_clip)/threshold) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:245` | penalized_contact_indices from asset.penalize_contacts_on substrings | Sign is correct, but current body set is thigh/calf only; base and arm contacts are not penalized here. | Print resolved penalized body names; manually create thigh/calf/base/arm contacts and confirm only intended bodies count. |
+| `collision` | leg | -10.0 | sum(clamp(norm(contact_force on penalized bodies)-threshold, 0, soft_clip)/threshold) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:245` | penalized_contact_indices from asset.penalize_contacts_on substrings | The resolved set must include base/head/leg and all arm/finger bodies while excluding the four feet. | Print resolved penalized body names; manually create base/head/leg/arm/finger contacts and confirm each intended body counts. |
 | `action_rate` | leg | -0.015 | sum(square(last_actions - actions) over leg actions) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:231` | policy action order before/after _reindex_all | Sign is correct; action-order bugs can still hide behind a smooth but wrong action stream. | Pulse policy FR hip action and confirm the smoothness term uses the policy-order action history consistently. |
 | `dof_pos_limits` | leg | -10.0 | sum soft joint-limit violation over leg joints | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:235` | dof_pos_limits, URDF leg dof order | Sign is correct; verify Go2-X5 URDF limits are not inherited from B1/Z1 or too tight after mimic edits. | Sweep each leg joint near lower/upper limit; raw should be zero inside and positive outside soft range. |
 | `delta_torques` | leg | -1e-07 | sum(square(torques - last_torques) over leg joints) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:241` | leg torque order after action reindexing | Sign is correct; magnitude can hide action-order bugs if torques are assigned to wrong legs. | Apply a one-joint action impulse and confirm only the expected URDF leg torque changes. |
@@ -150,7 +150,7 @@ Static analysis can verify sign consistency and dependency wiring, but it cannot
 1. Emergent-locomotion oracle: gait clocks must remain absent, contact-phase rewards must remain zero, and nonzero velocity commands must produce finite observations and rewards.
 2. Adaptive-height monotonicity: sweep terrain-relative EE goal z across `0.10--0.35 m`; the body target must increase monotonically from `0.24` to `0.32 m` and remain above termination height.
 3. Contact identity: touch `FL_foot, FR_foot, RL_foot, RR_foot` one at a time and confirm `force_sensor_tensor` order is `FL,FR,RL,RR`, while policy observation order is `FR,FL,RR,RL`.
-4. Collision identity: create contact on a thigh, calf, base, arm link, and finger link; only thigh/calf should affect current `collision`.
+4. Collision identity: create contact on a thigh, calf, base, head, arm link, and finger link; every non-foot contact should affect current `collision`.
 5. EE position monotonicity: set `curr_ee_goal_cart_world` equal to `arm_eef_link` position, then offset x/y/z; `tracking_ee_world` raw value must decay monotonically.
 6. Position-only IK invariant: vary `ee_goal_orn_quat` while holding the position target fixed; arm q-targets must not change when `track_ee_orientation=False`.
 7. All-function contract: call every `_reward_*` implementation and require a finite `(num_envs,)` raw tensor and metric tensor.

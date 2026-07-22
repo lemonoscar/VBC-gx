@@ -148,6 +148,8 @@ def run(cli):
                 "jacobian": env.ee_j_eef,
                 "arm_q_target": env.arm_q_target,
                 "arm_q_target_unclamped": env.arm_q_target_unclamped,
+                "arm_q_command": env.arm_q_command,
+                "gripper_q_target": env.gripper_q_target,
             }
         )
         for name, tensor in tensors.items():

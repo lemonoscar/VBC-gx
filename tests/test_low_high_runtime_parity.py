@@ -17,6 +17,7 @@ from tools.go2x5_runtime_parity import (
     compare_snapshots,
     ee_frame_oracle,
     independent_pd_oracle,
+    integrate_arm_command_oracle,
     make_diagnostic_policy,
     nonfinite_details,
     policy_to_urdf_oracle,
@@ -116,6 +117,20 @@ def test_independent_pd_oracle_clamps_and_reports_joint_inputs():
     assert abs(result["torque"][-1] - 0.9) < 1.0e-12
     assert result["joints"][0]["name"] == "FL_hip_joint"
     assert result["joints"][0]["raw_torque"] == 2.0
+
+
+def test_persistent_arm_command_oracle_rate_limits_and_clamps():
+    result = integrate_arm_command_oracle(
+        command=[0.0, 0.04, -0.04],
+        ik_delta=[1.0, 1.0, -1.0],
+        gain=0.25,
+        max_step=0.08,
+        lower=[-0.05, -0.10, -0.10],
+        upper=[0.05, 0.10, 0.10],
+    )
+    assert np.allclose(result["delta"], [0.08, 0.08, -0.08])
+    assert np.allclose(result["unclamped"], [0.08, 0.12, -0.12])
+    assert np.allclose(result["target"], [0.05, 0.10, -0.10])
 
 
 def test_ee_frame_oracle_uses_yaw_world_and_full_base_inverse():
@@ -255,6 +270,7 @@ if __name__ == "__main__":
     test_linear_probe_is_seeded_nonzero_and_reproducible()
     test_action_permutation_oracle_is_name_derived()
     test_independent_pd_oracle_clamps_and_reports_joint_inputs()
+    test_persistent_arm_command_oracle_rate_limits_and_clamps()
     test_ee_frame_oracle_uses_yaw_world_and_full_base_inverse()
     test_nonfinite_hard_fail_finds_first_index()
     test_case_registry_has_required_cases()

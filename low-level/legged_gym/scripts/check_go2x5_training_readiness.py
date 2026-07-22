@@ -175,6 +175,66 @@ def probe_rewards(env, checks):
         ),
         arm_default=arm_default,
     )
+    checks.require(
+        "contract/persistent_arm_and_open_gripper",
+        env.cfg.arm.target_mode == go2x5_robot_spec.ARM_TARGET_MODE
+        and abs(float(env.cfg.arm.ik_gain) - float(go2x5_robot_spec.ARM_IK_GAIN))
+        <= 1.0e-9
+        and abs(
+            float(env.cfg.arm.target_max_step)
+            - float(go2x5_robot_spec.ARM_TARGET_MAX_STEP)
+        )
+        <= 1.0e-9
+        and env.cfg.arm.gripper_hold_mode
+        == go2x5_robot_spec.LOW_LEVEL_GRIPPER_HOLD_MODE,
+        target_mode=env.cfg.arm.target_mode,
+        ik_gain=float(env.cfg.arm.ik_gain),
+        target_max_step=float(env.cfg.arm.target_max_step),
+        gripper_hold_mode=env.cfg.arm.gripper_hold_mode,
+    )
+    penalized_names = {
+        env.body_names[int(index)]
+        for index in env.penalized_contact_indices.detach().cpu().tolist()
+    }
+    required_visible_contacts = {
+        name
+        for name in env.body_names
+        if name == "base"
+        or name.startswith("Head_")
+        or name.startswith("arm_link")
+    }
+    checks.require(
+        "contract/head_arm_finger_contacts_visible",
+        required_visible_contacts.issubset(penalized_names)
+        and {"arm_link7", "arm_link8"}.issubset(penalized_names),
+        required=sorted(required_visible_contacts),
+        penalized=sorted(penalized_names),
+    )
+
+    first_id = torch.zeros(1, device=env.device, dtype=torch.long)
+    saved_start = env.ee_start_cart[first_id].clone()
+    saved_goal = env.ee_goal_cart[first_id].clone()
+    safe_goal = torch.tensor(
+        [[0.365, 0.0, -0.064]], device=env.device, dtype=env.ee_goal_cart.dtype
+    )
+    near_body_goal = torch.tensor(
+        [[0.215, 0.0, -0.100]], device=env.device, dtype=env.ee_goal_cart.dtype
+    )
+    try:
+        env.ee_start_cart[first_id] = safe_goal
+        env.ee_goal_cart[first_id] = near_body_goal
+        near_body_rejected = bool(env._collision_check(first_id).item())
+        env.ee_goal_cart[first_id] = safe_goal
+        center_accepted = not bool(env._collision_check(first_id).item())
+    finally:
+        env.ee_start_cart[first_id] = saved_start
+        env.ee_goal_cart[first_id] = saved_goal
+    checks.require(
+        "contract/workspace_filter_rejects_near_body_only",
+        near_body_rejected and center_accepted,
+        near_body_rejected=near_body_rejected,
+        center_accepted=center_accepted,
+    )
     expected_scale = torch.tensor(
         [0.125, 0.25, 0.25] * 4, device=env.device, dtype=env.action_scale.dtype
     )
@@ -437,22 +497,30 @@ def probe_all_reward_functions(env, checks):
 def probe_ik(env, checks):
     num_gripper = env.cfg.env.num_gripper_joints
     arm_slice = slice(-(6 + num_gripper), -num_gripper)
-    dpos = env.curr_ee_goal_cart_world - env.ee_pos
+    dpos = torch.tensor(
+        [10.0, -7.0, 5.0], device=env.device, dtype=env.ee_pos.dtype
+    ).repeat(env.num_envs, 1)
+    lower = env.dof_pos_limits[arm_slice, 0]
+    upper = env.dof_pos_limits[arm_slice, 1]
+    command_start = ((lower + upper) * 0.5).repeat(env.num_envs, 1)
 
     def target_for(quaternion):
         drot = orientation_error(quaternion, env.ee_orn / env.ee_orn.norm(dim=-1, keepdim=True).clamp(min=1e-6))
         if not env.cfg.arm.track_ee_orientation:
             drot.zero_()
         dpose = torch.cat([dpos, drot], dim=-1).unsqueeze(-1)
-        target = env.cfg.arm.ik_gain * env._control_ik(dpose) + env.dof_pos[:, arm_slice]
-        lower = env.dof_pos_limits[arm_slice, 0]
-        upper = env.dof_pos_limits[arm_slice, 1]
-        return torch.clamp(target, lower, upper), lower, upper
+        delta = env.cfg.arm.ik_gain * env._control_ik(dpose)
+        delta = torch.clamp(
+            delta,
+            -float(env.cfg.arm.target_max_step),
+            float(env.cfg.arm.target_max_step),
+        )
+        return torch.clamp(command_start + delta, lower, upper)
 
     identity = torch.tensor([0.0, 0.0, 0.0, 1.0], device=env.device).repeat(env.num_envs, 1)
     rotated = torch.tensor([0.0, 0.0, 0.70710678, 0.70710678], device=env.device).repeat(env.num_envs, 1)
-    first, lower, upper = target_for(identity)
-    second, _, _ = target_for(rotated)
+    first = target_for(identity)
+    second = target_for(rotated)
     translation_jacobian = env.ee_j_eef[:, :3, :]
     translation_jacobian_t = torch.transpose(translation_jacobian, 1, 2)
     damping = torch.eye(3, device=env.device) * (0.05 ** 2)
@@ -466,6 +534,26 @@ def probe_ik(env, checks):
     actual_delta = env._control_ik(
         torch.cat([dpos, torch.ones_like(dpos)], dim=-1).unsqueeze(-1)
     )
+    scaled_delta = float(env.cfg.arm.ik_gain) * actual_delta
+    limited_delta = torch.clamp(
+        scaled_delta,
+        -float(env.cfg.arm.target_max_step),
+        float(env.cfg.arm.target_max_step),
+    )
+    expected_first = torch.clamp(command_start + limited_delta, lower, upper)
+    expected_second = torch.clamp(expected_first + limited_delta, lower, upper)
+    saved_command = env.arm_q_command.clone()
+    try:
+        env.arm_q_command.copy_(command_start)
+        actual_first = env._compute_arm_position_targets(
+            torch.cat([dpos, torch.zeros_like(dpos)], dim=-1).unsqueeze(-1)
+        ).clone()
+        actual_second = env._compute_arm_position_targets(
+            torch.cat([dpos, torch.zeros_like(dpos)], dim=-1).unsqueeze(-1)
+        ).clone()
+        actual_command = env.arm_q_command.clone()
+    finally:
+        env.arm_q_command.copy_(saved_command)
     require_finite(checks, "arm_q_target", first)
     checks.require(
         "ik/position_only_orientation_invariant",
@@ -480,6 +568,25 @@ def probe_ik(env, checks):
     checks.require(
         "ik/joint_limits",
         bool(torch.all(first >= lower - 1.0e-7) and torch.all(first <= upper + 1.0e-7)),
+    )
+    checks.require(
+        "ik/rate_limit_is_active",
+        scalar_max_abs(scaled_delta) > float(env.cfg.arm.target_max_step)
+        and scalar_max_abs(actual_first - command_start)
+        <= float(env.cfg.arm.target_max_step) + 1.0e-7,
+        raw_scaled_max=scalar_max_abs(scaled_delta),
+        applied_max=scalar_max_abs(actual_first - command_start),
+        limit=float(env.cfg.arm.target_max_step),
+    )
+    checks.require(
+        "ik/persistent_command_accumulates",
+        scalar_max_abs(expected_second - expected_first) > 1.0e-7
+        and bool(torch.allclose(actual_first, expected_first, atol=1.0e-7, rtol=0.0))
+        and bool(torch.allclose(actual_second, expected_second, atol=1.0e-7, rtol=0.0))
+        and bool(torch.allclose(actual_command, expected_second, atol=1.0e-7, rtol=0.0)),
+        first_max_error=scalar_max_abs(actual_first - expected_first),
+        second_max_error=scalar_max_abs(actual_second - expected_second),
+        command_max_error=scalar_max_abs(actual_command - expected_second),
     )
 
 
@@ -513,6 +620,34 @@ def probe_reset(env, checks):
         "reset/desired_contacts_all_stance",
         bool(torch.all(env.desired_contact_states == 1.0)),
     )
+    num_gripper = env.cfg.env.num_gripper_joints
+    arm_slice = slice(-(6 + num_gripper), -num_gripper)
+    gripper_upper = env.dof_pos_limits[-num_gripper:, 1].repeat(env.num_envs, 1)
+    checks.require(
+        "reset/arm_command_matches_measured_state",
+        bool(
+            torch.allclose(
+                env.arm_q_command, env.dof_pos[:, arm_slice], atol=1.0e-7, rtol=0.0
+            )
+        ),
+        max_abs_error=scalar_max_abs(
+            env.arm_q_command - env.dof_pos[:, arm_slice]
+        ),
+    )
+    checks.require(
+        "reset/gripper_is_open_and_commanded_open",
+        bool(
+            torch.allclose(
+                env.dof_pos[:, -num_gripper:], gripper_upper, atol=1.0e-7, rtol=0.0
+            )
+            and torch.allclose(
+                env.gripper_q_target, gripper_upper, atol=1.0e-7, rtol=0.0
+            )
+        ),
+        measured=env.dof_pos[0, -num_gripper:].detach().cpu().tolist(),
+        commanded=env.gripper_q_target[0].detach().cpu().tolist(),
+        upper=gripper_upper[0].detach().cpu().tolist(),
+    )
 
 
 def probe_training_metadata(env, checks):
@@ -525,6 +660,11 @@ def probe_training_metadata(env, checks):
         and alignment["num_observations"] == 744
         and alignment["observe_gait_commands"] is False
         and alignment["control_contract"]["replace_cylinder_with_capsule"] is False
+        and alignment["control_contract"]["arm_target_mode"]
+        == "persistent_joint_command"
+        and alignment["control_contract"]["arm_target_max_step"] == 0.08
+        and alignment["control_contract"]["gripper_hold_mode"]
+        == "open_upper_limit"
         and "gait_frequency" not in alignment["control_contract"],
     )
     env.global_steps = 0
@@ -612,6 +752,9 @@ def runtime_tensors(env):
         "ee_pose": env.rigid_body_state[:, env.gripper_idx, :7],
         "ee_target": env.curr_ee_goal_cart_world,
         "jacobian": env.ee_j_eef,
+        "arm_q_command": env.arm_q_command,
+        "gripper_q_target": env.gripper_q_target,
+        "contact_forces": env.contact_forces,
         "leg_reward": env.rew_buf,
         "arm_reward": env.arm_rew_buf,
         "measured_heights": env.measured_heights,

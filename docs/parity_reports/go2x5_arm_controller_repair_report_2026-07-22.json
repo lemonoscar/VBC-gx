@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "task": "go2x5_lowlevel_arm_controller_repair",
+  "date": "2026-07-22",
+  "status": "passed",
+  "long_training": {
+    "stopped": true,
+    "restarted": false,
+    "last_checkpoint": "low-level/logs/go2x5-low/go2x5_v10_velocity_ee_coordination_seed1/model_26400.pt",
+    "last_checkpoint_iteration": 26400,
+    "last_checkpoint_sha256": "8e414dffce197a09f3852ac9db7fcf49d73b6663aac22479443e71520f8f0d7b"
+  },
+  "controller_contract": {
+    "arm_target_mode": "persistent_joint_command",
+    "arm_ik_gain": 0.1,
+    "arm_target_max_step_rad_per_policy_tick": 0.08,
+    "gripper_hold_mode": "open_upper_limit",
+    "workspace_near_body_x_upper_m": 0.24,
+    "profile": "go2x5_velocity_ee_coordination_v5_persistent_arm"
+  },
+  "gpu_validation": {
+    "readiness_s0": {
+      "steps": 200,
+      "passed": true,
+      "early_resets": 0,
+      "nonfinite_count": 0
+    },
+    "readiness_s1": {
+      "steps": 200,
+      "passed": true,
+      "early_resets": 0,
+      "nonfinite_count": 0
+    },
+    "fixed_base_gravity_center_target": {
+      "target_local_m": [0.34, 0.0, -0.149],
+      "steps": 500,
+      "error_m_at_step_50": 0.0003922661708202213,
+      "error_m_at_step_100": 0.000022159143554745242,
+      "error_m_at_step_200": 4.76837158203125e-7,
+      "final_error_m": 5.960464477539063e-8,
+      "finger_contact_force_n": [0.0, 0.0],
+      "nonfinite_count": 0
+    },
+    "weights_only_smoke": {
+      "source_iteration": 26400,
+      "iterations": 20,
+      "optimizer_restored": false,
+      "exploration_std_restored": false,
+      "curriculum_restored": false,
+      "output_checkpoint": "low-level/logs/go2x5-low/go2x5_v11_armfix_smoke_seed1/model_20.pt"
+    },
+    "smoke_checkpoint_rollout": {
+      "steps": 500,
+      "num_envs": 128,
+      "passed": true,
+      "early_resets": 0,
+      "nonfinite_count": 0,
+      "mean_collision_raw_per_tick": 0.0,
+      "arm_target_clamp_fraction": 0.0,
+      "action_saturation_fraction": 0.0037643229166666667,
+      "mean_ee_error_m": 0.00958817505883053,
+      "max_ee_error_m": 0.07508470118045807
+    },
+    "production_loader_parity": {
+      "checkpoint_purpose": "runtime_parity_smoke_only",
+      "contract_sha256": "24a928268a1582707d4d29c00ee97ba1172967c8eadcd6a74c178227644eaba5",
+      "case": "C3",
+      "mismatch_count": 0,
+      "oracle_failures": 0,
+      "nonfinite_count": 0,
+      "policy_output_max_abs": 0.09982084482908249,
+      "max_abs_errors": {
+        "observation": 0.0,
+        "policy_action": 0.0,
+        "applied_action": 0.0,
+        "scaled_q_target": 0.0,
+        "torque": 0.0,
+        "arm_target": 0.0
+      },
+      "passed": true
+    }
+  },
+  "checkpoint_policy": {
+    "old_checkpoint_full_resume_rejected": true,
+    "old_checkpoint_weights_only_warm_start_allowed": true,
+    "smoke_checkpoint_is_deployment_model": false
+  }
+}

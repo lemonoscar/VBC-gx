@@ -301,6 +301,9 @@ def _set_canonical_state(env, side, case="C0"):
         env.root_states[:, :13] = desired_root
         env.dof_pos[:] = desired_dof_pos
         env.dof_vel[:] = desired_dof_vel
+        env.arm_q_command[:] = desired_dof_pos[
+            :, -(6 + env.cfg.env.num_gripper_joints):-env.cfg.env.num_gripper_joints
+        ]
         env.base_quat[:] = desired_root[:, 3:7]
         env.base_lin_vel[:] = 0.0
         env.base_ang_vel[:] = 0.0
@@ -324,6 +327,9 @@ def _set_canonical_state(env, side, case="C0"):
         env._robot_root_states[:, :13] = desired_root
         env._dof_pos[:] = desired_dof_pos
         env._dof_vel[:] = desired_dof_vel
+        env.arm_q_command[:] = desired_dof_pos[
+            :, -(6 + env.num_gripper_joints):-env.num_gripper_joints
+        ]
         env._initial_dof_pos[:] = env.initial_robo_pos
         env._initial_dof_vel[:] = 0.0
         env._update_base_yaw_quat()

@@ -53,7 +53,7 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "feet_air_time = 1.0" in config
     assert "leg_action_l2_deadzone = -0.02" in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_velocity_ee_coordination_v4_explicit_turn"' in config
+    assert 'profile_name = "go2x5_velocity_ee_coordination_v5_persistent_arm"' in config
     assert '"name": "S0_slow_velocity_coordinated_reach"' in config
     assert '"name": "S1_full_velocity_coordinated_reach"' in config
     assert config.count('"name": "S') == 2
@@ -118,6 +118,7 @@ def test_reset_and_height_sampling_clear_cross_episode_state():
         "self.desired_contact_states[env_ids] = 1.",
         "self.obs_history_buf[env_ids, :, :] = 0.",
         "self.action_history_buf[env_ids, :, :] = 0.",
+        "self.arm_q_command[env_ids] = self.dof_pos[env_ids, arm_slice]",
         "self.height_points = self._init_height_points()",
         "self.measured_heights = self._get_heights()",
         "self.episode_metric_sums[key][env_ids] / completed_episode_steps",
@@ -186,9 +187,10 @@ def test_weights_only_warm_start_is_explicit_and_fail_closed():
         '"leg_damping"',
         '"physx"',
         '"ee_frame"',
-        '"ik_gain"',
     ):
         assert invariant in env
+    assert 'if int(expected.get("num_arm_actions", 0)) != 0:' in env
+    assert 'invariant_contract_fields.append("ik_gain")' in env
     assert "warm-start checkpoint control contract hash is corrupt" in env
     assert '"reward_and_curriculum"' in env
     assert '"policy_output_tanh"' in env
@@ -341,7 +343,9 @@ def test_checkpoint_rollout_fails_closed_on_early_resets():
     assert 'report["action_saturation_fraction"] <= report["max_action_saturation_fraction"]' in rollout
     assert '"arm_q_target": env.arm_q_target' in rollout
     assert '"arm_target_clamp_fraction_by_joint"' in rollout
-    assert "self.arm_q_target_unclamped = arm_pos_targets.clone()" in env
+    assert "self.arm_q_target_unclamped = target_base + delta" in env
+    assert "self.arm_q_command.copy_(arm_pos_targets)" in env
+    assert "delta = torch.clamp(delta, -max_step, max_step)" in env
     assert "self.arm_q_target_clamped = torch.abs(" in env
 
 

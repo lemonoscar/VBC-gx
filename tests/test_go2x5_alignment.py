@@ -154,6 +154,10 @@ def test_low_level_observation_dimensions_are_explicit():
     assert spec.observation_dim(True) == 799
     assert spec.BASE_HEIGHT_TARGET == 0.32
     assert spec.BASE_INIT_HEIGHT == 0.32
+    assert spec.ARM_TARGET_MODE == "persistent_joint_command"
+    assert spec.ARM_IK_GAIN == 0.10
+    assert spec.ARM_TARGET_MAX_STEP == 0.08
+    assert spec.LOW_LEVEL_GRIPPER_HOLD_MODE == "open_upper_limit"
     assert spec.DEFAULT_JOINT_ANGLES["arm_joint2"] == spec.ARM_READY_JOINT_ANGLES[1] == 2.4
     assert spec.DEFAULT_JOINT_ANGLES["arm_joint3"] == spec.ARM_READY_JOINT_ANGLES[2] == 1.15
     assert spec.DEFAULT_JOINT_ANGLES["RR_thigh_joint"] == 1.0
@@ -274,7 +278,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_velocity_ee_coordination_v4_explicit_turn"' in go2x5_config
+    assert 'profile_name = "go2x5_velocity_ee_coordination_v5_persistent_arm"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert go2x5_config.count('"name": "S0_slow_velocity_coordinated_reach"') == 1
     assert go2x5_config.count('"name": "S1_full_velocity_coordinated_reach"') == 1
@@ -310,8 +314,13 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "push_robots = False" in go2x5_config
     assert "max_push_vel_xy = 0.0" in go2x5_config
     assert "tracking_ee_sigma = 0.15" in go2x5_config
-    assert "ik_gain = 0.25" in go2x5_config
+    assert "ik_gain = robot_spec.ARM_IK_GAIN" in go2x5_config
     assert "track_ee_orientation = False" in go2x5_config
+    assert "target_mode = robot_spec.ARM_TARGET_MODE" in go2x5_config
+    assert "target_max_step = robot_spec.ARM_TARGET_MAX_STEP" in go2x5_config
+    assert "gripper_hold_mode = robot_spec.LOW_LEVEL_GRIPPER_HOLD_MODE" in go2x5_config
+    assert 'penalize_contacts_on = ["base", "Head", "hip", "thigh", "calf", "arm_link"]' in go2x5_config
+    assert "collision_upper_limits = [0.24, 0.2, 0.05]" in go2x5_config
     reward_file = (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
     runner = (ROOT / "third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py").read_text(encoding="utf-8")
 
@@ -325,6 +334,10 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert 'getattr(self.cfg.arm, "track_ee_orientation", True)' in manip_loco
     assert "task_jacobian = self.ee_j_eef[:, :3, :]" in manip_loco
     assert "task_error = dpose[:, :3, :]" in manip_loco
+    assert "target_base = self.arm_q_command" in manip_loco
+    assert "self.arm_q_command.copy_(arm_pos_targets)" in manip_loco
+    assert "self.arm_q_command[env_ids] = self.dof_pos[env_ids, arm_slice]" in manip_loco
+    assert "all_pos_targets[:, -self.cfg.env.num_gripper_joints:] = self.gripper_q_target" in manip_loco
     assert "def _reward_termination(self):" in manip_loco
     assert '"reset_roll_buf"' in manip_loco
     assert 'self.extras["episode"]["reset_" + name]' in manip_loco
@@ -377,6 +390,7 @@ def test_go2x5_simple_training_design_matches_current_plan():
 
 
 def test_go2x5_runtime_contract_is_deterministic_and_name_based():
+    spec = load_robot_spec()
     cfg = load_high_level_cfg()
     env_cfg = cfg["env"]
     asset_cfg = env_cfg["asset"]
@@ -404,10 +418,16 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert physx["default_buffer_size_multiplier"] == contract["physx"]["default_buffer_size_multiplier"] == 5.0
 
     assert env_cfg["eeFrame"] == contract["ee_frame"] == "TERRAIN_INVARIANT_YAW"
-    assert env_cfg["armIkGain"] == contract["ik_gain"] == 0.25
+    assert env_cfg["armIkGain"] == contract["ik_gain"] == spec.ARM_IK_GAIN
     assert env_cfg["trackEeOrientation"] is contract["track_ee_orientation"] is False
     assert contract["ik_task"] == "position_only_translation_3d"
+    assert env_cfg["armTargetMode"] == contract["arm_target_mode"] == spec.ARM_TARGET_MODE
+    assert env_cfg["armTargetMaxStep"] == contract["arm_target_max_step"] == spec.ARM_TARGET_MAX_STEP
+    assert contract["gripper_hold_mode"] == spec.LOW_LEVEL_GRIPPER_HOLD_MODE
     assert "task_jacobian = self.ee_j_eef[:, :3, :]" in high_level
+    assert "target_base = self.arm_q_command" in high_level
+    assert "self.arm_q_command.copy_(arm_pos_targets)" in high_level
+    assert "self.arm_q_command[env_ids] = self._dof_pos[env_ids, arm_slice]" in high_level
     assert env_cfg["armTargetUpdatePeriod"] == contract["arm_target_update_period"] == 4
     assert env_cfg["lowFootContactThreshold"] == contract["foot_contact_threshold"] == 1.5
     assert contract["gripper_position_stiffness"] == 110.0

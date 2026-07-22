@@ -116,6 +116,31 @@ def policy_to_urdf_oracle(policy_action: Any) -> np.ndarray:
     return action[..., expected]
 
 
+def integrate_arm_command_oracle(
+    command: Any,
+    ik_delta: Any,
+    gain: float,
+    max_step: float,
+    lower: Any,
+    upper: Any,
+) -> Dict[str, np.ndarray]:
+    """Independent persistent arm-command update with rate and joint limits."""
+    command_array = _array(command).astype(np.float64, copy=False)
+    delta = float(gain) * _array(ik_delta).astype(np.float64, copy=False)
+    if max_step > 0.0:
+        delta = np.clip(delta, -float(max_step), float(max_step))
+    unclamped = command_array + delta
+    return {
+        "delta": delta,
+        "unclamped": unclamped,
+        "target": np.clip(
+            unclamped,
+            _array(lower).astype(np.float64, copy=False),
+            _array(upper).astype(np.float64, copy=False),
+        ),
+    }
+
+
 def make_diagnostic_policy(mode: str, obs_dim: int, action_dim: int = 12,
                            seed: int = 20260713, scale: float = 0.05,
                            device: Any = None):
@@ -356,32 +381,58 @@ def _arm_target(env: Any, side: str) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
         import torch
 
         dpose = torch.cat([dpos, torch.as_tensor(drot, device=env.device)], dim=-1).unsqueeze(-1)
-        target = float(env.cfg.arm.ik_gain) * env._control_ik(dpose) + env.dof_pos[:, -(6 + num_gripper):-num_gripper]
+        ik_delta = env._control_ik(dpose)[0]
+        target_mode = getattr(
+            env.cfg.arm, "target_mode", "measured_joint_increment"
+        )
+        command = (
+            env.arm_q_command[0]
+            if target_mode == "persistent_joint_command"
+            else env.dof_pos[0, -(6 + num_gripper):-num_gripper]
+        )
         lower = env.dof_pos_limits[-(6 + num_gripper):-num_gripper, 0]
         upper = env.dof_pos_limits[-(6 + num_gripper):-num_gripper, 1]
-        unclamped = target.clone()
-        target = torch.clamp(unclamped, lower, upper)
+        oracle = integrate_arm_command_oracle(
+            command,
+            ik_delta,
+            float(env.cfg.arm.ik_gain),
+            float(getattr(env.cfg.arm, "target_max_step", 0.0)),
+            lower,
+            upper,
+        )
     else:
-        orientation = env.ee_orn
         dpos = env.ee_goal_world - env.ee_pos
         import torch
         dpose = torch.cat([dpos, torch.zeros_like(dpos)], dim=-1).unsqueeze(-1)
-        current = env._dof_pos[:, -(6 + num_gripper):-num_gripper]
-        unclamped = env.arm_ik_gain * env.control_ik(dpose) + current
+        ik_delta = env.control_ik(dpose)[0]
+        command = (
+            env.arm_q_command[0]
+            if env.arm_target_mode == "persistent_joint_command"
+            else env._dof_pos[0, -(6 + num_gripper):-num_gripper]
+        )
         lower = env.dof_limits_lower[-(6 + num_gripper):-num_gripper]
         upper = env.dof_limits_upper[-(6 + num_gripper):-num_gripper]
-        target = torch.clamp(unclamped, lower, upper)
+        oracle = integrate_arm_command_oracle(
+            command,
+            ik_delta,
+            env.arm_ik_gain,
+            env.arm_target_max_step,
+            lower,
+            upper,
+        )
+    unclamped = oracle["unclamped"]
+    target = oracle["target"]
     names = list(getattr(env, "dof_names", []))[-(6 + num_gripper):-num_gripper]
     records = []
     for index, name in enumerate(names):
-        before = float(unclamped[0, index])
-        after = float(target[0, index])
+        before = float(unclamped[index])
+        after = float(target[index])
         if abs(before - after) > 1.0e-8:
             records.append({
                 "name": name, "unclamped": before, "clamped": after,
                 "lower": float(lower[index]), "upper": float(upper[index]),
             })
-    return _array(target[0]), records
+    return _array(target), records
 
 
 def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
@@ -399,6 +450,7 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         ee_local = current[-11:-8] if env.cfg.env.observe_gait_commands else current[-6:-3]
         torques = env.torques[:, :12]
         arm_q = env.dof_pos[:, -(6 + env.cfg.env.num_gripper_joints):-env.cfg.env.num_gripper_joints]
+        arm_q_command = env.arm_q_command
         root_state = env.root_states[0, :13]
         dof_state = env.dof_state[:env.num_dofs]
         jacobian = env.ee_j_eef[0]
@@ -418,6 +470,7 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         arm_base = env._robot_root_states[:, :3] + quat_apply(env.base_yaw_quat, env.arm_base_offset)
         torques = env.torques[:, :12]
         arm_q = env._dof_pos[:, -(6 + env.num_gripper_joints):-env.num_gripper_joints]
+        arm_q_command = env.arm_q_command
         root_state = env._robot_root_states[0, :13]
         dof_state = env._dof_state[:env.num_dofs]
         jacobian = env.ee_j_eef[0]
@@ -436,7 +489,8 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         "current_proprio": current, "history": history, "policy_action": policy_action,
         "applied_action": urdf_action, "leg_torque": _array(torques[0]),
         "leg_q_target": _array(default_q) + _array(scale) * urdf_action,
-        "arm_q": _array(arm_q[0]), "arm_q_target": arm_target,
+        "arm_q": _array(arm_q[0]), "arm_q_command": _array(arm_q_command[0]),
+        "arm_q_target": arm_target,
         "root_state": root_array, "dof_state": dof_array,
         "ee_pose": np.concatenate((_array(env.ee_pos[0]), _array(env.ee_orn[0]))),
         "ee_target": _array(ee_world[0]), "jacobian": jacobian_array,
@@ -461,6 +515,7 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         "leg_q_target": fields["leg_q_target"].tolist(),
         "arm_q_target": arm_target.tolist(),
         "arm_q": _numbers(arm_q[0]),
+        "arm_q_command": _numbers(arm_q_command[0]),
         "ee_position_world": _numbers(env.ee_pos[0]),
         "ee_goal_world": _numbers(ee_world[0]),
         "ee_goal_local": _numbers(ee_local[0] if hasattr(ee_local, "ndim") and ee_local.ndim > 1 else ee_local),
@@ -559,6 +614,7 @@ def _natural_reset_record(env: Any, side: str, step: int) -> Dict[str, Any]:
         history = env.obs_history_buf[0]
         action = env.actions[0]
         ee_target = env.curr_ee_goal_cart_world[0]
+        arm_command = env.arm_q_command[0]
         contacts = env.foot_contacts_from_sensor[0]
         reset = env.reset_buf[0]
     else:
@@ -567,6 +623,7 @@ def _natural_reset_record(env: Any, side: str, step: int) -> Dict[str, Any]:
         history = env.low_obs_history_buf[0]
         action = env.last_low_actions[0]
         ee_target = env.ee_goal_world[0]
+        arm_command = env.arm_q_command[0]
         contacts = env.foot_contacts_from_sensor[0]
         reset = env.reset_buf[0]
         if hasattr(env, "_table_root_states"):
@@ -580,7 +637,8 @@ def _natural_reset_record(env: Any, side: str, step: int) -> Dict[str, Any]:
         "root_state": root, "dof_state": dof, "history": history,
         "last_applied_action": action, "gait_index": env.gait_indices[0],
         "clock_inputs": env.clock_inputs[0], "ee_target": ee_target,
-        "arm_target": arm_target, "foot_contacts": contacts,
+        "arm_command": arm_command, "arm_target": arm_target,
+        "foot_contacts": contacts,
         **task_fields,
     }
     counts, failures = nonfinite_details(fields)
@@ -588,7 +646,8 @@ def _natural_reset_record(env: Any, side: str, step: int) -> Dict[str, Any]:
         "step": step, "root_pose": _numbers(root[:7]), "dof_state": _numbers(dof),
         "history": _numbers(history), "last_applied_action": _numbers(action),
         "gait_index": _numbers(env.gait_indices[0]), "clock_inputs": _numbers(env.clock_inputs[0]),
-        "ee_target": _numbers(ee_target), "arm_target": arm_target.tolist(),
+        "ee_target": _numbers(ee_target), "arm_command": _numbers(arm_command),
+        "arm_target": arm_target.tolist(),
         "foot_contacts": _numbers(contacts), "reset": bool(_array(reset)),
         "nonfinite": counts, "nonfinite_failures": failures,
     }
