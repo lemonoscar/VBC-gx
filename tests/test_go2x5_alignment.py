@@ -130,6 +130,7 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["successEeDistThreshold"] == spec.HIGH_LEVEL_EE_SUCCESS_DISTANCE
     assert env_cfg["baseObjectDisThreshold"] == spec.HIGH_LEVEL_BASE_OBJECT_DISTANCE
     assert env_cfg["commandStopDistance"] == spec.HIGH_LEVEL_COMMAND_STOP_DISTANCE
+    assert env_cfg["printResetStats"] is False
     assert cfg["reward"]["scales"]["ee_orn"] == 0.0
     assert asset_cfg["control"]["armPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
     assert asset_cfg["control"]["armPositionDriveDamping"] == spec.ARM_POS_DAMPING
@@ -519,6 +520,7 @@ def test_high_level_training_entrypoint_is_fail_closed_and_one_shot():
     assert "base_obj_dis < self.command_stop_distance" in reward_source
     assert "obj_dir[:, 2] = 0." in reward_source
     assert "torch.abs(self.commands[:, 0]) <= self.lin_vel_x_clip" in pickmulti_source
+    assert "if not report_to_wandb and not self.print_reset_stats:" in pickmulti_source
     assert "while true" not in launch_source
     assert "set -euo pipefail" in launch_source
     assert "LOW_POLICY_PATH" in launch_source

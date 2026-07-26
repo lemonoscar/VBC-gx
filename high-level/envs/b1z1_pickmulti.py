@@ -44,6 +44,9 @@ class B1Z1PickMulti(B1Z1Base):
         self.object_fall_tolerance = float(
             self.cfg["env"].get("objectFallTolerance", 0.0)
         )
+        self.print_reset_stats = bool(
+            self.cfg["env"].get("printResetStats", True)
+        )
         if len(self.table_dims_cfg) != 3 or any(float(value) <= 0.0 for value in self.table_dims_cfg):
             raise ValueError(f"tableDims must contain three positive values, got {self.table_dims_cfg}")
         if len(self.table_position_xy) != 2:
@@ -197,6 +200,10 @@ class B1Z1PickMulti(B1Z1Base):
     def _reset_envs(self, env_ids):
         super()._reset_envs(env_ids)
         if len(env_ids) > 0:
+            report_to_wandb = bool(self.cfg["env"].get("wandb", False))
+            if not report_to_wandb and not self.print_reset_stats:
+                return
+
             # bowl_indices = torch.tensor([0, 9, 27, 31], device=self.device)
             # ball_indices = torch.tensor([3, 15, 17, 23], device=self.device)
             # long_box_indices = torch.tensor([1], device=self.device)
@@ -294,10 +301,10 @@ class B1Z1PickMulti(B1Z1Base):
                 predlift_success_rate = 0 if self.global_step_counter==0 else (self.predlift_success_counter / self.local_step_counter).mean().item()
                 wandb_dict["success_rate"]["SuccessRate / PredLifted"] = predlift_success_rate
             
-            if self.cfg["env"].get("wandb", False):
+            if report_to_wandb:
                 self.extras.update(wandb_dict)
                 # wandb.log(wandb_dict, step=self.global_step_counter)
-            else:
+            elif self.print_reset_stats:
                 print(wandb_dict)
                 print("Bowl count: {}\n, Ball count: {}\n, LongBox count: {}\n, SquareBox count: {}\n, Bottle count: {}\n, Cup count: {}\n, Drill count: {}\n".format(bowl_success_time[1], ball_success_time[1], longbox_success_time[1], squarebox_success_time[1], bottle_success_time[1], cup_success_time[1], drill_success_time[1]))
                 success_time = self.success_counter.sum().item(), self.episode_counter.sum().item()

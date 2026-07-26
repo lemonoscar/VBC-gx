@@ -19,6 +19,7 @@ env:
   commandStopDistance: 0.45
   holdSteps: 25
   lastCommands: False
+  printResetStats: False
 
   numGripperDof: 1
   numPhysicalGripperDof: 2
