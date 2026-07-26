@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-26",
+  "status": "passed_for_high_level_teacher_long_training",
+  "tested_code_commit": "5fcca99133df54c5959e41dc8b0440c04e1c2e20",
+  "low_level_checkpoint": {
+    "path": "low-level/logs/go2x5-low/go2x5_v11_persistent_arm_gain010_seed1/model_45000.pt",
+    "sha256": "5df0f06967963b3ceb6637282a70b193538b07eae815878f976eb8e511a92149",
+    "action_dimension": 12,
+    "num_arm_actions": 0,
+    "production_loader_validated": true
+  },
+  "natural_reset_runtime_gate": {
+    "num_envs": 33,
+    "steps": 64,
+    "observation_shape": [
+      33,
+      1093
+    ],
+    "low_observation_shape": [
+      33,
+      726
+    ],
+    "total_resets": 0,
+    "nonfinite_count": 0,
+    "arm_target_limit_violations": 0,
+    "maximum_ee_error_m": 0.07129298150539398,
+    "maximum_finger_contact_force_n": 0.0,
+    "minimum_object_table_margin_m": -0.0006435960531234741,
+    "passed": true
+  },
+  "ppo_smoke": {
+    "num_envs": 33,
+    "timesteps": 480,
+    "update_records": 20,
+    "process_exit_code": 0,
+    "all_scalar_records_finite": true,
+    "policy_loss_first": -0.05379018932580948,
+    "policy_loss_last": -0.03905342519283295,
+    "value_loss_first": 1.4857099056243896,
+    "value_loss_last": 0.41271525621414185,
+    "instantaneous_reward_mean_first": 0.27257442474365234,
+    "instantaneous_reward_mean_last": 0.28399837017059326,
+    "checkpoint_steps": [
+      100,
+      200,
+      300,
+      400
+    ],
+    "passed": true
+  },
+  "quiet_log_smoke": {
+    "num_envs": 33,
+    "timesteps": 48,
+    "process_exit_code": 0,
+    "reset_diagnostic_blocks": 0,
+    "mean_high_level_steps_per_second": 3.89,
+    "passed": true
+  },
+  "authorization": {
+    "high_level_teacher_long_training": true,
+    "high_level_student_training": false,
+    "deployment": false
+  }
+}
