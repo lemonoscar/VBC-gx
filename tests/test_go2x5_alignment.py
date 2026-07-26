@@ -98,6 +98,9 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["lowPolicyOutputTanh"] is True
     assert env_cfg["lowPolicyActionClip"] == 1.0
     assert env_cfg["requireLowPolicyMetadata"] is True
+    assert env_cfg["low_policy_path"].endswith(
+        "go2x5_v11_persistent_arm_gain010_seed1/model_45000.pt"
+    )
     assert env_cfg["numGripperDof"] == spec.NUM_GRIPPER_DOFS
     assert env_cfg["numPhysicalGripperDof"] == spec.NUM_PHYSICAL_GRIPPER_DOFS
     assert env_cfg["gripperOpenAtUpper"] is True
@@ -121,9 +124,13 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["objectPositionRangeY"] == spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y
     assert env_cfg["robotResetPositionRangeXY"] == spec.HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY
     assert env_cfg["robotResetYawRange"] == spec.HIGH_LEVEL_ROBOT_RESET_YAW_RANGE
+    assert env_cfg["resetEEGoalToCurrent"] is spec.HIGH_LEVEL_RESET_EE_GOAL_TO_CURRENT
+    assert env_cfg["objectFallTolerance"] == spec.HIGH_LEVEL_OBJECT_FALL_TOLERANCE
     assert env_cfg["liftedSuccessThreshold"] == spec.HIGH_LEVEL_LIFT_SUCCESS_HEIGHT
     assert env_cfg["successEeDistThreshold"] == spec.HIGH_LEVEL_EE_SUCCESS_DISTANCE
     assert env_cfg["baseObjectDisThreshold"] == spec.HIGH_LEVEL_BASE_OBJECT_DISTANCE
+    assert env_cfg["commandStopDistance"] == spec.HIGH_LEVEL_COMMAND_STOP_DISTANCE
+    assert cfg["reward"]["scales"]["ee_orn"] == 0.0
     assert asset_cfg["control"]["armPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
     assert asset_cfg["control"]["armPositionDriveDamping"] == spec.ARM_POS_DAMPING
     assert asset_cfg["control"]["gripperPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
@@ -187,7 +194,16 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
     robot_x = spec.HIGH_LEVEL_ROBOT_START_POSE[0]
     table_center_x = spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
     table_near_edge_x = table_center_x - spec.HIGH_LEVEL_TABLE_DIMS[0] / 2.0
-    assert round(table_near_edge_x - robot_x, 6) == 0.30
+    assert round(table_near_edge_x - robot_x, 6) == 0.50
+    nominal_arm_base_x = robot_x + spec.ARM_BASE_OFFSET[0]
+    nearest_object_x = (
+        spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
+        + spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X[0]
+    )
+    assert (
+        nearest_object_x - nominal_arm_base_x
+        > spec.HIGH_LEVEL_BASE_OBJECT_DISTANCE
+    )
     assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE == [0.10, 0.15]
     assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0] >= spec.HIGH_LEVEL_TABLE_DIMS[2]
     assert spec.HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY == [0.03, 0.03]
@@ -447,12 +463,67 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert "Low-level checkpoint control contract mismatch" in high_level
     assert "resolve_robot_start_pose(" in high_level
     assert "robot_start_pose=None" in high_level
+    assert "self.arm_base_offset.unsqueeze(0).expand(self.num_envs, -1)" in high_level
+    assert "ee_goal_global = self.ee_goal_world" in high_level
     assert '"num_arm_actions": max(int(self.cfg.env.num_actions) - 12, 0)' in low_level
     assert '"policy_output_tanh": bool(self.cfg.env.policy_output_tanh)' in low_level
     assert '"output_tanh": self.low_policy_output_tanh' in high_level
     assert "low_actions = torch.clamp(" in high_level
     assert "torch.nan_to_num" not in low_level
     assert "(self.num_envs, self.low_policy_num_actions)" in high_level
+
+
+def test_high_level_training_entrypoint_is_fail_closed_and_one_shot():
+    runtime_path = ROOT / "high-level/envs/runtime_contract.py"
+    runtime_spec = importlib.util.spec_from_file_location(
+        "runtime_contract_training", runtime_path
+    )
+    runtime = importlib.util.module_from_spec(runtime_spec)
+    runtime_spec.loader.exec_module(runtime)
+
+    assert runtime.object_fell_below_table(0.079, 0.10, 0.02)
+    assert not runtime.object_fell_below_table(0.080, 0.10, 0.02)
+    assert not runtime.object_fell_below_table(0.099, 0.10, 0.02)
+    try:
+        runtime.object_fell_below_table(0.0, 0.1, -0.01)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("negative object-fall tolerance was accepted")
+
+    base = (ROOT / "high-level/envs/b1z1_base.py").read_text(encoding="utf-8")
+    reset_start = base.index("    def _reset_envs(self, env_ids):")
+    reset_end = base.index("    def _reset_ee_goal(self, env_ids):")
+    reset_body = base[reset_start:reset_end]
+    assert reset_body.index("self._reset_ee_goal(env_ids)") < reset_body.index(
+        "self._compute_observations(env_ids)"
+    )
+
+    config_source = (ROOT / "high-level/utils/config.py").read_text(encoding="utf-8")
+    trainer_source = (ROOT / "high-level/train_multistate.py").read_text(encoding="utf-8")
+    reward_source = (ROOT / "high-level/envs/reward_vec_task.py").read_text(
+        encoding="utf-8"
+    )
+    pickmulti_source = (ROOT / "high-level/envs/b1z1_pickmulti.py").read_text(
+        encoding="utf-8"
+    )
+    launch_source = (ROOT / "high-level/run_go2x5_train_stable.sh").read_text(
+        encoding="utf-8"
+    )
+    readiness_source = (
+        ROOT / "high-level/check_go2x5_training_readiness.py"
+    ).read_text(encoding="utf-8")
+    assert 'parser.add_argument("--low_policy_path"' in config_source
+    assert 'cfg["env"]["low_policy_path"] = low_policy_path' in trainer_source
+    assert "set_seed(args.seed)" in trainer_source
+    assert "base_obj_dis < self.command_stop_distance" in reward_source
+    assert "obj_dir[:, 2] = 0." in reward_source
+    assert "torch.abs(self.commands[:, 0]) <= self.lin_vel_x_clip" in pickmulti_source
+    assert "while true" not in launch_source
+    assert "set -euo pipefail" in launch_source
+    assert "LOW_POLICY_PATH" in launch_source
+    assert "total_resets == 0" in readiness_source
+    assert "nonfinite_count == 0" in readiness_source
 
 
 if __name__ == "__main__":

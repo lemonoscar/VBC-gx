@@ -77,6 +77,11 @@ class B1Z1Base(RewardVecTask):
         self.ang_vel_yaw_clip = self.cfg["env"].get("lowLevelAngVelYawClip", ANG_VEL_YAW_CLIP)
         self.ang_vel_pitch_clip = self.cfg["env"].get("lowLevelAngVelPitchClip", ANG_VEL_PITCH_CLIP)
         self.low_foot_contact_threshold = float(self.cfg["env"].get("lowFootContactThreshold", 2.0))
+        self.command_stop_distance = float(
+            self.cfg["env"].get("commandStopDistance", 0.6)
+        )
+        if self.command_stop_distance <= 0.0:
+            raise ValueError("commandStopDistance must be positive")
         contract_cfg = self.cfg["env"].get("lowPolicyContract", {})
         command_ranges = contract_cfg.get("command_ranges", {})
         self.low_lin_vel_range = command_ranges.get("lin_vel_x", [-0.45, 0.45])
@@ -86,6 +91,9 @@ class B1Z1Base(RewardVecTask):
         )
         self.initial_ee_goal_cart_cfg = self.cfg["env"].get("initialEEGoalCart", [0.46, 0.0, 0.55])
         self.initial_ee_goal_orn_rpy_cfg = self.cfg["env"].get("initialEEGoalOrnRPY", [np.pi / 2, 0.0, 0.0])
+        self.reset_ee_goal_to_current = bool(
+            self.cfg["env"].get("resetEEGoalToCurrent", False)
+        )
         self.mask_arm_goal_cart_cfg = self.cfg["env"].get("maskArmGoalCart", [0.46, 0.0, 0.31])
         self.base_height_clip_cfg = self.cfg["env"].get("baseHeightClip", [0.4, 0.55])
         self.arm_base_offset_cfg = self.cfg["env"].get("armBaseOffset", [0.3, 0.0, 0.09])
@@ -1055,21 +1063,65 @@ class B1Z1Base(RewardVecTask):
             self._reset_actors(env_ids)
             self._reset_env_tensors(env_ids)
             self._refresh_sim_tensors()
+            self.update_roboinfo()
+            self._reset_ee_goal(env_ids)
             self._compute_observations(env_ids)
-            
-            if self.local_step_counter == 0:
-                self.curr_ee_goal_orn_rpy[:, :] = torch.tensor(self.initial_ee_goal_orn_rpy_cfg, device=self.device)
-                self.curr_ee_goal_cart[:] = torch.tensor(self.initial_ee_goal_cart_cfg, device=self.device).repeat(self.num_envs, 1)
-                self.init_ee_goal_cart = self.curr_ee_goal_cart.clone()
-            else:
-                self.curr_ee_goal_cart[env_ids, :] = self.init_ee_goal_cart[env_ids, :]
-                self.curr_ee_goal_orn_rpy[env_ids, :] = torch.tensor(self.initial_ee_goal_orn_rpy_cfg, device=self.device)
-            self._update_ee_goal_world(env_ids)
-                 
+
             # Randomize env
             if self.randomize:
                 self.apply_randomizations(self.randomization_params, env_ids)
         return
+
+    def _reset_ee_goal(self, env_ids):
+        initial_orn = torch.tensor(
+            self.initial_ee_goal_orn_rpy_cfg, device=self.device, dtype=torch.float
+        )
+        self.curr_ee_goal_orn_rpy[env_ids] = initial_orn
+
+        if self.reset_ee_goal_to_current:
+            if self.ee_frame == "TERRAIN_INVARIANT_YAW":
+                center = torch.cat([
+                    self._robot_root_states[env_ids, :2],
+                    torch.zeros(len(env_ids), 1, device=self.device),
+                ], dim=1)
+                center += quat_apply(
+                    self.base_yaw_quat[env_ids],
+                    self.ee_goal_center_offset[env_ids],
+                )
+                goal_local = quat_rotate_inverse(
+                    self.base_yaw_quat[env_ids],
+                    self.ee_pos[env_ids] - center,
+                )
+            else:
+                arm_base_offset = self.arm_base_offset.unsqueeze(0).expand(
+                    len(env_ids), -1
+                )
+                arm_base = self._robot_root_states[env_ids, :3] + quat_apply(
+                    self._robot_root_states[env_ids, 3:7], arm_base_offset
+                )
+                goal_local = quat_rotate_inverse(
+                    self._robot_root_states[env_ids, 3:7],
+                    self.ee_pos[env_ids] - arm_base,
+                )
+
+            for axis, limits in enumerate(self.low_ee_goal_ranges):
+                goal_local[:, axis] = torch.clamp(
+                    goal_local[:, axis], limits[0], limits[1]
+                )
+            self.curr_ee_goal_cart[env_ids] = goal_local
+        elif not hasattr(self, "init_ee_goal_cart"):
+            self.curr_ee_goal_cart[:] = torch.tensor(
+                self.initial_ee_goal_cart_cfg, device=self.device, dtype=torch.float
+            ).repeat(self.num_envs, 1)
+        else:
+            self.curr_ee_goal_cart[env_ids] = self.init_ee_goal_cart[env_ids]
+
+        if not hasattr(self, "init_ee_goal_cart"):
+            self.init_ee_goal_cart = self.curr_ee_goal_cart.clone()
+        elif self.reset_ee_goal_to_current:
+            self.init_ee_goal_cart[env_ids] = self.curr_ee_goal_cart[env_ids]
+
+        self._update_ee_goal_world(env_ids)
     
     def _compute_observations(self, env_ids=None):
         if env_ids is None:
@@ -1168,7 +1220,10 @@ class B1Z1Base(RewardVecTask):
             ) + self.arm_base[env_ids]
 
     def _get_low_level_ee_goal_local(self):
-        arm_base = self._robot_root_states[:, :3] + quat_apply(self.base_yaw_quat, self.arm_base_offset)
+        arm_base_offset = self.arm_base_offset.unsqueeze(0).expand(self.num_envs, -1)
+        arm_base = self._robot_root_states[:, :3] + quat_apply(
+            self.base_yaw_quat, arm_base_offset
+        )
         return quat_rotate_inverse(
             self._robot_root_states[:, 3:7], self.ee_goal_world - arm_base
         )
@@ -1228,10 +1283,7 @@ class B1Z1Base(RewardVecTask):
     def _draw_ee_goal_target(self):
         self.gym.clear_lines(self.viewer)
         sphere_geom = gymutil.WireframeSphereGeometry(0.03, 4, 4, None, color=(1, 0.129, 0))
-        ee_goal_local = self.curr_ee_goal_cart
-        arm_base_local = self.arm_base_offset.repeat(self.num_envs, 1)
-        arm_base = quat_apply(self._robot_root_states[:, 3:7], arm_base_local) + self._robot_root_states[:, :3]
-        ee_goal_global = quat_apply(self._robot_root_states[:, 3:7], ee_goal_local) + arm_base
+        ee_goal_global = self.ee_goal_world
         for i in range(self.num_envs):
             heights = ee_goal_global[i].cpu().numpy()
             x = heights[0]
@@ -1385,7 +1437,13 @@ class B1Z1Base(RewardVecTask):
         # print("curr_ee_orn_local", curr_ee_orn_local_rpy)
         # curr_flange_local = quat_rotate_inverse(self._robot_root_states[:, 3:7], self._rigid_body_pos[:, self.flange_idx] - arm_base)
         # flange_too_low = curr_flange_local[:, 2] < 0.
-        ik_fail = (self.curr_ee_goal_cart[:, -1:] - curr_ee_pos_local[:, -1:]).norm(dim=-1) > 0.2
+        if self.ee_frame == "TERRAIN_INVARIANT_YAW":
+            ik_height_error = torch.abs(self.ee_goal_world[:, 2] - self.ee_pos[:, 2])
+        else:
+            ik_height_error = (
+                self.curr_ee_goal_cart[:, -1:] - curr_ee_pos_local[:, -1:]
+            ).norm(dim=-1)
+        ik_fail = ik_height_error > 0.2
         # ik_fail &= (torch.div(self.curr_ee_goal_cart[:, -1], curr_ee_pos_local[:, -1]) < 0)
         # print("ikfail", ik_fail[0], self.curr_ee_goal_cart[0, -1:], curr_ee_pos_local[0, -1:])
         

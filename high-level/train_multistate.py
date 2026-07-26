@@ -21,8 +21,6 @@ from envs import *
 from utils.config import load_cfg, get_params, copy_cfg, resolve_task_cfg
 import utils.wrapper as wrapper
 
-set_seed(43)
-
 def create_env(cfg, args):
     cfg["env"]["enableDebugVis"] = args.debugvis
     cfg["env"]["cameraMode"] = "full"
@@ -108,6 +106,7 @@ class Value(DeterministicMixin, Model):
 
 def get_trainer(is_eval=False):
     args = get_params()
+    set_seed(args.seed)
     args.eval = is_eval
     args.wandb = args.wandb and (not args.eval) and (not args.debug)
     file_path = resolve_task_cfg(args.task, args.config)
@@ -133,6 +132,13 @@ def get_trainer(is_eval=False):
     print("Using config file: ", file_path)
         
     cfg = load_cfg(file_path)
+    if args.low_policy_path:
+        low_policy_path = os.path.abspath(os.path.expanduser(args.low_policy_path))
+        if not os.path.isfile(low_policy_path):
+            raise FileNotFoundError(
+                f"Low-level policy checkpoint does not exist: {low_policy_path}"
+            )
+        cfg["env"]["low_policy_path"] = low_policy_path
     cfg['env']['wandb'] = args.wandb
     cfg['env']["useTanh"] = args.use_tanh
     cfg['env']["near_goal_stop"] = args.near_goal_stop

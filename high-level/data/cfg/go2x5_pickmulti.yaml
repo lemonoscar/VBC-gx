@@ -16,13 +16,14 @@ env:
   liftedInitThreshold: 0.03
   successEeDistThreshold: 0.12
   baseObjectDisThreshold: 0.45
+  commandStopDistance: 0.45
   holdSteps: 25
   lastCommands: False
 
   numGripperDof: 1
   numPhysicalGripperDof: 2
   gripperOpenAtUpper: True
-  low_policy_path: "../low-level/logs/go2x5-low/go2x5_stable_base_v1/model_17600.pt"
+  low_policy_path: "../low-level/logs/go2x5-low/go2x5_v11_persistent_arm_gain010_seed1/model_45000.pt"
   requireLowPolicyMetadata: True
   lowPolicyNumActions: 12
   lowPolicyObserveGaitCommands: False
@@ -35,8 +36,9 @@ env:
   lowLevelAngVelPitchClip: 0.25
   lowFootContactThreshold: 1.5
   lowEeGoalRanges: [[0.215, 0.465], [-0.15, 0.15], [-0.334, 0.036]]
-  robotStartPose: [-0.45, 0.0, 0.32]
-  evalRobotStartPose: [-0.45, 0.0, 0.32]
+  robotStartPose: [-0.65, 0.0, 0.32]
+  evalRobotStartPose: [-0.65, 0.0, 0.32]
+  resetEEGoalToCurrent: True
   initialEEGoalCart: [0.365, 0.0, -0.164]
   initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
   maskArmGoalCart: [0.365, 0.0, -0.064]
@@ -58,6 +60,7 @@ env:
   tableHeightRange: [0.10, 0.15]
   objectPositionRangeX: [-0.05, 0.05]
   objectPositionRangeY: [-0.10, 0.10]
+  objectFallTolerance: 0.02
   robotResetPositionRangeXY: [0.03, 0.03]
   robotResetYawRange: 0.08
 
@@ -334,7 +337,7 @@ reward:
     command_reward: 0.25
     standpick: 0.25
     action_rate: -0.001
-    ee_orn: 0.01
+    ee_orn: 0.0
     base_dir: 0.25
     rad_penalty: 0.0
     base_ang_pen: 0.0

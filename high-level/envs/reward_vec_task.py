@@ -59,7 +59,8 @@ class RewardVecTask(VecTask):
         base_obj_dis = torch.norm(base_obj_dis, dim=-1)
         
         reward = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
-        reward[base_obj_dis < 0.6] = torch.exp(-torch.abs(self.commands[:, 0]))[base_obj_dis < 0.6]
+        near_object = base_obj_dis < self.command_stop_distance
+        reward[near_object] = torch.exp(-torch.abs(self.commands[:, 0]))[near_object]
         
         if self.global_step_counter < 30000:
             reward = 0.
@@ -73,7 +74,7 @@ class RewardVecTask(VecTask):
         base_obj_dis = obj_pos[:, :2] - self.arm_base[:, :2]
         base_obj_dis = torch.norm(base_obj_dis, dim=-1)
         
-        penalty = torch.where(base_obj_dis < 0.6, torch.norm(self.commands[:, :1], dim=-1), \
+        penalty = torch.where(base_obj_dis < self.command_stop_distance, torch.norm(self.commands[:, :1], dim=-1), \
             torch.zeros_like(self.reset_buf, device=self.device, dtype=torch.float)) # gripper and object
         
         if self.global_step_counter < 30000:
@@ -133,7 +134,7 @@ class RewardVecTask(VecTask):
         base_x_dir = torch.tensor([1., 0., 0.], device=self.device).repeat(self.num_envs, 1)
         base_x_dir_world = quat_apply(self.base_yaw_quat, base_x_dir)
         obj_dir = obj_pos - self._robot_root_states[:, :3]
-        obj_dir[:,:2] = 0.
+        obj_dir[:, 2] = 0.
         obj_dist = torch.norm(obj_dir, dim=-1)
         
         safe_dis = obj_dist >= 0.01

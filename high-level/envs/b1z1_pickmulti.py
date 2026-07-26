@@ -7,6 +7,7 @@ from collections import defaultdict
 import wandb
 
 from .b1z1_base import B1Z1Base, reindex_all, reindex_feet, LIN_VEL_X_CLIP, ANG_VEL_YAW_CLIP, torch_rand_int
+from .runtime_contract import object_fell_below_table
 from utils.low_level_model import ActorCritic
 
 from isaacgym import gymapi
@@ -40,10 +41,17 @@ class B1Z1PickMulti(B1Z1Base):
         self.table_height_range = self.cfg["env"].get("tableHeightRange", [0.0, 0.5])
         self.object_position_range_x = self.cfg["env"].get("objectPositionRangeX", [-0.15, 0.15])
         self.object_position_range_y = self.cfg["env"].get("objectPositionRangeY", [-0.10, 0.10])
+        self.object_fall_tolerance = float(
+            self.cfg["env"].get("objectFallTolerance", 0.0)
+        )
         if len(self.table_dims_cfg) != 3 or any(float(value) <= 0.0 for value in self.table_dims_cfg):
             raise ValueError(f"tableDims must contain three positive values, got {self.table_dims_cfg}")
         if len(self.table_position_xy) != 2:
             raise ValueError(f"tablePositionXY must contain two values, got {self.table_position_xy}")
+        if self.object_fall_tolerance < 0.0:
+            raise ValueError(
+                f"objectFallTolerance must be non-negative, got {self.object_fall_tolerance}"
+            )
         for name, limits in (
             ("tableHeightRange", self.table_height_range),
             ("objectPositionRangeX", self.object_position_range_x),
@@ -459,7 +467,9 @@ class B1Z1PickMulti(B1Z1Base):
         
         # Randomly change the object position in a small probability (like 0.1)
         obj_move_prob = torch_rand_float(0, 1, (self.num_envs, 1), device=self.device).squeeze()
-        changed_env_ids = torch.range(0, self.num_envs-1, dtype=int, device=self.device)[obj_move_prob < self.obj_move_prob]
+        changed_env_ids = torch.arange(
+            self.num_envs, dtype=torch.long, device=self.device
+        )[obj_move_prob < self.obj_move_prob]
         self._reset_objs(changed_env_ids)
 
         self.extras["lifted_now"] = self.lifted_now.unsqueeze(-1)*2-1 # This is for the lifted results from the last step, exactly what we want. Lifted = 1, unlifted = -1
@@ -484,8 +494,9 @@ class B1Z1PickMulti(B1Z1Base):
         self.lifted_object = torch.logical_and((cube_height - self.table_heights - self.init_height) > (self.lifted_success_threshold), d1 < self.success_ee_dist_threshold)
 
         z_cube = self._cube_root_states[:, 2]
-        # cube_falls = (z_cube < (self.table_heights + 0.03 / 2 - 0.05))
-        cube_falls = z_cube < self.table_heights # Fall or model glitch
+        cube_falls = object_fell_below_table(
+            z_cube, self.table_heights, self.object_fall_tolerance
+        )
         self.reset_buf[:] = self.reset_buf | cube_falls
         # print("cube falls", cube_falls[0])
         
@@ -507,7 +518,11 @@ class B1Z1PickMulti(B1Z1Base):
     # --------------------------------- reward functions ---------------------------------
     def _reward_standpick(self):
         reward = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
-        reward[(self.base_obj_dis < self.base_object_distace_threshold) & (self.commands[:, 0] < LIN_VEL_X_CLIP)] = 1.0
+        stopped_near_object = (
+            (self.base_obj_dis < self.base_object_distace_threshold)
+            & (torch.abs(self.commands[:, 0]) <= self.lin_vel_x_clip)
+        )
+        reward[stopped_near_object] = 1.0
         
         if self.global_step_counter < 30000:
             reward = 0.

@@ -40,9 +40,10 @@ EE_GOAL_MASK_LOCAL = [0.365, 0.0, -0.064]
 # root-forward [0.487, 0.0, 0.306] m at the 0.32 m Go2 stance height.
 ARM_READY_JOINT_ANGLES = [0.0, 2.4, 1.15, 0.0, 0.0, 0.0]
 
-# Go2-X5 tabletop task geometry.  With the robot root at x=-0.45 m and a
-# 0.30 m-deep table centered at x=0, the near table edge is 0.30 m ahead.
-HIGH_LEVEL_ROBOT_START_POSE = [-0.45, 0.0, BASE_INIT_HEIGHT]
+# Go2-X5 tabletop task geometry.  The 0.50 m gap to the near table edge keeps
+# the initial arm target collision-free and requires useful base locomotion
+# before grasping instead of allowing an arm-only shortcut.
+HIGH_LEVEL_ROBOT_START_POSE = [-0.65, 0.0, BASE_INIT_HEIGHT]
 HIGH_LEVEL_TABLE_DIMS = [0.30, 0.60, 0.10]
 HIGH_LEVEL_TABLE_POSITION_XY = [0.0, 0.0]
 HIGH_LEVEL_TABLE_HEIGHT_RANGE = [0.10, 0.15]
@@ -50,9 +51,12 @@ HIGH_LEVEL_OBJECT_POSITION_RANGE_X = [-0.05, 0.05]
 HIGH_LEVEL_OBJECT_POSITION_RANGE_Y = [-0.10, 0.10]
 HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY = [0.03, 0.03]
 HIGH_LEVEL_ROBOT_RESET_YAW_RANGE = 0.08
+HIGH_LEVEL_RESET_EE_GOAL_TO_CURRENT = True
+HIGH_LEVEL_OBJECT_FALL_TOLERANCE = 0.02
 HIGH_LEVEL_LIFT_SUCCESS_HEIGHT = 0.15
 HIGH_LEVEL_EE_SUCCESS_DISTANCE = 0.12
 HIGH_LEVEL_BASE_OBJECT_DISTANCE = 0.45
+HIGH_LEVEL_COMMAND_STOP_DISTANCE = 0.45
 
 GO2X5_LAB_LEG_ACTION_SCALE = [0.125, 0.25, 0.25] * 4
 LEGACY_LEG_ACTION_SCALE = [0.4, 0.45, 0.45] * 4

@@ -30,6 +30,7 @@ def get_params():
     parser.add_argument("--wandb_project", type=str, default="isaacgym")
     parser.add_argument("--wandb_name", type=str, default="isaacgym")
     parser.add_argument("--checkpoint", type=str, default="")
+    parser.add_argument("--low_policy_path", type=str, default="")
     parser.add_argument("--config", type=str, default="")
     parser.add_argument("--experiment_dir", type=str, default="experiments")
     parser.add_argument("--debugvis", action="store_true")
@@ -64,7 +65,7 @@ def get_params():
     parser.add_argument("--arm_kp", type=int, default=40) # only useful when log data
     parser.add_argument("--arm_kd", type=float, default=2) # only useful when log data
     parser.add_argument("--table_height", type=float, default=None) # only useful when log data
-    parser.add_argument("--seed", type=int, default=43) # only useful when log data
+    parser.add_argument("--seed", type=int, default=43)
     parser.add_argument("--num_envs", type=int, default=None)
     
     args = parser.parse_args()
