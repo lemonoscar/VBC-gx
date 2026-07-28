@@ -104,8 +104,9 @@ class Value(DeterministicMixin, Model):
         else:
             return self.net(inputs["states"]), {}
 
-def get_trainer(is_eval=False):
-    args = get_params()
+def get_trainer(is_eval=False, args=None):
+    if args is None:
+        args = get_params()
     set_seed(args.seed)
     args.eval = is_eval
     args.wandb = args.wandb and (not args.eval) and (not args.debug)

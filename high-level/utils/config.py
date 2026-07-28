@@ -15,7 +15,7 @@ def copy_cfg(file_path, target_path):
     Path(target_path).mkdir(parents=True, exist_ok=True)
     subprocess.run(["cp", file_path, target_path])
 
-def get_params():
+def get_params(argv=None):
     parser = argparse.ArgumentParser(
         prog="Z1 training",
     )
@@ -68,7 +68,7 @@ def get_params():
     parser.add_argument("--seed", type=int, default=43)
     parser.add_argument("--num_envs", type=int, default=None)
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     
     return args
 
