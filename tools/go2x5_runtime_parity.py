@@ -377,10 +377,14 @@ def _arm_target(env: Any, side: str) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     num_gripper = int(env.cfg.env.num_gripper_joints) if side == "low" else int(env.num_gripper_joints)
     if side == "low":
         dpos = env.curr_ee_goal_cart_world - env.ee_pos
-        drot = np.zeros((env.num_envs, 3), dtype=np.float32)
         import torch
+        from isaacgym.torch_utils import orientation_error
 
-        dpose = torch.cat([dpos, torch.as_tensor(drot, device=env.device)], dim=-1).unsqueeze(-1)
+        ee_orn = env.ee_orn / torch.norm(
+            env.ee_orn, dim=-1, keepdim=True
+        ).clamp(min=1.0e-6)
+        drot = orientation_error(env.ee_goal_orn_quat, ee_orn)
+        dpose = torch.cat([dpos, drot], dim=-1).unsqueeze(-1)
         ik_delta = env._control_ik(dpose)[0]
         target_mode = getattr(
             env.cfg.arm, "target_mode", "measured_joint_increment"
@@ -403,7 +407,23 @@ def _arm_target(env: Any, side: str) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     else:
         dpos = env.ee_goal_world - env.ee_pos
         import torch
-        dpose = torch.cat([dpos, torch.zeros_like(dpos)], dim=-1).unsqueeze(-1)
+        from isaacgym.torch_utils import (
+            orientation_error,
+            quat_from_euler_xyz,
+            quat_mul,
+        )
+
+        local_quat = quat_from_euler_xyz(
+            env.curr_ee_goal_orn_rpy[:, 0],
+            env.curr_ee_goal_orn_rpy[:, 1],
+            env.curr_ee_goal_orn_rpy[:, 2],
+        )
+        target_quat = quat_mul(env.base_yaw_quat, local_quat)
+        ee_orn = env.ee_orn / torch.norm(
+            env.ee_orn, dim=-1, keepdim=True
+        ).clamp(min=1.0e-6)
+        drot = orientation_error(target_quat, ee_orn)
+        dpose = torch.cat([dpos, drot], dim=-1).unsqueeze(-1)
         ik_delta = env.control_ik(dpose)[0]
         command = (
             env.arm_q_command[0]
@@ -447,6 +467,7 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         from isaacgym.torch_utils import quat_apply
 
         arm_base = env.base_pos + quat_apply(env.base_yaw_quat, env.arm_base_offset)
+        ee_orientation_target = env.ee_goal_orn_quat
         ee_local = current[-11:-8] if env.cfg.env.observe_gait_commands else current[-6:-3]
         torques = env.torques[:, :12]
         arm_q = env.dof_pos[:, -(6 + env.cfg.env.num_gripper_joints):-env.cfg.env.num_gripper_joints]
@@ -463,11 +484,23 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         arm_upper = env.dof_pos_limits[-(6 + env.cfg.env.num_gripper_joints):-env.cfg.env.num_gripper_joints, 1]
         robot_start_z = float(getattr(env.cfg.init_state, "pos", [0, 0, 0.32])[2])
     else:
-        from isaacgym.torch_utils import quat_apply
+        from isaacgym.torch_utils import (
+            quat_apply,
+            quat_from_euler_xyz,
+            quat_mul,
+        )
 
         ee_world = env.ee_goal_world
         ee_local = env._get_low_level_ee_goal_local()
         arm_base = env._robot_root_states[:, :3] + quat_apply(env.base_yaw_quat, env.arm_base_offset)
+        local_ee_orientation = quat_from_euler_xyz(
+            env.curr_ee_goal_orn_rpy[:, 0],
+            env.curr_ee_goal_orn_rpy[:, 1],
+            env.curr_ee_goal_orn_rpy[:, 2],
+        )
+        ee_orientation_target = quat_mul(
+            env.base_yaw_quat, local_ee_orientation
+        )
         torques = env.torques[:, :12]
         arm_q = env._dof_pos[:, -(6 + env.num_gripper_joints):-env.num_gripper_joints]
         arm_q_command = env.arm_q_command
@@ -493,7 +526,9 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         "arm_q_target": arm_target,
         "root_state": root_array, "dof_state": dof_array,
         "ee_pose": np.concatenate((_array(env.ee_pos[0]), _array(env.ee_orn[0]))),
-        "ee_target": _array(ee_world[0]), "jacobian": jacobian_array,
+        "ee_target": _array(ee_world[0]),
+        "ee_orientation_target": _array(ee_orientation_target[0]),
+        "jacobian": jacobian_array,
     }
     nonfinite, nonfinite_failures = nonfinite_details(fields)
     snapshot = {
@@ -518,6 +553,8 @@ def collect_controller_snapshot(env: Any, side: str) -> Dict[str, Any]:
         "arm_q_command": _numbers(arm_q_command[0]),
         "ee_position_world": _numbers(env.ee_pos[0]),
         "ee_goal_world": _numbers(ee_world[0]),
+        "ee_goal_orientation": fields["ee_orientation_target"].tolist(),
+        "ee_goal_orientation_rpy": _numbers(env.curr_ee_goal_orn_rpy[0]),
         "ee_goal_local": _numbers(ee_local[0] if hasattr(ee_local, "ndim") and ee_local.ndim > 1 else ee_local),
         "ee_command_local": _numbers(env.curr_ee_goal_cart[0]),
         "arm_base_world": _numbers(arm_base[0]),
@@ -817,9 +854,31 @@ def validate_controller_oracles(snapshot: Mapping[str, Any], torque_atol: float 
     return failures
 
 
+def _controller_field_atol(path: str, default_atol: float) -> float:
+    """Return the acceptance tolerance for one controller snapshot field."""
+    field_atols = (
+        (("current_proprio", "history"), 1.0e-6),
+        (("policy_action", "applied_action"), 1.0e-7),
+        (("leg_q_target",), 1.0e-6),
+        (("leg_torque", "arm_q_target"), 1.0e-5),
+    )
+    for prefixes, field_atol in field_atols:
+        if path.startswith(prefixes):
+            return field_atol
+    return default_atol
+
+
 def build_comparison_report(low: Mapping[str, Any], high: Mapping[str, Any],
                             atol: float = DEFAULT_ATOL) -> Dict[str, Any]:
-    mismatches = compare_snapshots(low, high, atol=atol)
+    raw_mismatches = compare_snapshots(low, high, atol=0.0)
+    mismatches = []
+    for mismatch in raw_mismatches:
+        error = mismatch.get("abs_error")
+        if error is not None and error <= _controller_field_atol(
+            mismatch["path"], atol
+        ):
+            continue
+        mismatches.append(mismatch)
     has_oracle_inputs = all("pd_inputs" in snapshot and "ee_oracle_inputs" in snapshot
                             for snapshot in (low, high))
     oracle_failures = validate_controller_oracles(low) + validate_controller_oracles(high) \
@@ -834,10 +893,19 @@ def build_comparison_report(low: Mapping[str, Any], high: Mapping[str, Any],
         "torque": ("leg_torque",),
         "arm_target": ("arm_q_target",),
     }
+    low_flat = _flatten(low)
+    high_flat = _flatten(high)
     max_errors = {}
     for name, prefixes in categories.items():
-        values = [item.get("abs_error", 0.0) for item in mismatches
-                  if item["path"].startswith(prefixes)]
+        values = []
+        for path in set(low_flat) & set(high_flat):
+            if not path.startswith(prefixes):
+                continue
+            left, right = low_flat[path], high_flat[path]
+            if isinstance(left, (int, float)) and isinstance(
+                right, (int, float)
+            ) and math.isfinite(float(left)) and math.isfinite(float(right)):
+                values.append(abs(float(left) - float(right)))
         max_errors[name] = max(values, default=0.0)
     passed = not mismatches and not oracle_failures and nonfinite_count == 0
     return {
@@ -847,6 +915,14 @@ def build_comparison_report(low: Mapping[str, Any], high: Mapping[str, Any],
         "policy_mode": low.get("policy_mode", ""),
         "runtime_contract_hash": low.get("runtime_contract_hash", ""),
         "atol": atol,
+        "field_atols": {
+            "observation": 1.0e-6,
+            "policy_action": 1.0e-7,
+            "applied_action": 1.0e-7,
+            "scaled_q_target": 1.0e-6,
+            "torque": 1.0e-5,
+            "arm_target": 1.0e-5,
+        },
         "mismatch_count": len(mismatches),
         "oracle_failures": len(oracle_failures),
         "nonfinite_count": nonfinite_count,

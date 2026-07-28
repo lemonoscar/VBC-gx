@@ -10,6 +10,7 @@ from pathlib import Path
 import check_go2x5_training_readiness as readiness
 
 import torch
+from isaacgym.torch_utils import orientation_error
 
 from legged_gym.utils import task_registry
 from legged_gym.utils.helpers import class_to_dict
@@ -35,6 +36,11 @@ def parse_args():
     )
     parser.add_argument("--require-coordination", action="store_true")
     parser.add_argument("--max-mean-ee-error-m", type=float, default=0.06)
+    parser.add_argument(
+        "--max-mean-ee-orientation-error-rad",
+        type=float,
+        default=0.15,
+    )
     parser.add_argument("--max-vx-abs-error-mps", type=float, default=0.05)
     parser.add_argument("--max-yaw-abs-error-radps", type=float, default=0.05)
     parser.add_argument("--max-height-error-m", type=float, default=0.03)
@@ -102,6 +108,8 @@ def run(cli):
     max_abs_torque = 0.0
     ee_error_sum = 0.0
     ee_error_max = 0.0
+    ee_orientation_error_sum = 0.0
+    ee_orientation_error_max = 0.0
     vx_error_sum = 0.0
     yaw_error_sum = 0.0
     height_error_sum = 0.0
@@ -117,6 +125,12 @@ def run(cli):
     goal_z_base_pitch_sum = 0.0
     target_local_min = torch.full((3,), float("inf"), device=env.device)
     target_local_max = torch.full((3,), float("-inf"), device=env.device)
+    target_orientation_rpy_min = torch.full(
+        (3,), float("inf"), device=env.device
+    )
+    target_orientation_rpy_max = torch.full(
+        (3,), float("-inf"), device=env.device
+    )
 
     for step in range(cli.steps):
         if cli.zero_policy:
@@ -178,6 +192,24 @@ def run(cli):
         ee_error = torch.norm(env.ee_pos - env.curr_ee_goal_cart_world, dim=-1)
         ee_error_sum += float(ee_error.mean().item())
         ee_error_max = max(ee_error_max, float(ee_error.max().item()))
+        ee_quaternion = env.ee_orn / torch.norm(
+            env.ee_orn, dim=-1, keepdim=True
+        ).clamp(min=1.0e-6)
+        ee_orientation_vector_error = orientation_error(
+            env.ee_goal_orn_quat, ee_quaternion
+        )
+        ee_orientation_error = 2.0 * torch.asin(
+            torch.clamp(
+                torch.norm(ee_orientation_vector_error, dim=-1), max=1.0
+            )
+        )
+        ee_orientation_error_sum += float(
+            ee_orientation_error.mean().item()
+        )
+        ee_orientation_error_max = max(
+            ee_orientation_error_max,
+            float(ee_orientation_error.max().item()),
+        )
         terrain_height = env.reward_container._terrain_height()
         goal_z = env.curr_ee_goal_cart_world[:, 2] - terrain_height
         base_height = env.root_states[:, 2] - terrain_height
@@ -199,6 +231,14 @@ def run(cli):
         goal_z_base_pitch_sum += float(torch.sum(goal_z * body_pitch).item())
         target_local_min = torch.minimum(target_local_min, env.curr_ee_goal_cart.min(dim=0).values)
         target_local_max = torch.maximum(target_local_max, env.curr_ee_goal_cart.max(dim=0).values)
+        target_orientation_rpy_min = torch.minimum(
+            target_orientation_rpy_min,
+            env.curr_ee_goal_orn_rpy.min(dim=0).values,
+        )
+        target_orientation_rpy_max = torch.maximum(
+            target_orientation_rpy_max,
+            env.curr_ee_goal_orn_rpy.max(dim=0).values,
+        )
 
     expected_target_ranges = [
         list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
@@ -252,6 +292,10 @@ def run(cli):
         },
         "mean_ee_error_m": ee_error_sum / cli.steps,
         "max_ee_error_m": ee_error_max,
+        "mean_ee_orientation_error_rad": (
+            ee_orientation_error_sum / cli.steps
+        ),
+        "max_ee_orientation_error_rad": ee_orientation_error_max,
         "mean_vx_abs_error_mps": vx_error_sum / cli.steps,
         "mean_yaw_abs_error_radps": yaw_error_sum / cli.steps,
         "mean_height_adaptation_error_m": height_error_sum / cli.steps,
@@ -260,6 +304,13 @@ def run(cli):
         "goal_z_base_pitch_correlation": pitch_correlation,
         "expected_target_local_ranges": expected_target_ranges,
         "sampled_target_local_ranges": sampled_target_ranges,
+        "sampled_target_orientation_rpy_ranges": [
+            [
+                float(target_orientation_rpy_min[axis].item()),
+                float(target_orientation_rpy_max[axis].item()),
+            ]
+            for axis in range(3)
+        ],
         "target_bounds_ok": target_bounds_ok,
         "early_resets": early_resets,
         "max_early_resets": cli.max_early_resets,
@@ -274,6 +325,9 @@ def run(cli):
         "first_nonfinite": first_nonfinite,
         "coordination_thresholds": {
             "max_mean_ee_error_m": cli.max_mean_ee_error_m,
+            "max_mean_ee_orientation_error_rad": (
+                cli.max_mean_ee_orientation_error_rad
+            ),
             "max_vx_abs_error_mps": cli.max_vx_abs_error_mps,
             "max_yaw_abs_error_radps": cli.max_yaw_abs_error_radps,
             "max_height_error_m": cli.max_height_error_m,
@@ -293,6 +347,8 @@ def run(cli):
     )
     report["coordination_passed"] = (
         report["mean_ee_error_m"] <= cli.max_mean_ee_error_m
+        and report["mean_ee_orientation_error_rad"]
+        <= cli.max_mean_ee_orientation_error_rad
         and report["mean_vx_abs_error_mps"] <= cli.max_vx_abs_error_mps
         and report["mean_yaw_abs_error_radps"] <= cli.max_yaw_abs_error_radps
         and report["mean_height_adaptation_error_m"] <= cli.max_height_error_m

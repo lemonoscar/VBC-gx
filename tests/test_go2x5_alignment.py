@@ -2,17 +2,30 @@ import importlib.util
 import pathlib
 import xml.etree.ElementTree as ET
 
+import numpy as np
 import yaml
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_robot_spec.py"
+WORKSPACE_GEOMETRY_PATH = (
+    ROOT / "low-level/legged_gym/envs/manip_loco/go2x5_workspace_geometry.py"
+)
 URDF_PATH = ROOT / "low-level/resources/robots/go2x5/go2_x5.urdf"
 HIGH_LEVEL_CFG_PATH = ROOT / "high-level/data/cfg/go2x5_pickmulti.yaml"
 
 
 def load_robot_spec():
     module_spec = importlib.util.spec_from_file_location("go2x5_robot_spec", SPEC_PATH)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module
+
+
+def load_workspace_geometry():
+    module_spec = importlib.util.spec_from_file_location(
+        "go2x5_workspace_geometry", WORKSPACE_GEOMETRY_PATH
+    )
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     return module
@@ -71,6 +84,12 @@ def test_robot_spec_matches_go2x5_urdf():
     ]
     assert spec.URDF_FOOT_BODY_NAMES == ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
     assert spec.FOOT_BODY_NAMES == ["FR_foot", "FL_foot", "RR_foot", "RL_foot"]
+    for foot_name in spec.URDF_FOOT_BODY_NAMES:
+        collision_sphere = urdf.find(
+            f"./link[@name='{foot_name}']/collision/geometry/sphere"
+        )
+        assert collision_sphere is not None
+        assert float(collision_sphere.attrib["radius"]) == spec.FOOT_COLLISION_RADIUS
     assert spec.EE_BODY_NAME in link_names
     assert spec.WRIST_BODY_NAME in link_names
     assert spec.FLANGE_BODY_NAME in link_names
@@ -98,9 +117,7 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["lowPolicyOutputTanh"] is True
     assert env_cfg["lowPolicyActionClip"] == 1.0
     assert env_cfg["requireLowPolicyMetadata"] is True
-    assert env_cfg["low_policy_path"].endswith(
-        "go2x5_v11_persistent_arm_gain010_seed1/model_45000.pt"
-    )
+    assert env_cfg["low_policy_path"] == ""
     assert env_cfg["numGripperDof"] == spec.NUM_GRIPPER_DOFS
     assert env_cfg["numPhysicalGripperDof"] == spec.NUM_PHYSICAL_GRIPPER_DOFS
     assert env_cfg["gripperOpenAtUpper"] is True
@@ -131,11 +148,19 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["baseObjectDisThreshold"] == spec.HIGH_LEVEL_BASE_OBJECT_DISTANCE
     assert env_cfg["commandStopDistance"] == spec.HIGH_LEVEL_COMMAND_STOP_DISTANCE
     assert env_cfg["printResetStats"] is False
-    assert cfg["reward"]["scales"]["ee_orn"] == 0.0
+    assert cfg["reward"]["scales"]["ee_orn"] == 0.25
     assert asset_cfg["control"]["armPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
     assert asset_cfg["control"]["armPositionDriveDamping"] == spec.ARM_POS_DAMPING
-    assert asset_cfg["control"]["gripperPositionDriveStiffness"] == spec.ARM_POS_STIFFNESS
-    assert asset_cfg["control"]["gripperPositionDriveDamping"] == spec.ARM_POS_DAMPING
+    assert (
+        asset_cfg["control"]["gripperPositionDriveStiffness"]
+        == spec.GRIPPER_POS_STIFFNESS
+    )
+    assert (
+        asset_cfg["control"]["gripperPositionDriveDamping"]
+        == spec.GRIPPER_POS_DAMPING
+    )
+    assert env_cfg["lowEeGoalOrnRanges"] == spec.EE_ORIENTATION_ABSOLUTE_RANGES
+    assert env_cfg["initialEEGoalOrnRPY"] == spec.EE_ORIENTATION_NOMINAL_RPY
     assert env_cfg["armBaseOffset"] == spec.ARM_BASE_OFFSET
     assert env_cfg["eeBodyName"] == spec.EE_BODY_NAME
     assert env_cfg["wristBodyName"] == spec.WRIST_BODY_NAME
@@ -163,7 +188,8 @@ def test_low_level_observation_dimensions_are_explicit():
     assert spec.BASE_HEIGHT_TARGET == 0.32
     assert spec.BASE_INIT_HEIGHT == 0.32
     assert spec.ARM_TARGET_MODE == "persistent_joint_command"
-    assert spec.ARM_IK_GAIN == 0.10
+    assert spec.ARM_IK_GAIN == 0.20
+    assert spec.ARM_IK_ORIENTATION_WEIGHT == 0.35
     assert spec.ARM_TARGET_MAX_STEP == 0.08
     assert spec.LOW_LEVEL_GRIPPER_HOLD_MODE == "open_upper_limit"
     assert spec.DEFAULT_JOINT_ANGLES["arm_joint2"] == spec.ARM_READY_JOINT_ANGLES[1] == 2.4
@@ -178,8 +204,10 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
     for center, local_range in zip(spec.EE_GOAL_CENTER_OFFSET, spec.EE_GOAL_LOCAL_RANGES):
         world_ranges.append([round(center + value, 6) for value in local_range])
     assert world_ranges == spec.EE_GOAL_WORLD_RANGES
-    assert spec.EE_GOAL_WORLD_RANGES[0] == [0.30, 0.55]
-    assert spec.EE_GOAL_WORLD_RANGES[2] == [0.08, 0.45]
+    assert spec.EE_GOAL_WORLD_RANGES[0] == [0.30, 0.65]
+    assert spec.EE_GOAL_WORLD_RANGES[1] == [-0.225, 0.225]
+    assert spec.EE_GOAL_WORLD_RANGES[2] == [0.05, 0.45]
+    assert spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS == 0.64
 
     init_start_world = [
         round(center + value, 6)
@@ -195,20 +223,69 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
     robot_x = spec.HIGH_LEVEL_ROBOT_START_POSE[0]
     table_center_x = spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
     table_near_edge_x = table_center_x - spec.HIGH_LEVEL_TABLE_DIMS[0] / 2.0
-    assert round(table_near_edge_x - robot_x, 6) == 0.50
-    nominal_arm_base_x = robot_x + spec.ARM_BASE_OFFSET[0]
-    nearest_object_x = (
-        spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
-        + spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X[0]
+    assert round(table_near_edge_x - robot_x, 6) == 0.30
+    object_root_forward_x = [
+        spec.HIGH_LEVEL_TABLE_POSITION_XY[0] + bound - robot_x
+        for bound in spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X
+    ]
+    assert (
+        spec.EE_GOAL_WORLD_RANGES[0][0]
+        <= min(object_root_forward_x)
+        <= max(object_root_forward_x)
+        <= spec.EE_GOAL_WORLD_RANGES[0][1]
     )
     assert (
-        nearest_object_x - nominal_arm_base_x
-        > spec.HIGH_LEVEL_BASE_OBJECT_DISTANCE
+        spec.EE_GOAL_WORLD_RANGES[1][0]
+        <= spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y[0]
+        <= spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y[1]
+        <= spec.EE_GOAL_WORLD_RANGES[1][1]
     )
-    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE == [0.10, 0.15]
+    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE == [0.10, 0.20]
     assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0] >= spec.HIGH_LEVEL_TABLE_DIMS[2]
     assert spec.HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY == [0.03, 0.03]
     assert spec.HIGH_LEVEL_ROBOT_RESET_YAW_RANGE == 0.08
+
+
+def test_go2x5_colored_workspace_uses_production_collision_predicates():
+    spec = load_robot_spec()
+    geometry = load_workspace_geometry()
+    box = {
+        axis: bounds
+        for axis, bounds in zip(("x", "y", "z"), spec.EE_GOAL_LOCAL_RANGES)
+    }
+    points = geometry.cartesian_grid(box, geometry.parse_grid_resolution("11,9,11"))
+    accepted, collision_rejected, underground_rejected = geometry.classify_cartesian_goals(
+        points,
+        collision_lower_limits=[-0.8, -0.2, -0.7],
+        collision_upper_limits=[0.24, 0.2, 0.05],
+        underground_limit=-0.6,
+    )
+
+    assert points.shape == (1089, 3)
+    assert accepted.sum() == 1012
+    assert collision_rejected.sum() == 77
+    assert underground_rejected.sum() == 0
+    assert np.all(points[collision_rejected, 0] < 0.24)
+    assert not np.any(
+        np.all(points[accepted] < np.array([0.24, 0.2, 0.05]), axis=1)
+        & np.all(points[accepted] > np.array([-0.8, -0.2, -0.7]), axis=1)
+    )
+    reach_rejected = geometry.nominal_reach_rejected(
+        points, spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS
+    )
+    assert reach_rejected.any()
+    assert geometry.nominal_reach_rejected(
+        np.array([[0.565, 0.225, -0.364]]),
+        spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS,
+    ).item()
+    assert not geometry.nominal_reach_rejected(
+        np.array([[0.365, 0.0, -0.064]]),
+        spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS,
+    ).item()
+
+    segments = geometry.cross_marker_segments(points[:2], half_extent=0.005)
+    assert segments.shape == (6, 2, 3)
+    assert np.isfinite(segments).all()
 
 
 def test_low_level_action_interfaces_keep_b1z1_full_dim():
@@ -294,31 +371,30 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_l = [0.20, 0.56]" in go2x5_config
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
-    assert "enabled = True" in go2x5_config
-    assert 'profile_name = "go2x5_velocity_ee_coordination_v5_persistent_arm"' in go2x5_config
+    assert "enabled = False" in go2x5_config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_v1"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
-    assert go2x5_config.count('"name": "S0_slow_velocity_coordinated_reach"') == 1
-    assert go2x5_config.count('"name": "S1_full_velocity_coordinated_reach"') == 1
-    assert '"name": "S2_' not in go2x5_config
+    assert "stages = []" in go2x5_config
+    assert '"name": "S0_' not in go2x5_config
+    assert '"name": "S1_' not in go2x5_config
     assert "safety_min_feet_contacts_standing = 3.0" in go2x5_config
     assert "safety_min_feet_contacts_walking = 2.0" in go2x5_config
     assert "feet_height_target = 0.12" in go2x5_config
     assert "standing_probability = 0.25" in go2x5_config
     assert "turn_in_place_probability = 0.20" in go2x5_config
-    assert '"turn_in_place_min_abs_yaw": 0.10' in go2x5_config
-    assert '"turn_in_place_min_abs_yaw": 0.15' in go2x5_config
-    assert '"lin_vel_x_range": [-0.12, 0.12]' in go2x5_config
-    assert '"lin_vel_x_range": [-0.30, 0.30]' in go2x5_config
+    assert "lin_vel_x = [-0.30, 0.30]" in go2x5_config
+    assert "ang_vel_yaw = [-0.40, 0.40]" in go2x5_config
     assert "base_height = 0.0" in go2x5_config
-    assert "height_adaptation = -5.0" in go2x5_config
-    assert "pitch_adaptation = -2.0" in go2x5_config
+    assert "height_adaptation = -3.0" in go2x5_config
+    assert "pitch_adaptation = -1.0" in go2x5_config
     assert "stand_still = 0.0" in go2x5_config
     assert "termination = -100.0" in go2x5_config
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
     assert "tracking_lin_vel_max = 0.0" in go2x5_config
     assert "tracking_lin_vel_x_exp = 2.0" in go2x5_config
     assert "tracking_ang_vel_yaw_exp = 1.0" in go2x5_config
-    assert "tracking_ee_world = 1.5" in go2x5_config
+    assert "tracking_ee_world = 2.0" in go2x5_config
+    assert "tracking_ee_orn = 0.6" in go2x5_config
     assert "tracking_ee_world_stable = 0.0" in go2x5_config
     assert "observe_gait_commands = False" in go2x5_config
     assert "replace_cylinder_with_capsule = False" in go2x5_config
@@ -332,12 +408,22 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "max_push_vel_xy = 0.0" in go2x5_config
     assert "tracking_ee_sigma = 0.15" in go2x5_config
     assert "ik_gain = robot_spec.ARM_IK_GAIN" in go2x5_config
-    assert "track_ee_orientation = False" in go2x5_config
+    assert "track_ee_orientation = True" in go2x5_config
+    assert "orientation_in_observation = True" in go2x5_config
+    assert "ik_orientation_weight = robot_spec.ARM_IK_ORIENTATION_WEIGHT" in go2x5_config
     assert "target_mode = robot_spec.ARM_TARGET_MODE" in go2x5_config
     assert "target_max_step = robot_spec.ARM_TARGET_MAX_STEP" in go2x5_config
     assert "gripper_hold_mode = robot_spec.LOW_LEVEL_GRIPPER_HOLD_MODE" in go2x5_config
     assert 'penalize_contacts_on = ["base", "Head", "hip", "thigh", "calf", "arm_link"]' in go2x5_config
     assert "collision_upper_limits = [0.24, 0.2, 0.05]" in go2x5_config
+    assert "mesh_type = 'plane'" in go2x5_config
+    assert "env_spacing = 3.0" in go2x5_config
+    assert 'if mesh_type in ["heightfield", "trimesh"]:' in manip_loco
+    assert 'if mesh_type == "plane":' in manip_loco
+    assert "self._create_ground_plane()" in manip_loco
+    assert "self.custom_origins = False" in manip_loco
+    assert "A PhysX plane has no Terrain object" in manip_loco
+    assert "self.terrain = Terrain(self.cfg.terrain, )" not in manip_loco
     reward_file = (ROOT / "low-level/legged_gym/envs/rewards/maniploco_rewards.py").read_text(encoding="utf-8")
     runner = (ROOT / "third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py").read_text(encoding="utf-8")
 
@@ -351,6 +437,8 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert 'getattr(self.cfg.arm, "track_ee_orientation", True)' in manip_loco
     assert "task_jacobian = self.ee_j_eef[:, :3, :]" in manip_loco
     assert "task_error = dpose[:, :3, :]" in manip_loco
+    assert "orientation_weight * self.ee_j_eef[:, 3:, :]" in manip_loco
+    assert "self.curr_ee_goal_orn_rpy" in manip_loco
     assert "target_base = self.arm_q_command" in manip_loco
     assert "self.arm_q_command.copy_(arm_pos_targets)" in manip_loco
     assert "self.arm_q_command[env_ids] = self.dof_pos[env_ids, arm_slice]" in manip_loco
@@ -382,24 +470,24 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
     assert "tracking_contacts_shaped_vel = 0.0" in go2x5_config
     assert "feet_height = 0.0" in go2x5_config
-    assert "feet_air_time = 1.0" in go2x5_config
+    assert "feet_air_time = 0.0" in go2x5_config
     assert "walking_dof = 0.0" in go2x5_config
     assert "stability_safety = 0.0" in go2x5_config
-    assert "leg_action_l2_deadzone = -0.02" in go2x5_config
+    assert "leg_action_l2_deadzone = -0.01" in go2x5_config
     assert "tracking_ee_world_stable = 0.0" in go2x5_config
 
     assert "base_height = 0.0" in go2x5_config
-    assert "height_adaptation = -5.0" in go2x5_config
-    assert "pitch_adaptation = -2.0" in go2x5_config
+    assert "height_adaptation = -3.0" in go2x5_config
+    assert "pitch_adaptation = -1.0" in go2x5_config
     assert "tracking_lin_vel_x_exp = 2.0" in go2x5_config
     assert "termination = -100.0" in go2x5_config
-    assert "lin_vel_z = -1.5" in go2x5_config
+    assert "lin_vel_z = -1.0" in go2x5_config
     assert "roll = -2.0" in go2x5_config
-    assert "ang_vel_xy = -0.2" in go2x5_config
+    assert "ang_vel_xy = 0.0" in go2x5_config
     assert "collision = -10.0" in go2x5_config
-    assert "feet_drag = -0.15" in go2x5_config
+    assert "feet_drag = -0.20" in go2x5_config
     assert "action_scale = robot_spec.LOW_ACTION_SCALE" in go2x5_config
-    assert '"action_scale": robot_spec.LOW_ACTION_SCALE' in go2x5_config
+    assert "enabled = False" in go2x5_config
     assert "output_tanh = True" in go2x5_config
     assert "clip_actions = 1.0" in go2x5_config
     assert "init_std = [[0.15, 0.20, 0.20] * 4]" in go2x5_config
@@ -436,19 +524,41 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
 
     assert env_cfg["eeFrame"] == contract["ee_frame"] == "TERRAIN_INVARIANT_YAW"
     assert env_cfg["armIkGain"] == contract["ik_gain"] == spec.ARM_IK_GAIN
-    assert env_cfg["trackEeOrientation"] is contract["track_ee_orientation"] is False
-    assert contract["ik_task"] == "position_only_translation_3d"
+    assert env_cfg["trackEeOrientation"] is contract["track_ee_orientation"] is True
+    assert (
+        env_cfg["armIkOrientationWeight"]
+        == contract["ik_orientation_weight"]
+        == spec.ARM_IK_ORIENTATION_WEIGHT
+    )
+    assert contract["ik_task"] == "pose_6d_weighted_dls"
+    assert contract["ee_goal_ranges"] == spec.EE_GOAL_LOCAL_RANGES
+    assert (
+        env_cfg["lowEeGoalMaxNominalReachRadius"]
+        == contract["ee_goal_max_nominal_reach_radius"]
+        == spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS
+    )
+    assert (
+        contract["ee_orientation_delta_ranges"]
+        == spec.EE_ORIENTATION_DELTA_RANGES
+    )
+    assert (
+        contract["ee_orientation_nominal_rpy"]
+        == spec.EE_ORIENTATION_NOMINAL_RPY
+    )
+    assert contract["ee_orientation_observation"] == "local_rpy"
     assert env_cfg["armTargetMode"] == contract["arm_target_mode"] == spec.ARM_TARGET_MODE
     assert env_cfg["armTargetMaxStep"] == contract["arm_target_max_step"] == spec.ARM_TARGET_MAX_STEP
     assert contract["gripper_hold_mode"] == spec.LOW_LEVEL_GRIPPER_HOLD_MODE
-    assert "task_jacobian = self.ee_j_eef[:, :3, :]" in high_level
+    assert "self.arm_ik_orientation_weight * self.ee_j_eef[:, 3:, :]" in high_level
     assert "target_base = self.arm_q_command" in high_level
     assert "self.arm_q_command.copy_(arm_pos_targets)" in high_level
     assert "self.arm_q_command[env_ids] = self._dof_pos[env_ids, arm_slice]" in high_level
     assert env_cfg["armTargetUpdatePeriod"] == contract["arm_target_update_period"] == 4
     assert env_cfg["lowFootContactThreshold"] == contract["foot_contact_threshold"] == 1.5
-    assert contract["gripper_position_stiffness"] == 110.0
-    assert contract["gripper_position_damping"] == 7.5
+    assert contract["arm_position_stiffness"] == spec.ARM_POS_STIFFNESS
+    assert contract["arm_position_damping"] == spec.ARM_POS_DAMPING
+    assert contract["gripper_position_stiffness"] == spec.GRIPPER_POS_STIFFNESS
+    assert contract["gripper_position_damping"] == spec.GRIPPER_POS_DAMPING
     assert contract["leg_stiffness"] == 40.0
     assert contract["leg_damping"] == 1.0
     assert asset_cfg["control"]["stiffness"]["hip"] == 40
@@ -472,6 +582,29 @@ def test_go2x5_runtime_contract_is_deterministic_and_name_based():
     assert "low_actions = torch.clamp(" in high_level
     assert "torch.nan_to_num" not in low_level
     assert "(self.num_envs, self.low_policy_num_actions)" in high_level
+
+
+def test_deprecated_go2x5_training_paths_are_removed():
+    env_registry = (ROOT / "low-level/legged_gym/envs/__init__.py").read_text(
+        encoding="utf-8"
+    )
+    train_entrypoint = (
+        ROOT / "low-level/legged_gym/scripts/train.py"
+    ).read_text(encoding="utf-8")
+
+    assert "go2x5_ftlift" not in env_registry
+    assert "go2x5_ftlift" not in train_entrypoint
+    assert not (
+        ROOT
+        / "low-level/legged_gym/envs/manip_loco/go2x5_ftlift_config.py"
+    ).exists()
+    assert not (
+        ROOT / "low-level/resources/robots/go2x5/urdf/go2_arx_x5.urdf"
+    ).exists()
+    assert not (
+        ROOT / "low-level/resources/robots/go2x5/urdf/go2_arx_x5_clean.urdf"
+    ).exists()
+    assert not (ROOT / "high-level/go2x5-pick-multi-teacher").exists()
 
 
 def test_high_level_training_entrypoint_is_fail_closed_and_one_shot():

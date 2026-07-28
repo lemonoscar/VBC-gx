@@ -332,12 +332,12 @@ AUDIT: dict[str, RewardAudit] = {
         verification="Keep it disabled in the simple profile and use raw world-position EE tracking for body-arm coordination.",
     ),
     "tracking_ee_orn": RewardAudit(
-        raw_formula="exp(-Euler L1 orientation error / tracking_ee_sigma)",
+        raw_formula="exp(-quaternion angular error / tracking_ee_orientation_sigma)",
         raw_direction="larger is better",
         expected_scale_sign="+",
-        dependency="ee_goal_orn_euler, ee_orn, arm_eef_link grasp direction",
-        migration_risk="Currently disabled. If enabled, Go2-X5 arm_eef_link +x grasp direction must be verified first.",
-        verification="Run orientation sweep around arm_eef_link +x; reward should be highest for the actual grasp pose.",
+        dependency="ee_goal_orn_quat, normalized ee_orn, arm_eef_link grasp direction",
+        migration_risk="The X5 +x approach axis and quaternion sign invariance must not be confused with the legacy Z1 Euler convention.",
+        verification="Sweep equivalent quaternion signs and bounded X5 local RPY targets; reward must peak at the same physical pose.",
     ),
     "arm_energy_abs_sum": RewardAudit(
         raw_formula="sum(abs(arm torque * arm velocity)) over physical arm joints",
@@ -412,20 +412,20 @@ AUDIT: dict[str, RewardAudit] = {
         verification="Inject vertical force on one foot and confirm only a positive penalty results.",
     ),
     "height_adaptation": RewardAudit(
-        raw_formula="absolute base-height error from a 0.24--0.32 m target interpolated over EE goal z 0.10--0.35 m",
+        raw_formula="absolute base-height error from a 0.22--0.32 m target interpolated over EE goal z 0.05--0.30 m",
         raw_direction="larger is worse",
         expected_scale_sign="-",
         dependency="terrain-relative EE goal z and base height",
         migration_risk="The crouch target must remain above termination height and use terrain-relative coordinates.",
-        verification="Probe goal z below/inside/above the anchors; target height must be 0.24/interpolated/0.32 m.",
+        verification="Probe goal z below/inside/above the anchors; target height must be 0.22/interpolated/0.32 m.",
     ),
     "pitch_adaptation": RewardAudit(
-        raw_formula="absolute base-pitch error from a 0.12--0.00 rad target interpolated over EE goal z 0.10--0.35 m",
+        raw_formula="absolute base-pitch error from a 0.25--0.00 rad target interpolated over EE goal z 0.05--0.30 m",
         raw_direction="larger is worse",
         expected_scale_sign="-",
         dependency="terrain-relative EE goal z and base pitch",
         migration_risk="The pitch sign must lower the front/arm mount and remain well inside the termination threshold.",
-        verification="Probe low/high goal z; target pitch must be +0.12/0.00 rad and the error must vanish at the target.",
+        verification="Probe low/high goal z; target pitch must be +0.25/0.00 rad and the error must vanish at the target.",
     ),
     "hip_action_l2": RewardAudit(
         raw_formula="sum(square(policy hip actions))",
@@ -952,8 +952,11 @@ def build_report() -> str:
     contract_failures: list[str] = []
     if env_cfg.get("observe_gait_commands") is not False:
         contract_failures.append("simple locomotion must not prescribe a gait clock")
-    if auto_curriculum_cfg.get("profile_name") != "go2x5_velocity_ee_coordination_v5_persistent_arm":
-        contract_failures.append("curriculum profile must identify the simple two-stage contract")
+    if (
+        auto_curriculum_cfg.get("enabled") is not False
+        or auto_curriculum_cfg.get("profile_name") != "go2x5_flat_tabletop_6d_v1"
+    ):
+        contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
     if commands_cfg.get("turn_in_place_probability") != 0.20:
         contract_failures.append("command sampling must retain an explicit in-place-turn population")
     if ppo_policy_cfg.get("output_tanh") is not True or env_cfg.get("policy_output_tanh") is not True:
@@ -968,7 +971,9 @@ def build_report() -> str:
         contract_failures.append("contact-phase shaping must remain disabled")
     if scales.get("feet_height") != 0.0 or scales.get("walking_dof") != 0.0:
         contract_failures.append("named-gait clearance and posture shaping must remain disabled")
-    if scales.get("leg_action_l2_deadzone") != -0.02:
+    if scales.get("feet_air_time") != 0.0:
+        contract_failures.append("generic air-time shaping must remain disabled")
+    if scales.get("leg_action_l2_deadzone") != -0.01:
         contract_failures.append("large policy actions must retain the bounded-action penalty")
     if (
         scales.get("tracking_lin_vel_max") != 0.0
@@ -978,57 +983,46 @@ def build_report() -> str:
     ):
         contract_failures.append("speed catch must use symmetric absolute-error x/yaw tracking, not progress saturation")
     if (
-        scales.get("height_adaptation") != -5.0
-        or scales.get("pitch_adaptation") != -2.0
+        scales.get("height_adaptation") != -3.0
+        or scales.get("pitch_adaptation") != -1.0
         or scales.get("base_height") != 0.0
         or scales.get("stand_still") != 0.0
     ):
         contract_failures.append("EE-conditioned body height/pitch must not compete with fixed-height/default-pose rewards")
     if (
-        reward_cfg.get("min_body_height") != 0.24
-        or reward_cfg.get("max_forward_body_pitch") != 0.12
-        or reward_cfg.get("height_adaptation_goal_z_low") != 0.10
-        or reward_cfg.get("height_adaptation_goal_z_high") != 0.35
+        reward_cfg.get("min_body_height") != 0.22
+        or reward_cfg.get("max_forward_body_pitch") != 0.25
+        or reward_cfg.get("height_adaptation_goal_z_low") != 0.05
+        or reward_cfg.get("height_adaptation_goal_z_high") != 0.30
     ):
-        contract_failures.append("safe crouch mapping must be height 0.24--0.32 m and pitch 0.12--0.00 rad over EE goal z 0.10--0.35 m")
-    if arm_scales.get("tracking_ee_world") != 1.5 or arm_scales.get("tracking_ee_world_stable") != 0.0:
-        contract_failures.append("raw EE tracking must be active without a support-gated duplicate")
-    if len(stages) != 2:
-        contract_failures.append("curriculum must contain exactly S0-S1")
-    else:
-        locomotion_stage, coordinated_stage = stages
-        if locomotion_stage.get("name") != "S0_slow_velocity_coordinated_reach":
-            contract_failures.append("S0 must jointly expose slow bidirectional velocity and coordinated reach")
-        if locomotion_stage.get("lin_vel_x_range") != [-0.12, 0.12] or locomotion_stage.get("ang_vel_yaw_range") != [-0.15, 0.15]:
-            contract_failures.append("S0 must contain slow bidirectional commands from the beginning")
-        if (
-            locomotion_stage.get("turn_in_place_probability") != 0.20
-            or locomotion_stage.get("turn_in_place_min_abs_yaw") != 0.10
-        ):
-            contract_failures.append("S0 must explicitly sample non-dead-zone in-place turns")
-        if (
-            locomotion_stage.get("goal_pos_x") != [0.265, 0.415]
-            or locomotion_stage.get("goal_pos_y_cart") != [-0.10, 0.10]
-            or locomotion_stage.get("goal_pos_z") != [-0.314, -0.054]
-        ):
-            contract_failures.append("S0 must cover the safe front crouch workspace")
-        if locomotion_stage.get("advance") != {}:
-            contract_failures.append("S0 transition must be deterministic rather than metric-gated")
-        if coordinated_stage.get("name") != "S1_full_velocity_coordinated_reach":
-            contract_failures.append("S1 must expose full velocity and coordinated reach")
-        if coordinated_stage.get("lin_vel_x_range") != [-0.30, 0.30] or coordinated_stage.get("ang_vel_yaw_range") != [-0.40, 0.40]:
-            contract_failures.append("S1 must expose the final bidirectional command range")
-        if (
-            coordinated_stage.get("turn_in_place_probability") != 0.20
-            or coordinated_stage.get("turn_in_place_min_abs_yaw") != 0.15
-        ):
-            contract_failures.append("S1 must explicitly sample full-range in-place turns")
-        if (
-            coordinated_stage.get("goal_pos_x") != robot_spec.EE_GOAL_LOCAL_RANGES[0]
-            or coordinated_stage.get("goal_pos_y_cart") != robot_spec.EE_GOAL_LOCAL_RANGES[1]
-            or coordinated_stage.get("goal_pos_z") != robot_spec.EE_GOAL_LOCAL_RANGES[2]
-        ):
-            contract_failures.append("S1 must expose the full forward crouch-assisted workspace")
+        contract_failures.append("safe crouch mapping must be height 0.22--0.32 m and pitch 0.25--0.00 rad over EE goal z 0.05--0.30 m")
+    if (
+        arm_scales.get("tracking_ee_world") != 2.0
+        or arm_scales.get("tracking_ee_orn") != 0.6
+        or arm_scales.get("tracking_ee_world_stable") != 0.0
+    ):
+        contract_failures.append("raw 6-D EE tracking must be active without a support-gated duplicate")
+    if stages:
+        contract_failures.append("Go2-X5 static task profile must not contain curriculum stages")
+    expected_leg_active = {
+        "tracking_lin_vel_x_exp",
+        "tracking_ang_vel_yaw_exp",
+        "torques",
+        "alive",
+        "termination",
+        "lin_vel_z",
+        "roll",
+        "collision",
+        "action_rate",
+        "dof_pos_limits",
+        "feet_drag",
+        "height_adaptation",
+        "pitch_adaptation",
+        "leg_action_l2_deadzone",
+    }
+    expected_arm_active = {"tracking_ee_world", "tracking_ee_orn"}
+    if set(leg_active) != expected_leg_active or set(arm_active) != expected_arm_active:
+        contract_failures.append("active rewards must match the audited minimal 14+2 task set")
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()
@@ -1105,19 +1099,19 @@ def build_report() -> str:
                 f"but expected sign is `{row['expected']}`. {row['sign']}."
             )
     else:
-        lines.append("1. Every reward implementation has reviewed semantics, and no active or curriculum-stage sign mismatch was found.")
+        lines.append("1. Every reward implementation has reviewed semantics, and no active reward sign mismatch was found.")
     if unreviewed:
         terms = ", ".join(f"`{row['term']}`" for row in unreviewed)
         lines.append(f"   - `{len(unreviewed)}` active terms still lack reviewed semantics: {terms}.")
     for failure in contract_failures:
         lines.append(f"   - CONTRACT_MISMATCH: {failure}.")
     lines.append("2. No named gait is prescribed: gait-clock observations, contact-phase shaping, swing-height shaping, and walking-posture shaping are disabled.")
-    lines.append("3. From iteration zero, S0 samples slow positive/negative velocity commands, a 40% explicit standing population, and a 20% explicit non-dead-zone in-place-turn population.")
-    lines.append("4. Locomotion is rewarded through symmetric x/yaw velocity-error tracking with a dedicated yaw weight, plus generic all-foot air-time; foot drag, collision, vertical motion, roll, and action rate remain penalized.")
-    lines.append("5. `tracking_ee_world` uses `arm_eef_link` world position and is an active raw PPO reward channel. It is not multiplied by a height/support gate, so crouching can improve low terrain-fixed reach targets.")
+    lines.append("3. From iteration zero, one static distribution samples full bidirectional x/yaw commands, a 25% standing population, and a 20% non-dead-zone in-place-turn population.")
+    lines.append("4. Locomotion is rewarded through symmetric x/yaw velocity-error tracking; foot drag, collision, vertical motion, roll, action rate, and excessive action magnitude remain penalized without an air-time or gait-shape target.")
+    lines.append("5. `tracking_ee_world` and quaternion `tracking_ee_orn` use `arm_eef_link` as active raw PPO channels. They are not multiplied by a support gate, so coordinated crouching can improve low terrain-fixed reach targets.")
     lines.append("6. `collision` is fail-visible for base, head, non-foot leg, arm, wrist, and finger contacts; the four feet remain outside this penalty.")
     lines.append("7. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.")
-    lines.append("8. The curriculum has only two deterministic stages: S0 jointly learns slow exact velocity tracking and target-conditioned crouching, then S1 expands both to the final command and front-workspace ranges.")
+    lines.append("8. Auto curriculum is disabled: the policy sees the final flat-tabletop workspace and reward contract for the entire run.")
     lines.append("")
     lines.append("## Active Reward Audit Table")
     lines.append("")
@@ -1187,11 +1181,11 @@ def build_report() -> str:
     lines.append("Static analysis can verify sign consistency and dependency wiring, but it cannot prove that Isaac Gym rigid-body/contact tensors have the expected values at runtime. Before launching a long low-level run, run these probes:")
     lines.append("")
     lines.append("1. Emergent-locomotion oracle: gait clocks must remain absent, contact-phase rewards must remain zero, and nonzero velocity commands must produce finite observations and rewards.")
-    lines.append("2. Adaptive-height monotonicity: sweep terrain-relative EE goal z across `0.10--0.35 m`; the body target must increase monotonically from `0.24` to `0.32 m` and remain above termination height.")
+    lines.append("2. Adaptive-height monotonicity: sweep terrain-relative EE goal z across `0.05--0.30 m`; the body target must increase monotonically from `0.22` to `0.32 m` and remain above termination height.")
     lines.append("3. Contact identity: touch `FL_foot, FR_foot, RL_foot, RR_foot` one at a time and confirm `force_sensor_tensor` order is `FL,FR,RL,RR`, while policy observation order is `FR,FL,RR,RL`.")
     lines.append("4. Collision identity: create contact on a thigh, calf, base, head, arm link, and finger link; every non-foot contact should affect current `collision`.")
     lines.append("5. EE position monotonicity: set `curr_ee_goal_cart_world` equal to `arm_eef_link` position, then offset x/y/z; `tracking_ee_world` raw value must decay monotonically.")
-    lines.append("6. Position-only IK invariant: vary `ee_goal_orn_quat` while holding the position target fixed; arm q-targets must not change when `track_ee_orientation=False`.")
+    lines.append("6. Full-pose IK oracle: compare the 6-D weighted DLS update against an independent matrix solve and require orientation changes to alter arm targets.")
     lines.append("7. All-function contract: call every `_reward_*` implementation and require a finite `(num_envs,)` raw tensor and metric tensor.")
     lines.append("")
     lines.append("## Interpretation")
@@ -1199,7 +1193,7 @@ def build_report() -> str:
     lines.append(textwrap.dedent(
         """
         The current Go2-X5 low-level reward set is sign-consistent and all reward implementations have reviewed metadata.
-        The static contract rejects any reintroduction of a named gait and any curriculum that postpones locomotion until a late stage.
+        The static contract rejects any reintroduction of a named gait, an extra curriculum stage, or overlapping reward shaping.
         Static signs do not prove simulator tensor identity, terrain-relative height semantics, or reset behavior.
         Runtime acceptance therefore also requires the listed monotonicity and identity probes; their executed status is recorded in the dated training-readiness report.
         """

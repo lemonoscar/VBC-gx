@@ -361,14 +361,37 @@ class ManipLoco(LeggedRobot):
 
     def get_training_metadata(self):
         asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
+
+        def scalar_or_list(value):
+            values = np.asarray(value, dtype=np.float64)
+            if values.ndim == 0:
+                return float(values)
+            return [float(item) for item in values.reshape(-1)]
+
         control_contract = {
             "action_scale": list(self.cfg.control.action_scale),
             "leg_stiffness": float(self.cfg.control.stiffness["hip"]),
             "leg_damping": float(self.cfg.control.damping["hip"]),
-            "arm_position_stiffness": float(self.cfg.control.arm_pos_stiffness),
-            "arm_position_damping": float(self.cfg.control.arm_pos_damping),
-            "gripper_position_stiffness": float(self.cfg.control.arm_pos_stiffness),
-            "gripper_position_damping": float(self.cfg.control.arm_pos_damping),
+            "arm_position_stiffness": scalar_or_list(
+                self.cfg.control.arm_pos_stiffness
+            ),
+            "arm_position_damping": scalar_or_list(
+                self.cfg.control.arm_pos_damping
+            ),
+            "gripper_position_stiffness": float(
+                getattr(
+                    self.cfg.control,
+                    "gripper_pos_stiffness",
+                    np.asarray(self.cfg.control.arm_pos_stiffness).reshape(-1)[-1],
+                )
+            ),
+            "gripper_position_damping": float(
+                getattr(
+                    self.cfg.control,
+                    "gripper_pos_damping",
+                    np.asarray(self.cfg.control.arm_pos_damping).reshape(-1)[-1],
+                )
+            ),
             "sim_dt": float(self.cfg.sim.dt),
             "physics_decimation": int(self.cfg.control.decimation),
             "physx": {
@@ -396,10 +419,37 @@ class ManipLoco(LeggedRobot):
             if self.cfg.goal_ee.center_mode == "terrain_invariant" else "ARM_BASE_YAW",
             "ik_gain": float(self.cfg.arm.ik_gain),
             "ik_damping": 0.05,
+            "ik_orientation_weight": float(
+                getattr(self.cfg.arm, "ik_orientation_weight", 1.0)
+            ),
             "track_ee_orientation": bool(self.cfg.arm.track_ee_orientation),
-            "ik_task": "pose_6d"
+            "ik_task": "pose_6d_weighted_dls"
             if self.cfg.arm.track_ee_orientation
             else "position_only_translation_3d",
+            "ee_goal_ranges": [
+                list(self.goal_ee_ranges[axis])
+                for axis in ("pos_x", "pos_y_cart", "pos_z")
+            ],
+            "ee_goal_max_nominal_reach_radius": (
+                float(self.cfg.goal_ee.max_nominal_reach_radius)
+                if hasattr(self.cfg.goal_ee, "max_nominal_reach_radius")
+                else None
+            ),
+            "ee_orientation_delta_ranges": [
+                list(self.goal_ee_ranges[axis])
+                for axis in ("delta_orn_r", "delta_orn_p", "delta_orn_y")
+            ],
+            "ee_orientation_nominal_rpy": list(
+                getattr(
+                    self.cfg.goal_ee,
+                    "orientation_nominal_rpy",
+                    [np.pi / 2, 0.0, 0.0],
+                )
+            ),
+            "ee_orientation_command_frame": "TERRAIN_INVARIANT_YAW_LOCAL_RPY",
+            "ee_orientation_observation": "local_rpy"
+            if getattr(self.cfg.goal_ee, "orientation_in_observation", False)
+            else "zeros",
             "arm_target_mode": getattr(
                 self.cfg.arm, "target_mode", "measured_joint_increment"
             ),
@@ -566,7 +616,10 @@ class ManipLoco(LeggedRobot):
             "foot_contact_threshold",
             "ee_frame",
             "ik_damping",
+            "ik_orientation_weight",
             "track_ee_orientation",
+            "ee_orientation_command_frame",
+            "ee_orientation_observation",
             "arm_target_update_period",
         ]
         if int(expected.get("num_arm_actions", 0)) != 0:
@@ -880,7 +933,9 @@ class ManipLoco(LeggedRobot):
                                     self.commands[:, :3] * self.commands_scale,  # dim 3
                                     # self.curr_ee_goal_sphere,  # dim 3 position
                                     ee_goal_local_cart,  # dim 3 position
-                                    0*self.curr_ee_goal_sphere  # dim 3 orientation
+                                    self.curr_ee_goal_orn_rpy
+                                    if getattr(self.cfg.goal_ee, "orientation_in_observation", False)
+                                    else 0*self.curr_ee_goal_sphere  # dim 3 orientation
                                     ),dim=-1)
         if self.cfg.env.observe_gait_commands:
             obs_buf = torch.cat((obs_buf,
@@ -939,13 +994,29 @@ class ManipLoco(LeggedRobot):
         return terminal, terminal
 
     def create_sim(self):
-        """ Creates simulation, terrain and evironments
-        """
-        self.up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
-        self.sim = self.gym.create_sim(self.sim_device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
-        self.terrain = Terrain(self.cfg.terrain, )
-        self._create_trimesh()
-        # self._create_ground_plane()
+        """Creates the simulation and the configured ground representation."""
+        self.up_axis_idx = 2  # 2 for z, 1 for y -> adapt gravity accordingly
+        self.sim = self.gym.create_sim(
+            self.sim_device_id,
+            self.graphics_device_id,
+            self.physics_engine,
+            self.sim_params,
+        )
+        mesh_type = self.cfg.terrain.mesh_type
+        if mesh_type in ["heightfield", "trimesh"]:
+            self.terrain = Terrain(self.cfg.terrain)
+
+        if mesh_type == "plane":
+            self._create_ground_plane()
+        elif mesh_type == "heightfield":
+            self._create_heightfield()
+        elif mesh_type == "trimesh":
+            self._create_trimesh()
+        elif mesh_type is not None:
+            raise ValueError(
+                "Terrain mesh type not recognised. Allowed types are "
+                "[None, plane, heightfield, trimesh]"
+            )
         self._create_envs()
 
     def reset_idx(self, env_ids, start=False):
@@ -1116,16 +1187,52 @@ class ManipLoco(LeggedRobot):
         """ Sets environment origins. On rough terrain the origins are defined by the terrain platforms.
             Otherwise create a grid.
         """
-        self.custom_origins = True
-        self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
-        # put robots at the origins defined by the terrain
-        max_init_level = self.cfg.terrain.max_init_terrain_level  # start from 0
-        if not self.cfg.terrain.curriculum: max_init_level = self.cfg.terrain.num_rows - 1
-        self.terrain_levels = torch.randint(0, max_init_level+1, (self.num_envs,), device=self.device)
-        self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
-        self.max_terrain_level = self.cfg.terrain.num_rows
-        self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
-        self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
+        self.env_origins = torch.zeros(
+            self.num_envs,
+            3,
+            device=self.device,
+            requires_grad=False,
+        )
+        if self.cfg.terrain.mesh_type in ["heightfield", "trimesh"]:
+            self.custom_origins = True
+            # Put robots at the origins defined by the generated terrain.
+            max_init_level = self.cfg.terrain.max_init_terrain_level
+            if not self.cfg.terrain.curriculum:
+                max_init_level = self.cfg.terrain.num_rows - 1
+            self.terrain_levels = torch.randint(
+                0,
+                max_init_level + 1,
+                (self.num_envs,),
+                device=self.device,
+            )
+            self.terrain_types = torch.div(
+                torch.arange(self.num_envs, device=self.device),
+                self.num_envs / self.cfg.terrain.num_cols,
+                rounding_mode="floor",
+            ).to(torch.long)
+            self.max_terrain_level = self.cfg.terrain.num_rows
+            self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(
+                device=self.device,
+                dtype=torch.float,
+            )
+            self.env_origins[:] = self.terrain_origins[
+                self.terrain_levels,
+                self.terrain_types,
+            ]
+            return
+
+        self.custom_origins = False
+        # A PhysX plane has no Terrain object or per-tile origin map.
+        num_cols = max(int(np.floor(np.sqrt(self.num_envs))), 1)
+        num_rows = int(np.ceil(self.num_envs / num_cols))
+        xx, yy = torch.meshgrid(
+            torch.arange(num_rows, device=self.device),
+            torch.arange(num_cols, device=self.device),
+            indexing="ij",
+        )
+        spacing = getattr(self.cfg.env, "env_spacing", 3.0)
+        self.env_origins[:, 0] = spacing * xx.flatten()[:self.num_envs]
+        self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
 
     def _create_ground_plane(self):
         plane_params = gymapi.PlaneParams()
@@ -1191,10 +1298,41 @@ class ManipLoco(LeggedRobot):
         self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
         dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
         dof_props_asset['driveMode'][12:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
-        arm_pos_stiffness = getattr(self.cfg.control, "arm_pos_stiffness", 400.0)
-        arm_pos_damping = getattr(self.cfg.control, "arm_pos_damping", 40.0)
-        dof_props_asset['stiffness'][12:].fill(arm_pos_stiffness)
-        dof_props_asset['damping'][12:].fill(arm_pos_damping)
+        num_gripper = int(self.cfg.env.num_gripper_joints)
+        arm_end = self.num_dofs - num_gripper
+        arm_count = arm_end - 12
+
+        def expand_drive_gain(value, count, name):
+            gains = np.asarray(value, dtype=np.float32).reshape(-1)
+            if gains.size == 1:
+                return np.repeat(gains, count)
+            if gains.size != count:
+                raise ValueError(
+                    f"{name} must be scalar or have {count} values, got {gains.size}"
+                )
+            return gains
+
+        arm_pos_stiffness = expand_drive_gain(
+            getattr(self.cfg.control, "arm_pos_stiffness", 400.0),
+            arm_count,
+            "arm_pos_stiffness",
+        )
+        arm_pos_damping = expand_drive_gain(
+            getattr(self.cfg.control, "arm_pos_damping", 40.0),
+            arm_count,
+            "arm_pos_damping",
+        )
+        gripper_pos_stiffness = float(
+            getattr(self.cfg.control, "gripper_pos_stiffness", arm_pos_stiffness[-1])
+        )
+        gripper_pos_damping = float(
+            getattr(self.cfg.control, "gripper_pos_damping", arm_pos_damping[-1])
+        )
+        dof_props_asset['stiffness'][12:arm_end] = arm_pos_stiffness
+        dof_props_asset['damping'][12:arm_end] = arm_pos_damping
+        if num_gripper > 0:
+            dof_props_asset['stiffness'][arm_end:] = gripper_pos_stiffness
+            dof_props_asset['damping'][arm_end:] = gripper_pos_damping
         rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
         self.body_names = self.gym.get_asset_rigid_body_names(robot_asset)
         self.body_names_to_idx = self.gym.get_asset_rigid_body_dict(robot_asset)
@@ -1519,10 +1657,31 @@ class ManipLoco(LeggedRobot):
         self.ee_goal_cart = torch.zeros(self.num_envs, 3, device=self.device)
         self.ee_goal_sphere = torch.zeros(self.num_envs, 3, device=self.device)
 
-        self.ee_goal_orn_euler = torch.zeros(self.num_envs, 3, device=self.device)
-        self.ee_goal_orn_euler[:, 0] = np.pi / 2
-        self.ee_goal_orn_quat = quat_from_euler_xyz(self.ee_goal_orn_euler[:, 0], self.ee_goal_orn_euler[:, 1], self.ee_goal_orn_euler[:, 2])
-        self.ee_goal_orn_delta_rpy = torch.zeros(self.num_envs, 3, device=self.device)
+        nominal_orn_rpy = torch.tensor(
+            getattr(
+                self.cfg.goal_ee,
+                "orientation_nominal_rpy",
+                [np.pi / 2, 0.0, 0.0],
+            ),
+            device=self.device,
+            dtype=torch.float,
+        )
+        self.curr_ee_goal_orn_rpy = nominal_orn_rpy.repeat(self.num_envs, 1)
+        self.ee_goal_orn_euler = self.curr_ee_goal_orn_rpy.clone()
+        self.ee_goal_orn_quat = quat_from_euler_xyz(
+            self.ee_goal_orn_euler[:, 0],
+            self.ee_goal_orn_euler[:, 1],
+            self.ee_goal_orn_euler[:, 2],
+        )
+        self.ee_start_orn_delta_rpy = torch.zeros(
+            self.num_envs, 3, device=self.device
+        )
+        self.curr_ee_goal_orn_delta_rpy = torch.zeros(
+            self.num_envs, 3, device=self.device
+        )
+        self.ee_goal_orn_delta_rpy = torch.zeros(
+            self.num_envs, 3, device=self.device
+        )
 
         self.curr_ee_goal_cart = torch.zeros(self.num_envs, 3, device=self.device)
         self.curr_ee_goal_sphere = torch.zeros(self.num_envs, 3, device=self.device)
@@ -1545,6 +1704,11 @@ class ManipLoco(LeggedRobot):
         self.collision_lower_limits = torch.tensor(self.cfg.goal_ee.collision_lower_limits, device=self.device, dtype=torch.float)
         self.collision_upper_limits = torch.tensor(self.cfg.goal_ee.collision_upper_limits, device=self.device, dtype=torch.float)
         self.underground_limit = self.cfg.goal_ee.underground_limit
+        self.max_nominal_reach_radius = float(
+            getattr(self.cfg.goal_ee, "max_nominal_reach_radius", float("inf"))
+        )
+        if self.max_nominal_reach_radius <= 0.0:
+            raise ValueError("goal_ee.max_nominal_reach_radius must be positive")
         self.num_collision_check_samples = self.cfg.goal_ee.num_collision_check_samples
         self.collision_check_t = torch.linspace(0, 1, self.num_collision_check_samples, device=self.device)[None, None, :]
         assert(self.cfg.goal_ee.command_mode in ['cart', 'sphere'])
@@ -2057,8 +2221,20 @@ class ManipLoco(LeggedRobot):
         # True position-only IK must remove the angular Jacobian rows. Merely
         # setting rotational error to zero still constrains angular velocity.
         if getattr(self.cfg.arm, "track_ee_orientation", True):
-            task_jacobian = self.ee_j_eef
-            task_error = dpose
+            orientation_weight = float(
+                getattr(self.cfg.arm, "ik_orientation_weight", 1.0)
+            )
+            task_jacobian = torch.cat(
+                [
+                    self.ee_j_eef[:, :3, :],
+                    orientation_weight * self.ee_j_eef[:, 3:, :],
+                ],
+                dim=1,
+            )
+            task_error = torch.cat(
+                [dpose[:, :3, :], orientation_weight * dpose[:, 3:, :]],
+                dim=1,
+            )
         else:
             task_jacobian = self.ee_j_eef[:, :3, :]
             task_error = dpose[:, :3, :]
@@ -2180,6 +2356,8 @@ class ManipLoco(LeggedRobot):
             init_env_ids = env_ids.clone()
 
             if is_init:
+                self.ee_start_orn_delta_rpy[env_ids, :] = 0
+                self.curr_ee_goal_orn_delta_rpy[env_ids, :] = 0
                 self.ee_goal_orn_delta_rpy[env_ids, :] = 0
                 self.ee_start_sphere[env_ids] = self.init_start_ee_sphere[:]
                 self.ee_goal_sphere[env_ids] = self.init_end_ee_sphere[:]
@@ -2188,6 +2366,9 @@ class ManipLoco(LeggedRobot):
                 self.curr_ee_goal_cart[env_ids] = self.init_start_ee_cart[:]
                 self.curr_ee_goal_sphere[env_ids] = self.init_start_ee_sphere[:]
             else:
+                self.ee_start_orn_delta_rpy[env_ids] = (
+                    self.curr_ee_goal_orn_delta_rpy[env_ids]
+                )
                 self._resample_ee_goal_orn_once(env_ids)
                 self.ee_start_sphere[env_ids] = self.ee_goal_sphere[env_ids].clone()
                 self.ee_start_cart[env_ids] = self.ee_goal_cart[env_ids].clone()
@@ -2218,6 +2399,7 @@ class ManipLoco(LeggedRobot):
                 self.curr_ee_goal_sphere[init_env_ids] = cart2sphere(self.curr_ee_goal_cart[init_env_ids])
             ee_goal_cart_yaw_global = quat_apply(self.base_yaw_quat[init_env_ids], self.curr_ee_goal_cart[init_env_ids])
             self.curr_ee_goal_cart_world[init_env_ids] = self._get_ee_goal_spherical_center()[init_env_ids] + ee_goal_cart_yaw_global
+            self._update_ee_goal_orientation(init_env_ids)
 
     def _collision_check(self, env_ids):
         if self.cfg.goal_ee.command_mode == "cart":
@@ -2231,7 +2413,12 @@ class ManipLoco(LeggedRobot):
             ee_target_cart = sphere2cart(torch.permute(ee_target_all_sphere, (2, 0, 1)).reshape(-1, 3)).reshape(self.num_collision_check_samples, -1, 3)
         collision_mask = torch.any(torch.logical_and(torch.all(ee_target_cart < self.collision_upper_limits, dim=-1), torch.all(ee_target_cart > self.collision_lower_limits, dim=-1)), dim=0)
         underground_mask = torch.any(ee_target_cart[..., 2] < self.underground_limit, dim=0)
-        return collision_mask | underground_mask
+        reach_mask = torch.any(
+            torch.linalg.vector_norm(ee_target_cart, dim=-1)
+            > self.max_nominal_reach_radius,
+            dim=0,
+        )
+        return collision_mask | underground_mask | reach_mask
 
     def _update_curr_ee_goal(self):
         if not self.cfg.env.teleop_mode:
@@ -2242,15 +2429,17 @@ class ManipLoco(LeggedRobot):
             else:
                 self.curr_ee_goal_sphere[:] = torch.lerp(self.ee_start_sphere, self.ee_goal_sphere, t[:, None])
                 self.curr_ee_goal_cart[:] = sphere2cart(self.curr_ee_goal_sphere)
+            self.curr_ee_goal_orn_delta_rpy[:] = torch.lerp(
+                self.ee_start_orn_delta_rpy,
+                self.ee_goal_orn_delta_rpy,
+                t[:, None],
+            )
 
         # TODO: for the teleop mode, we need to directly update self.curr_ee_goal_cart using VR controller.
         ee_goal_cart_yaw_global = quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart)
         self.curr_ee_goal_cart_world = self._get_ee_goal_spherical_center() + ee_goal_cart_yaw_global
 
-        # TODO: for the teleop mode, we need to directly update self.ee_goal_orn_quat using VR controller.
-        default_yaw = torch.atan2(ee_goal_cart_yaw_global[:, 1], ee_goal_cart_yaw_global[:, 0])
-        default_pitch = -self.curr_ee_goal_sphere[:, 1] + self.cfg.goal_ee.arm_induced_pitch
-        self.ee_goal_orn_quat = quat_from_euler_xyz(self.ee_goal_orn_delta_rpy[:, 0] + np.pi / 2, default_pitch + self.ee_goal_orn_delta_rpy[:, 1], self.ee_goal_orn_delta_rpy[:, 2] + default_yaw)
+        self._update_ee_goal_orientation()
 
         self.goal_timer += 1
         resample_id = (self.goal_timer > self.traj_total_timesteps).nonzero(as_tuple=False).flatten()
@@ -2261,6 +2450,48 @@ class ManipLoco(LeggedRobot):
             self.commands[resample_id, 2] = 0
 
         self._resample_ee_goal(resample_id)
+
+    def _update_ee_goal_orientation(self, env_ids=None):
+        """Build the yaw-invariant world target from a local X5 RPY command."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        if len(env_ids) == 0:
+            return
+
+        nominal = getattr(
+            self.cfg.goal_ee,
+            "orientation_nominal_rpy",
+            None,
+        )
+        if nominal is None:
+            local_rpy = torch.zeros(len(env_ids), 3, device=self.device)
+            local_rpy[:, 0] = np.pi / 2
+            local_rpy[:, 1] = (
+                -self.curr_ee_goal_sphere[env_ids, 1]
+                + self.cfg.goal_ee.arm_induced_pitch
+            )
+        else:
+            local_rpy = torch.tensor(
+                nominal, device=self.device, dtype=torch.float
+            ).repeat(len(env_ids), 1)
+
+        if getattr(self.cfg.goal_ee, "orientation_follow_target_yaw", True):
+            local_rpy[:, 2] += torch.atan2(
+                self.curr_ee_goal_cart[env_ids, 1],
+                self.curr_ee_goal_cart[env_ids, 0],
+            )
+        local_rpy += self.curr_ee_goal_orn_delta_rpy[env_ids]
+        local_rpy = wrap_to_pi(local_rpy)
+        self.curr_ee_goal_orn_rpy[env_ids] = local_rpy
+
+        local_quat = quat_from_euler_xyz(
+            local_rpy[:, 0], local_rpy[:, 1], local_rpy[:, 2]
+        )
+        world_quat = quat_mul(self.base_yaw_quat[env_ids], local_quat)
+        self.ee_goal_orn_quat[env_ids] = world_quat
+        self.ee_goal_orn_euler[env_ids] = torch.stack(
+            euler_from_quat(world_quat), dim=-1
+        )
 
     def _get_ee_goal_spherical_center(self):
         if getattr(self.cfg.goal_ee, "center_mode", "terrain_invariant") == "arm_base":

@@ -50,18 +50,15 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "tracking_contacts_shaped_vel = 0.0" in config
     assert "walking_dof = 0.0" in config
     assert "feet_height = 0.0" in config
-    assert "feet_air_time = 1.0" in config
-    assert "leg_action_l2_deadzone = -0.02" in config
+    assert "feet_air_time = 0.0" in config
+    assert "leg_action_l2_deadzone = -0.01" in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_velocity_ee_coordination_v5_persistent_arm"' in config
-    assert '"name": "S0_slow_velocity_coordinated_reach"' in config
-    assert '"name": "S1_full_velocity_coordinated_reach"' in config
-    assert config.count('"name": "S') == 2
+    assert 'profile_name = "go2x5_flat_tabletop_6d_v1"' in config
+    assert "enabled = False" in config
+    assert "stages = []" in config
+    assert '"name": "S' not in config
     assert "standing_probability = 0.25" in config
-    assert '"standing_probability": 0.40' in config
     assert "turn_in_place_probability = 0.20" in config
-    assert '"turn_in_place_min_abs_yaw": 0.10' in config
-    assert '"turn_in_place_min_abs_yaw": 0.15' in config
     assert "clip_actions = 1.0" in config
     assert "policy_output_tanh = True" in config
     assert "output_tanh = True" in config
@@ -70,14 +67,15 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "tracking_ang_vel_yaw_exp = 1.0" in config
     assert "tracking_ang_vel = 0.0" in config
     assert "tracking_ee_sigma = 0.15" in config
-    assert "height_adaptation = -5.0" in config
-    assert "pitch_adaptation = -2.0" in config
-    assert "max_forward_body_pitch = 0.12" in config
-    assert "min_body_height = 0.24" in config
+    assert "tracking_ee_orientation_sigma = 0.35" in config
+    assert "tracking_ee_orn = 0.6" in config
+    assert "height_adaptation = -3.0" in config
+    assert "pitch_adaptation = -1.0" in config
+    assert "max_forward_body_pitch = 0.25" in config
+    assert "min_body_height = 0.22" in config
     assert "base_height = 0.0" in config
     assert "stand_still = 0.0" in config
     assert "replace_cylinder_with_capsule = False" in config
-    assert '"advance": {}' in config
     assert '"contract/leg_pd_and_action_scale"' in read(READINESS)
 
 
@@ -306,7 +304,9 @@ def test_training_checkpoint_metadata_is_fail_closed():
     assert '"policy_action_clip": float(self.cfg.normalization.clip_actions)' in env
     assert '"Diagnostics/goal_z_base_pitch_correlation"' in env
     assert '"Diagnostics/turn_in_place_yaw_abs_error_radps"' in env
-    assert '"ik_task": "pose_6d"' in env
+    assert '"ik_task": "pose_6d_weighted_dls"' in env
+    assert '"ik_orientation_weight": float(' in env
+    assert '"ee_orientation_observation": "local_rpy"' in env
     assert 'else "position_only_translation_3d"' in env
     assert '("observe_gait_commands", alignment.get("observe_gait_commands"), True)' not in env
     for message in (
@@ -336,6 +336,13 @@ def test_checkpoint_rollout_fails_closed_on_early_resets():
     assert '"--privileged-latent"' in rollout
     assert "hist_encoding=not cli.privileged_latent" in rollout
     assert '"--max-mean-collision-raw-per-tick"' in rollout
+    assert '"--max-mean-ee-orientation-error-rad"' in rollout
+    assert '"mean_ee_orientation_error_rad"' in rollout
+    assert "orientation_error(" in rollout
+    assert (
+        'report["mean_ee_orientation_error_rad"]'
+        "\n        <= cli.max_mean_ee_orientation_error_rad"
+    ) in rollout
     assert 'report["mean_collision_raw_per_tick"] <= report["max_mean_collision_raw_per_tick"]' in rollout
     assert '"--max-arm-target-clamp-fraction"' in rollout
     assert 'report["arm_target_clamp_fraction"] <= report["max_arm_target_clamp_fraction"]' in rollout
@@ -380,11 +387,12 @@ def test_fixed_command_locomotion_gate_detects_no_step_policies():
     assert 'return 0 if report["passed"] else 1' in gait
 
 
-def test_training_readiness_checks_both_simple_stages():
+def test_training_readiness_checks_static_full_task():
     readiness = read(READINESS)
-    assert '"--rollout-stage"' in readiness
-    assert "default=0" in readiness
-    assert "choices=range(2)" in readiness
+    assert '"curriculum/static_distribution"' in readiness
+    assert '"task_geometry/tabletop_volume_covered"' in readiness
+    assert '"ik/full_6d_uses_weighted_jacobian"' in readiness
+    assert '"observation/orientation_command_is_live"' in readiness
     assert 'reset_causes = {"roll": 0, "pitch": 0, "z": 0, "contact": 0}' in readiness
     assert 'early_resets == 0' in readiness
 

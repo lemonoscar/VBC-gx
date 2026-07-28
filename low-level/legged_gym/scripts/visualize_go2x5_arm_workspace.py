@@ -54,6 +54,13 @@ import torch  # noqa: E402
 
 from legged_gym.envs import *  # noqa: F401,F403,E402
 from legged_gym.envs.manip_loco import go2x5_robot_spec as robot_spec  # noqa: E402
+from legged_gym.envs.manip_loco.go2x5_workspace_geometry import (  # noqa: E402
+    cartesian_grid,
+    classify_cartesian_goals,
+    cross_marker_segments,
+    nominal_reach_rejected,
+    parse_grid_resolution,
+)
 from legged_gym.utils import get_args, task_registry  # noqa: E402
 
 
@@ -91,11 +98,30 @@ def parse_args():
     parser.add_argument("--graphics_device_id", type=int, default=0)
     parser.add_argument("--flat_terrain", action="store_true")
     parser.add_argument("--observe_gait_commands", action="store_true")
-    parser.add_argument("--hide_task_box", action="store_true", help="Hide the current low-level task sampling box.")
+    parser.add_argument(
+        "--hide_task_box",
+        action="store_true",
+        help="Hide the orange task-box boundary; the colored volume is controlled separately.",
+    )
+    parser.add_argument("--hide_task_fill", action="store_true", help="Hide the colored task sampling volume.")
     parser.add_argument("--hide_hemisphere", action="store_true", help="Hide the theoretical arm-base front hemisphere.")
     parser.add_argument("--hide_safe_box", action="store_true", help="Hide the IK scan/safe box.")
     parser.add_argument("--task_box_grid", type=int, default=8, help="Grid subdivisions drawn on the task sampling box faces.")
     parser.add_argument("--task_corner_radius", type=float, default=0.028)
+    parser.add_argument(
+        "--task_fill_resolution",
+        default="11,9,11",
+        help="Colored task-volume grid as NX,NY,NZ; each value must be >= 2.",
+    )
+    parser.add_argument(
+        "--task_fill_marker_size",
+        type=float,
+        default=0.005,
+        help="Half-length in metres of each colored volume cross marker.",
+    )
+    parser.add_argument("--screenshot", default="", help="Optional PNG path written from the Isaac Gym viewer.")
+    parser.add_argument("--screenshot_step", type=int, default=8)
+    parser.add_argument("--exit_after_screenshot", action="store_true")
     return parser.parse_args()
 
 
@@ -122,8 +148,8 @@ def configure_env(env_cfg, cli):
     env_cfg.env.teleop_mode = False
     env_cfg.env.observe_gait_commands = bool(cli.observe_gait_commands)
 
-    env_cfg.viewer.pos = [1.35, -1.35, 0.95]
-    env_cfg.viewer.lookat = [0.35, 0.0, 0.35]
+    env_cfg.viewer.pos = [1.05, -1.05, 0.72]
+    env_cfg.viewer.lookat = [0.30, 0.0, 0.28]
 
     env_cfg.terrain.num_rows = 2
     env_cfg.terrain.num_cols = 2
@@ -148,6 +174,9 @@ def configure_env(env_cfg, cli):
 
     env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
     env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
+    env_cfg.commands.standing_probability = 1.0
+    env_cfg.commands.turn_in_place_probability = 0.0
+    env_cfg.commands.turn_in_place_min_abs_yaw = 0.0
     if hasattr(env_cfg, "auto_curriculum"):
         env_cfg.auto_curriculum.enabled = False
     return env_cfg
@@ -234,7 +263,11 @@ def world_from_arm_base(env, local_points):
     root_pos = env.root_states[0, :3]
     root_quat = env.root_states[0, 3:7]
     arm_base_local = torch.tensor(robot_spec.ARM_BASE_OFFSET, device=env.device, dtype=torch.float)
-    points = torch.tensor(local_points, device=env.device, dtype=torch.float)
+    points = torch.as_tensor(
+        np.asarray(local_points, dtype=np.float32),
+        device=env.device,
+        dtype=torch.float,
+    )
     if points.ndim == 1:
         points = points.view(1, 3)
     arm_base_world = root_pos.view(1, 3) + quat_apply(root_quat.view(1, 4), arm_base_local.view(1, 3))
@@ -244,7 +277,11 @@ def world_from_arm_base(env, local_points):
 
 
 def world_from_goal_center(env, local_points):
-    points = torch.tensor(local_points, device=env.device, dtype=torch.float)
+    points = torch.as_tensor(
+        np.asarray(local_points, dtype=np.float32),
+        device=env.device,
+        dtype=torch.float,
+    )
     if points.ndim == 1:
         points = points.view(1, 3)
     center_world = env._get_ee_goal_spherical_center()[0:1]
@@ -254,7 +291,7 @@ def world_from_goal_center(env, local_points):
 
 
 def add_lines(gym, viewer, env_handle, line_segments, color):
-    if not line_segments:
+    if len(line_segments) == 0:
         return
     vertices = np.asarray(line_segments, dtype=np.float32).reshape(-1, 3)
     colors = np.tile(np.asarray(color, dtype=np.float32), (len(line_segments), 1))
@@ -377,7 +414,7 @@ def task_box_from_cfg(env_cfg):
 
 
 def draw_local_lines(env, local_segments, color):
-    if not local_segments:
+    if len(local_segments) == 0:
         return
     flat_points = [point for segment in local_segments for point in segment]
     world = world_from_arm_base(env, flat_points)
@@ -386,7 +423,7 @@ def draw_local_lines(env, local_segments, color):
 
 
 def draw_goal_center_lines(env, local_segments, color):
-    if not local_segments:
+    if len(local_segments) == 0:
         return
     flat_points = [point for segment in local_segments for point in segment]
     world = world_from_goal_center(env, flat_points)
@@ -429,6 +466,8 @@ def draw_workspace(
     box_segments,
     task_box_segments,
     task_box_corners,
+    accepted_task_segments,
+    rejected_task_segments,
     csv_points,
     csv_frame,
     radius,
@@ -440,6 +479,8 @@ def draw_workspace(
     draw_local_lines(env, hemisphere_emphasis, color=(1.0, 1.0, 1.0))
     draw_frame_lines(env, box_segments, color=(0.65, 0.10, 0.85), frame=csv_frame)
     draw_goal_center_lines(env, task_box_segments, color=(1.0, 0.72, 0.0))
+    draw_goal_center_lines(env, accepted_task_segments, color=(0.05, 0.78, 0.22))
+    draw_goal_center_lines(env, rejected_task_segments, color=(0.95, 0.10, 0.08))
 
     # Axes from arm-base: x red, y green, z blue.
     axis_len = min(0.25, radius * 0.35)
@@ -486,19 +527,33 @@ def task_world_bounds(env, task_box):
     }
 
 
-def print_summary(env, radius, csv_points, safe_box, task_box, csv_frame):
+def print_summary(
+    env,
+    radius,
+    csv_points,
+    safe_box,
+    task_box,
+    csv_frame,
+    accepted_task_points,
+    rejected_task_points,
+):
     print("\n=== Go2-X5 arm workspace viewer ===")
     print(f"arm-base origin: {robot_spec.ARM_BASE_OFFSET}")
     print(f"front hemisphere radius: {radius:.4f} m")
     print(f"safe box: {safe_box}")
     print(f"csv/safe-box frame: {csv_frame}")
     print(f"task sampling box local: {task_box}")
+    print(f"task bounds relative to root/terrain: {robot_spec.EE_GOAL_WORLD_RANGES}")
     print(f"task sampling box world: {task_world_bounds(env, task_box)}")
+    print(f"colored accepted samples: {len(accepted_task_points)}")
+    print(f"colored rejected samples: {len(rejected_task_points)}")
     print(f"csv points drawn: {len(csv_points)}")
     print("\nViewer markers:")
     print("  cyan wireframe: user-proposed front hemisphere")
     print("  purple box: safe IK scan box")
     print("  orange box: current low-level task sampling range")
+    print("  green volume: candidate endpoints accepted by collision/ground/reach predicates")
+    print("  red volume: candidate endpoints rejected by collision/ground/reach predicates")
     print("  orange sphere: terrain-invariant task sampling center")
     print("  black sphere: arm-base origin")
     print("  red/green/blue axes: arm-base x/y/z")
@@ -510,6 +565,17 @@ def print_summary(env, radius, csv_points, safe_box, task_box, csv_frame):
 
 def main():
     cli = parse_args()
+    task_fill_resolution = parse_grid_resolution(cli.task_fill_resolution)
+    if cli.task_fill_marker_size <= 0.0:
+        raise ValueError("--task_fill_marker_size must be positive")
+    if cli.screenshot_step < 0:
+        raise ValueError("--screenshot_step must be non-negative")
+    if cli.screenshot:
+        cli.screenshot = os.path.abspath(os.path.expanduser(cli.screenshot))
+        if os.path.exists(cli.screenshot):
+            raise FileExistsError(f"refusing to overwrite screenshot: {cli.screenshot}")
+        os.makedirs(os.path.dirname(cli.screenshot), exist_ok=True)
+
     args = make_legged_gym_args(cli)
     env_cfg, _ = task_registry.get_cfgs(name=args.task)
     env_cfg = configure_env(env_cfg, cli)
@@ -519,13 +585,55 @@ def main():
     radius = cli.radius if cli.radius > 0.0 else estimate_arm_radius_from_urdf()
     csv_points, csv_success_bounds = load_csv_points(cli.csv, cli.csv_stride, cli.draw_csv_points)
     safe_box = parse_safe_box(cli.safe_box, csv_success_bounds=csv_success_bounds)
-    task_box = None if cli.hide_task_box else task_box_from_cfg(env_cfg)
+    task_box = task_box_from_cfg(env_cfg)
     hemisphere_segments = [] if cli.hide_hemisphere else hemisphere_line_segments(radius, cli.hemisphere_segments, cli.hemisphere_rings)
     hemisphere_emphasis = [] if cli.hide_hemisphere else hemisphere_emphasis_segments(radius, cli.hemisphere_segments)
     box_segments = [] if cli.hide_safe_box else box_line_segments(safe_box)
-    task_box_segments = box_grid_segments(task_box, cli.task_box_grid) if task_box is not None else []
-    task_box_corners = box_corners(task_box) if task_box is not None else []
-    print_summary(env, radius, csv_points, safe_box, task_box, cli.csv_frame)
+    task_box_segments = (
+        box_grid_segments(task_box, cli.task_box_grid)
+        if task_box is not None and not cli.hide_task_box
+        else []
+    )
+    task_box_corners = (
+        box_corners(task_box)
+        if task_box is not None and not cli.hide_task_box
+        else []
+    )
+    accepted_task_points = np.empty((0, 3), dtype=np.float64)
+    rejected_task_points = np.empty((0, 3), dtype=np.float64)
+    if task_box is not None and not cli.hide_task_fill:
+        task_points = cartesian_grid(task_box, task_fill_resolution)
+        accepted, collision_rejected, underground_rejected = classify_cartesian_goals(
+            task_points,
+            env_cfg.goal_ee.collision_lower_limits,
+            env_cfg.goal_ee.collision_upper_limits,
+            env_cfg.goal_ee.underground_limit,
+        )
+        reach_rejected = nominal_reach_rejected(
+            task_points,
+            env_cfg.goal_ee.max_nominal_reach_radius,
+        )
+        accepted &= ~reach_rejected
+        accepted_task_points = task_points[accepted]
+        rejected_task_points = task_points[
+            collision_rejected | underground_rejected | reach_rejected
+        ]
+    accepted_task_segments = cross_marker_segments(
+        accepted_task_points, cli.task_fill_marker_size
+    )
+    rejected_task_segments = cross_marker_segments(
+        rejected_task_points, cli.task_fill_marker_size
+    )
+    print_summary(
+        env,
+        radius,
+        csv_points,
+        safe_box,
+        task_box,
+        cli.csv_frame,
+        accepted_task_points,
+        rejected_task_points,
+    )
 
     actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
     for step in range(cli.max_iterations):
@@ -538,6 +646,8 @@ def main():
             box_segments,
             task_box_segments,
             task_box_corners,
+            accepted_task_segments,
+            rejected_task_segments,
             csv_points,
             cli.csv_frame,
             radius,
@@ -545,6 +655,11 @@ def main():
             cli.task_corner_radius,
         )
         env.render(sync_frame_time=True)
+        if cli.screenshot and step == cli.screenshot_step:
+            env.gym.write_viewer_image_to_file(env.viewer, cli.screenshot)
+            print(f"screenshot={cli.screenshot}", flush=True)
+            if cli.exit_after_screenshot:
+                break
         if step % 200 == 0:
             print(f"step={step:05d}", flush=True)
         time.sleep(max(0.02 - (time.time() - start), 0.0))

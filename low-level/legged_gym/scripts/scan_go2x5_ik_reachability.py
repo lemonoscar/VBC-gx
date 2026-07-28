@@ -48,7 +48,14 @@ for _path in [
 
 import isaacgym  # noqa: F401,E402
 from isaacgym import gymtorch  # noqa: E402
-from isaacgym.torch_utils import orientation_error, quat_apply, quat_from_euler_xyz, quat_rotate_inverse  # noqa: E402
+from isaacgym.torch_utils import (  # noqa: E402
+    euler_from_quat,
+    orientation_error,
+    quat_apply,
+    quat_from_euler_xyz,
+    quat_mul,
+    quat_rotate_inverse,
+)
 import torch  # noqa: E402
 
 from legged_gym.envs import *  # noqa: F401,F403,E402
@@ -70,12 +77,21 @@ def parse_args():
         help="Frame for target x/y/z. goal_center matches the low-level terrain-invariant task sampler.",
     )
     parser.add_argument("--quick", action="store_true", help="Use a small 27-point smoke-test grid.")
-    parser.add_argument("--x", default="0.18,0.24,0.30,0.36")
-    parser.add_argument("--y", default="-0.18,-0.09,0.0,0.09,0.18")
-    parser.add_argument("--z", default="0.06,0.16,0.26,0.36")
-    parser.add_argument("--roll", default=f"{math.pi / 2:.12f}")
+    parser.add_argument("--x", default="0.215,0.33,0.45,0.565")
+    parser.add_argument("--y", default="-0.225,-0.11,0.0,0.11,0.225")
+    parser.add_argument("--z", default="-0.364,-0.23,-0.10,0.036")
+    parser.add_argument("--roll", default="-0.35,0.0,0.35")
     parser.add_argument("--pitch", default="-0.25,0.0,0.25")
-    parser.add_argument("--yaw", default="-0.45,0.0,0.45")
+    parser.add_argument("--yaw", default="-0.35,0.0,0.35")
+    parser.add_argument(
+        "--orientation_mode",
+        choices=["task", "absolute"],
+        default="task",
+        help=(
+            "task interprets roll/pitch/yaw as deltas around the production "
+            "X5 pose and adds target-bearing yaw; absolute uses the values directly."
+        ),
+    )
     parser.add_argument("--max_targets", type=int, default=0, help="Optional cap for debugging; 0 scans all.")
     parser.add_argument("--print_every", type=int, default=1, help="Print every N targets; 0 only prints summary.")
     parser.add_argument("--max_iters", type=int, default=40)
@@ -83,6 +99,18 @@ def parse_args():
     parser.add_argument("--max_delta", type=float, default=0.08, help="Maximum per-iteration arm joint update in radians.")
     parser.add_argument("--orn_weight", type=float, default=0.25, help="Orientation residual weight during IK.")
     parser.add_argument("--position_only", action="store_true", help="Optimize position only; still report orientation error.")
+    parser.add_argument(
+        "--base_height",
+        type=float,
+        default=robot_spec.BASE_INIT_HEIGHT,
+        help="Fixed base-root height used by the kinematic scan.",
+    )
+    parser.add_argument(
+        "--base_pitch",
+        type=float,
+        default=0.0,
+        help="Fixed base pitch in radians; positive values model the configured forward lean.",
+    )
     parser.add_argument("--pos_tol", type=float, default=0.03)
     parser.add_argument("--orn_tol", type=float, default=0.25)
     parser.add_argument("--limit_margin", type=float, default=0.03)
@@ -120,7 +148,7 @@ def make_legged_gym_args(cli):
     return args
 
 
-def configure_env(env_cfg):
+def configure_env(env_cfg, cli):
     env_cfg.env.num_envs = 1
     env_cfg.env.record_video = False
     env_cfg.env.stand_by = True
@@ -148,12 +176,23 @@ def configure_env(env_cfg):
     env_cfg.init_state.init_vel_perturb_range = 0.0
     env_cfg.init_state.leg_reset_ratio_range = [1.0, 1.0]
     env_cfg.init_state.arm_reset_noise_range = [0.0, 0.0]
-    env_cfg.init_state.pos = [0.0, 0.0, robot_spec.BASE_INIT_HEIGHT]
+    env_cfg.init_state.pos = [0.0, 0.0, cli.base_height]
+    env_cfg.init_state.rot = [
+        0.0,
+        math.sin(cli.base_pitch / 2.0),
+        0.0,
+        math.cos(cli.base_pitch / 2.0),
+    ]
 
     env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
     env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
+    env_cfg.commands.standing_probability = 1.0
+    env_cfg.commands.turn_in_place_probability = 0.0
+    env_cfg.commands.turn_in_place_min_abs_yaw = 0.0
     if hasattr(env_cfg, "auto_curriculum"):
         env_cfg.auto_curriculum.enabled = False
+    env_cfg.arm.track_ee_orientation = not cli.position_only
+    env_cfg.arm.ik_orientation_weight = cli.orn_weight
     return env_cfg
 
 
@@ -164,7 +203,9 @@ def refresh_runtime_state(env, jacobian_body_offset=-1):
     env.gym.refresh_jacobian_tensors(env.sim)
     env.gym.refresh_net_contact_force_tensor(env.sim)
     env.base_quat[:] = env.root_states[:, 3:7]
-    env.base_yaw_quat[:] = env.base_quat[:]
+    _, _, yaw = euler_from_quat(env.base_quat)
+    zeros = torch.zeros_like(yaw)
+    env.base_yaw_quat[:] = quat_from_euler_xyz(zeros, zeros, yaw)
     arm_start = env.num_dofs - (6 + env.cfg.env.num_gripper_joints)
     arm_end = env.num_dofs - env.cfg.env.num_gripper_joints
     jacobian_body_idx = getattr(env, "_jacobian_body_idx", env.gripper_idx + jacobian_body_offset)
@@ -274,7 +315,19 @@ def select_jacobian_body_index(env, cli):
     return best_idx, best_error, errors[:5]
 
 
-def scan_target(env, target_xyz, target_rpy, cli):
+def task_target_rpy(target_xyz, orientation_command, cli):
+    if cli.orientation_mode == "absolute":
+        return list(orientation_command)
+    target_rpy = [
+        robot_spec.EE_ORIENTATION_NOMINAL_RPY[index]
+        + orientation_command[index]
+        for index in range(3)
+    ]
+    target_rpy[2] += math.atan2(target_xyz[1], target_xyz[0])
+    return target_rpy
+
+
+def scan_target(env, target_xyz, orientation_command, cli):
     home_q = env.default_dof_pos.detach().clone()
     arm_start = env.num_dofs - (6 + env.cfg.env.num_gripper_joints)
     arm_end = env.num_dofs - env.cfg.env.num_gripper_joints
@@ -284,11 +337,13 @@ def scan_target(env, target_xyz, target_rpy, cli):
     q = home_q.clone()
     set_dof_positions(env, q, jacobian_body_offset=cli.jacobian_body_offset)
     target_world = target_world_from_frame(env, target_xyz, cli.target_frame)
-    target_quat = quat_from_euler_xyz(
+    target_rpy = task_target_rpy(target_xyz, orientation_command, cli)
+    target_local_quat = quat_from_euler_xyz(
         torch.tensor([target_rpy[0]], device=env.device),
         torch.tensor([target_rpy[1]], device=env.device),
         torch.tensor([target_rpy[2]], device=env.device),
     )
+    target_quat = quat_mul(env.base_yaw_quat[0:1], target_local_quat)
 
     pos_err = float("inf")
     orn_err = float("inf")
@@ -298,7 +353,7 @@ def scan_target(env, target_xyz, target_rpy, cli):
         ee_orn_norm = torch.norm(env.ee_orn, dim=-1, keepdim=True).clamp(min=1e-6)
         dpos = target_world - env.ee_pos[0:1]
         drot = orientation_error(target_quat, env.ee_orn[0:1] / ee_orn_norm[0:1])
-        ik_drot = torch.zeros_like(drot) if cli.position_only else drot * cli.orn_weight
+        ik_drot = torch.zeros_like(drot) if cli.position_only else drot
         dpose = torch.cat([dpos, ik_drot], dim=-1).unsqueeze(-1)
         pos_err = torch.norm(dpos).item()
         orn_err = torch.norm(drot).item()
@@ -324,6 +379,25 @@ def scan_target(env, target_xyz, target_rpy, cli):
     orn_err = torch.norm(orientation_error(target_quat, env.ee_orn[0:1] / ee_orn_norm[0:1])).item()
     raw_ik_success = pos_err <= cli.pos_tol and (cli.position_only or orn_err <= cli.orn_tol)
     success = raw_ik_success and limit_hits == 0 and not contacts
+    target_local_tensor = torch.tensor(
+        target_xyz, device=env.device, dtype=torch.float
+    )
+    endpoint_collision_rejected = bool(
+        torch.all(target_local_tensor < env.collision_upper_limits)
+        and torch.all(target_local_tensor > env.collision_lower_limits)
+    )
+    endpoint_underground_rejected = bool(
+        target_local_tensor[2] < env.underground_limit
+    )
+    endpoint_reach_rejected = bool(
+        torch.linalg.vector_norm(target_local_tensor)
+        > env.max_nominal_reach_radius
+    )
+    task_endpoint_admissible = not (
+        endpoint_collision_rejected
+        or endpoint_underground_rejected
+        or endpoint_reach_rejected
+    )
 
     row = {
         "target_x": target_xyz[0],
@@ -332,6 +406,9 @@ def scan_target(env, target_xyz, target_rpy, cli):
         "target_roll": target_rpy[0],
         "target_pitch": target_rpy[1],
         "target_yaw": target_rpy[2],
+        "orientation_command_roll": orientation_command[0],
+        "orientation_command_pitch": orientation_command[1],
+        "orientation_command_yaw": orientation_command[2],
         "success": int(success),
         "raw_ik_success": int(raw_ik_success),
         "pos_err": pos_err,
@@ -340,6 +417,10 @@ def scan_target(env, target_xyz, target_rpy, cli):
         "limit_hits": limit_hits,
         "min_limit_margin": float(margin.min().item()),
         "collision": int(bool(contacts)),
+        "task_endpoint_admissible": int(task_endpoint_admissible),
+        "endpoint_collision_rejected": int(endpoint_collision_rejected),
+        "endpoint_underground_rejected": int(endpoint_underground_rejected),
+        "endpoint_reach_rejected": int(endpoint_reach_rejected),
         "max_contact_force": max_contact_force,
         "contact_bodies": ";".join(f"{name}:{force:.3f}" for name, force in contacts),
         "final_x": float(final_local[0].item()),
@@ -369,12 +450,19 @@ def summarize(rows, home_ee_local=None, home_ee_axes_base=None):
     total = len(rows)
     successes = [row for row in rows if row["success"]]
     raw_successes = [row for row in rows if row["raw_ik_success"]]
+    admissible = [row for row in rows if row["task_endpoint_admissible"]]
+    admissible_successes = [row for row in admissible if row["success"]]
     summary = {
         "total": total,
         "success_count": len(successes),
         "raw_ik_success_count": len(raw_successes),
         "success_rate": len(successes) / total if total else 0.0,
         "raw_ik_success_rate": len(raw_successes) / total if total else 0.0,
+        "task_endpoint_admissible_count": len(admissible),
+        "task_endpoint_admissible_success_count": len(admissible_successes),
+        "task_endpoint_admissible_success_rate": (
+            len(admissible_successes) / len(admissible) if admissible else 0.0
+        ),
         "recommended_initial_ee_goal_cart": None,
         "recommended_mask_arm_goal_cart": None,
         "success_bounds": None,
@@ -406,10 +494,10 @@ def grid_values(cli):
             parse_float_list(cli.yaw),
         )
     return (
-        [0.22, 0.30, 0.38],
-        [-0.12, 0.0, 0.12],
-        [0.10, 0.22, 0.34],
-        [math.pi / 2],
+        [0.215, 0.39, 0.565],
+        [-0.225, 0.0, 0.225],
+        [-0.364, -0.164, 0.036],
+        [0.0],
         [0.0],
         [0.0],
     )
@@ -419,7 +507,7 @@ def main():
     cli = parse_args()
     args = make_legged_gym_args(cli)
     env_cfg, _ = task_registry.get_cfgs(name=args.task)
-    env_cfg = configure_env(env_cfg)
+    env_cfg = configure_env(env_cfg, cli)
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     env._count_finger_contacts = cli.count_finger_contacts
     env.reset()
@@ -445,16 +533,17 @@ def main():
     print(f"jacobian body index: {getattr(env, '_jacobian_body_idx', env.gripper_idx + cli.jacobian_body_offset)} (rigid body EE index {env.gripper_idx})")
     if jacobian_candidates is not None:
         print(f"jacobian fd candidates: {[(idx, round(err, 6)) for err, idx in jacobian_candidates]}")
-    print(f"base height: {robot_spec.BASE_INIT_HEIGHT}")
+    print(f"base height/pitch: {cli.base_height:.3f} m / {cli.base_pitch:.3f} rad")
     print(f"targets: {len(targets)}")
     print(f"position_only: {cli.position_only}")
+    print(f"orientation_mode: {cli.orientation_mode}")
     print(f"csv: {cli.csv}")
 
     rows = []
     for index, target in enumerate(targets, start=1):
         target_xyz = target[:3]
-        target_rpy = target[3:]
-        row = scan_target(env, target_xyz, target_rpy, cli)
+        orientation_command = target[3:]
+        row = scan_target(env, target_xyz, orientation_command, cli)
         rows.append(row)
         if cli.print_every and (index == 1 or index == len(targets) or index % cli.print_every == 0):
             print(
@@ -462,7 +551,7 @@ def main():
                     index,
                     len(targets),
                     [round(v, 3) for v in target_xyz],
-                    [round(v, 3) for v in target_rpy],
+                    [round(row[f"target_{axis}"], 3) for axis in ("roll", "pitch", "yaw")],
                     row["success"],
                     row["pos_err"],
                     row["orn_err"],

@@ -13,6 +13,7 @@ from tools.go2x5_runtime_parity import (
     CONTROLLER_CASES,
     EXPECTED_POLICY_TO_URDF,
     PROBE_ACTION_POLICY_ORDER,
+    build_comparison_report,
     canonical_json_sha256,
     compare_snapshots,
     ee_frame_oracle,
@@ -63,6 +64,19 @@ def test_tolerance_accepts_small_numeric_error():
 
 def test_tolerance_boundary_is_inclusive():
     assert compare_snapshots(controller_snapshot(torque=1.0), controller_snapshot("high", torque=1.000001), atol=1.0e-6) == []
+
+
+def test_controller_report_uses_field_specific_acceptance_tolerances():
+    low = controller_snapshot("low", torque=1.0)
+    high = controller_snapshot("high", torque=1.0 + 5.0e-6)
+    report = build_comparison_report(low, high)
+    assert report["passed"] is True
+    assert abs(report["max_abs_errors"]["torque"] - 5.0e-6) < 1.0e-12
+
+    high["policy_action"][0] += 2.0e-7
+    report = build_comparison_report(low, high)
+    assert report["passed"] is False
+    assert report["mismatches"][0]["path"] == "policy_action[0]"
 
 
 def test_constant_probe_is_asymmetric_policy_order():

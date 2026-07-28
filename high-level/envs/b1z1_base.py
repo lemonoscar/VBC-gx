@@ -89,6 +89,21 @@ class B1Z1Base(RewardVecTask):
         self.low_ee_goal_ranges = self.cfg["env"].get(
             "lowEeGoalRanges", [[0.05, 0.60], [-0.30, 0.30], [-0.40, 0.42]]
         )
+        self.low_ee_goal_max_nominal_reach_radius = float(
+            self.cfg["env"].get("lowEeGoalMaxNominalReachRadius", float("inf"))
+        )
+        if self.low_ee_goal_max_nominal_reach_radius <= 0.0:
+            raise ValueError("lowEeGoalMaxNominalReachRadius must be positive")
+        self.low_ee_goal_orn_ranges = self.cfg["env"].get(
+            "lowEeGoalOrnRanges",
+            [[-np.pi, np.pi], [-np.pi, np.pi], [-np.pi, np.pi]],
+        )
+        if (
+            len(self.low_ee_goal_orn_ranges) != 3
+            or any(len(limits) != 2 or limits[0] > limits[1]
+                   for limits in self.low_ee_goal_orn_ranges)
+        ):
+            raise ValueError("lowEeGoalOrnRanges must contain three ordered pairs")
         self.initial_ee_goal_cart_cfg = self.cfg["env"].get("initialEEGoalCart", [0.46, 0.0, 0.55])
         self.initial_ee_goal_orn_rpy_cfg = self.cfg["env"].get("initialEEGoalOrnRPY", [np.pi / 2, 0.0, 0.0])
         self.reset_ee_goal_to_current = bool(
@@ -99,7 +114,15 @@ class B1Z1Base(RewardVecTask):
         self.arm_base_offset_cfg = self.cfg["env"].get("armBaseOffset", [0.3, 0.0, 0.09])
         self.ee_frame = self.cfg["env"].get("eeFrame", "ARM_BASE_FULL_ORIENTATION")
         self.arm_ik_gain = float(self.cfg["env"].get("armIkGain", 1.0))
+        self.arm_ik_orientation_weight = float(
+            self.cfg["env"].get("armIkOrientationWeight", 1.0)
+        )
+        if not 0.0 < self.arm_ik_orientation_weight <= 1.0:
+            raise ValueError("armIkOrientationWeight must be in (0, 1]")
         self.track_ee_orientation = bool(self.cfg["env"].get("trackEeOrientation", True))
+        self.low_policy_orientation_observation = bool(
+            self.cfg["env"].get("lowPolicyOrientationObservation", False)
+        )
         self.arm_target_mode = self.cfg["env"].get(
             "armTargetMode", "measured_joint_increment"
         )
@@ -847,22 +870,48 @@ class B1Z1Base(RewardVecTask):
         # arm_kp_range = np.linspace(300,400, self.num_envs)
         # gripper_kp_range = np.linspace(1.5,3, self.num_envs)
         control_cfg = self.cfg["env"]["asset"].get("control", {})
-        arm_kp = float(control_cfg.get("armPositionDriveStiffness", 400.0))
-        arm_kd = float(control_cfg.get("armPositionDriveDamping", 40.0))
-        gripper_kp = float(control_cfg.get("gripperPositionDriveStiffness", arm_kp))
-        gripper_kd = float(control_cfg.get("gripperPositionDriveDamping", arm_kd))
+        arm_start = 0 if self.floating_base else 12
+        arm_end = self.num_dofs - self.num_physical_gripper_dof
+        arm_count = arm_end - arm_start
+
+        def expand_drive_gain(value, count, name):
+            gains = np.asarray(value, dtype=np.float32).reshape(-1)
+            if gains.size == 1:
+                return np.repeat(gains, count)
+            if gains.size != count:
+                raise ValueError(
+                    f"{name} must be scalar or have {count} values, got {gains.size}"
+                )
+            return gains
+
+        arm_kp = expand_drive_gain(
+            control_cfg.get("armPositionDriveStiffness", 400.0),
+            arm_count,
+            "armPositionDriveStiffness",
+        )
+        arm_kd = expand_drive_gain(
+            control_cfg.get("armPositionDriveDamping", 40.0),
+            arm_count,
+            "armPositionDriveDamping",
+        )
+        gripper_kp = float(
+            control_cfg.get("gripperPositionDriveStiffness", arm_kp[-1])
+        )
+        gripper_kd = float(
+            control_cfg.get("gripperPositionDriveDamping", arm_kd[-1])
+        )
 
         for i in range(self.num_envs):
             if self.floating_base:
                 dof_props_asset['driveMode'][:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
-                dof_props_asset['stiffness'][:-self.num_physical_gripper_dof].fill(arm_kp)
-                dof_props_asset['damping'][:-self.num_physical_gripper_dof].fill(arm_kd)
+                dof_props_asset['stiffness'][:-self.num_physical_gripper_dof] = arm_kp
+                dof_props_asset['damping'][:-self.num_physical_gripper_dof] = arm_kd
                 dof_props_asset['stiffness'][-self.num_physical_gripper_dof:].fill(gripper_kp)
                 dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(gripper_kd)
             else:
                 dof_props_asset['driveMode'][12:].fill(gymapi.DOF_MODE_POS)  # set arm to pos control
-                dof_props_asset['stiffness'][12:-self.num_physical_gripper_dof].fill(arm_kp)
-                dof_props_asset['damping'][12:-self.num_physical_gripper_dof].fill(arm_kd)
+                dof_props_asset['stiffness'][12:-self.num_physical_gripper_dof] = arm_kp
+                dof_props_asset['damping'][12:-self.num_physical_gripper_dof] = arm_kd
                 dof_props_asset['stiffness'][-self.num_physical_gripper_dof:].fill(gripper_kp)
                 dof_props_asset['damping'][-self.num_physical_gripper_dof:].fill(gripper_kd)
         
@@ -1109,6 +1158,19 @@ class B1Z1Base(RewardVecTask):
                     goal_local[:, axis], limits[0], limits[1]
                 )
             self.curr_ee_goal_cart[env_ids] = goal_local
+            if self.track_ee_orientation:
+                ee_orn = self.ee_orn[env_ids] / torch.norm(
+                    self.ee_orn[env_ids], dim=-1, keepdim=True
+                ).clamp(min=1e-6)
+                local_orn = quat_mul(
+                    quat_conjugate(self.base_yaw_quat[env_ids]), ee_orn
+                )
+                local_rpy = torch.stack(euler_from_quat(local_orn), dim=-1)
+                for axis, limits in enumerate(self.low_ee_goal_orn_ranges):
+                    local_rpy[:, axis] = torch.clamp(
+                        local_rpy[:, axis], limits[0], limits[1]
+                    )
+                self.curr_ee_goal_orn_rpy[env_ids] = local_rpy
         elif not hasattr(self, "init_ee_goal_cart"):
             self.curr_ee_goal_cart[:] = torch.tensor(
                 self.initial_ee_goal_cart_cfg, device=self.device, dtype=torch.float
@@ -1116,12 +1178,30 @@ class B1Z1Base(RewardVecTask):
         else:
             self.curr_ee_goal_cart[env_ids] = self.init_ee_goal_cart[env_ids]
 
+        self._project_ee_goal_to_reach_envelope(env_ids)
         if not hasattr(self, "init_ee_goal_cart"):
             self.init_ee_goal_cart = self.curr_ee_goal_cart.clone()
         elif self.reset_ee_goal_to_current:
             self.init_ee_goal_cart[env_ids] = self.curr_ee_goal_cart[env_ids]
 
         self._update_ee_goal_world(env_ids)
+
+    def _project_ee_goal_to_reach_envelope(self, env_ids=None):
+        """Project local EE commands into the convex low-level reach envelope."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        if len(env_ids) == 0 or not np.isfinite(
+            self.low_ee_goal_max_nominal_reach_radius
+        ):
+            return
+        goal = self.curr_ee_goal_cart[env_ids]
+        radius = torch.linalg.vector_norm(goal, dim=-1, keepdim=True).clamp(
+            min=1.0e-9
+        )
+        scale = torch.clamp(
+            self.low_ee_goal_max_nominal_reach_radius / radius, max=1.0
+        )
+        self.curr_ee_goal_cart[env_ids] = goal * scale
     
     def _compute_observations(self, env_ids=None):
         if env_ids is None:
@@ -1154,7 +1234,9 @@ class B1Z1Base(RewardVecTask):
                                        commands[:, :3],
                                     #    self.curr_ee_goal_sphere,
                                        ee_goal_local,
-                                       0*self.curr_ee_goal_cart,
+                                       self.curr_ee_goal_orn_rpy
+                                       if self.low_policy_orientation_observation
+                                       else 0*self.curr_ee_goal_cart,
                                        ), dim=-1)
         if self.mask_arm:
             arm_pos_obs = self._reindex_low_all(self._dof_pos - self._initial_dof_pos)[:, :-self.num_gripper_joints]
@@ -1170,7 +1252,12 @@ class B1Z1Base(RewardVecTask):
                                        commands[:, :3],
                                     #    self.curr_ee_goal_sphere,
                                                     torch.tensor(self.mask_arm_goal_cart_cfg, device=self.device).repeat(self.num_envs, 1),
-                                       0*self.curr_ee_goal_cart,
+                                       torch.tensor(
+                                           self.initial_ee_goal_orn_rpy_cfg,
+                                           device=self.device,
+                                       ).repeat(self.num_envs, 1)
+                                       if self.low_policy_orientation_observation
+                                       else 0*self.curr_ee_goal_cart,
                                        ), dim=-1)
         if self.observe_gait_commands:
             low_level_obs_buf = torch.cat((low_level_obs_buf,
@@ -1242,8 +1329,20 @@ class B1Z1Base(RewardVecTask):
         
     def control_ik(self, dpose):
         if self.track_ee_orientation:
-            task_jacobian = self.ee_j_eef
-            task_error = dpose
+            task_jacobian = torch.cat(
+                [
+                    self.ee_j_eef[:, :3, :],
+                    self.arm_ik_orientation_weight * self.ee_j_eef[:, 3:, :],
+                ],
+                dim=1,
+            )
+            task_error = torch.cat(
+                [
+                    dpose[:, :3, :],
+                    self.arm_ik_orientation_weight * dpose[:, 3:, :],
+                ],
+                dim=1,
+            )
         else:
             task_jacobian = self.ee_j_eef[:, :3, :]
             task_error = dpose[:, :3, :]
@@ -1726,12 +1825,15 @@ class B1Z1Base(RewardVecTask):
                 self.delta_goal_cart = self.actions[:, :3] * 0.02
             else:
                 self.delta_goal_cart = torch.clip(self.actions[:, :3], -0.02, 0.02)
+        previous_goal_cart = self.curr_ee_goal_cart.clone()
         self.curr_ee_goal_cart[:] = self.curr_ee_goal_cart + self.delta_goal_cart
         # self.curr_ee_goal_cart[:, 0] = torch.clip(self.curr_ee_goal_cart[:, 0], 0.0, 0.9)
         for axis, limits in enumerate(self.low_ee_goal_ranges):
             self.curr_ee_goal_cart[:, axis] = torch.clip(
                 self.curr_ee_goal_cart[:, axis], limits[0], limits[1]
             )
+        self._project_ee_goal_to_reach_envelope()
+        self.delta_goal_cart[:] = self.curr_ee_goal_cart - previous_goal_cart
         self._update_ee_goal_world()
         ee_goal_cart = self.ee_goal_world
         
@@ -1741,10 +1843,19 @@ class B1Z1Base(RewardVecTask):
             self.delta_goal_orn = torch.clip(self.actions[:, 3:6], -0.06, 0.06)
         if self.track_ee_orientation:
             self.curr_ee_goal_orn_rpy[:] = self.curr_ee_goal_orn_rpy + self.delta_goal_orn
+            for axis, limits in enumerate(self.low_ee_goal_orn_ranges):
+                self.curr_ee_goal_orn_rpy[:, axis] = torch.clip(
+                    self.curr_ee_goal_orn_rpy[:, axis], limits[0], limits[1]
+                )
         # self.curr_ee_goal_orn_rpy[:] = self.curr_ee_goal_orn_rpy + torch.clip(actions[:, 3:6], -0.04, 0.04)
         # self.curr_ee_goal_orn_rpy[:] = self.curr_ee_goal_orn_rpy + torch.clip(actions[:, 3:6], -0.02, 0.02)
         ee_goal_local_orn = quat_from_euler_xyz(self.curr_ee_goal_orn_rpy[:, 0], self.curr_ee_goal_orn_rpy[:, 1], self.curr_ee_goal_orn_rpy[:, 2])
-        ee_goal_orn_quat = quat_mul(self._robot_root_states[:, 3:7], ee_goal_local_orn)
+        orientation_parent = (
+            self.base_yaw_quat
+            if self.ee_frame == "TERRAIN_INVARIANT_YAW"
+            else self._robot_root_states[:, 3:7]
+        )
+        ee_goal_orn_quat = quat_mul(orientation_parent, ee_goal_local_orn)
         # -------------------------delta based on current ee goal----------------------------
         self.set_gripper()
         self.clip_commands()

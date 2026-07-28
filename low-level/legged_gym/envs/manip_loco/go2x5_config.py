@@ -37,14 +37,15 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     
     class goal_ee:
         num_commands = 3
-        traj_time = [2.5, 4.0]
-        hold_time = [1.0, 2.5]
+        traj_time = [3.0, 5.0]
+        hold_time = [1.5, 3.0]
         # Reject trajectories that enter the near-body/head region.  The old
         # x upper bound (0.1) predated the front-workspace retarget and could
         # never reject the current local x range, whose minimum is 0.215.
         collision_upper_limits = [0.24, 0.2, 0.05]
         collision_lower_limits = [-0.8, -0.2, -0.7]
         underground_limit = -0.6  # local cartesian z; keeps sampled EE goals from spending too much time below the terrain.
+        max_nominal_reach_radius = robot_spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS
         num_collision_check_samples = 10
         command_mode = 'cart'
         center_mode = 'terrain_invariant'
@@ -57,8 +58,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
         class ranges:
             # Cartesian targets relative to the terrain-invariant nominal arm-base center.
-            # These map to root-forward x=[0.30, 0.55] m and terrain
-            # z=[0.08, 0.45] m, keeping the primary workspace in front of Go2.
+            # These map to root-forward x=[0.30, 0.65] m, y=[-0.225, 0.225] m,
+            # and terrain z=[0.05, 0.45] m.
             init_pos_start = robot_spec.EE_GOAL_INIT_START_LOCAL
             init_pos_end = robot_spec.EE_GOAL_INIT_END_LOCAL
             pos_x = robot_spec.EE_GOAL_LOCAL_RANGES[0]
@@ -70,13 +71,16 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             pos_p = [0.15, 1.05]
             pos_y = [-0.65, 0.65]
             
-            delta_orn_r = [-0.5, 0.5]
-            delta_orn_p = [-0.5, 0.5]
-            delta_orn_y = [-0.5, 0.5]
+            delta_orn_r = robot_spec.EE_ORIENTATION_DELTA_RANGES[0]
+            delta_orn_p = robot_spec.EE_ORIENTATION_DELTA_RANGES[1]
+            delta_orn_y = robot_spec.EE_ORIENTATION_DELTA_RANGES[2]
             final_tracking_ee_reward = 0.55
 
         sphere_error_scale = [1, 1, 1]
         orn_error_scale = [1, 1, 1]
+        orientation_nominal_rpy = robot_spec.EE_ORIENTATION_NOMINAL_RPY
+        orientation_follow_target_yaw = True
+        orientation_in_observation = True
 
     class noise:
         add_noise = False
@@ -105,8 +109,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         lin_vel_x_clip = 0.05
 
         class ranges:
-            lin_vel_x = [0.0, 0.25]
-            ang_vel_yaw = [-0.15, 0.15]
+            lin_vel_x = [-0.30, 0.30]
+            ang_vel_yaw = [-0.40, 0.40]
 
     class normalization:
         class obs_scales:
@@ -121,6 +125,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class env:
         num_envs = 4096
+        env_spacing = 3.0
         num_actions = robot_spec.ACTION_DIM  # low-level policy controls legs only; arm is driven by IK position targets
         num_torques = robot_spec.NUM_TORQUES
         action_delay = 0  # deterministic parity first; reintroduce measured delay through a shared contract
@@ -172,6 +177,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         damping = {'hip': robot_spec.LEG_DAMPING, 'thigh': robot_spec.LEG_DAMPING, 'calf': robot_spec.LEG_DAMPING, 'arm': 0.5}  # [N*m*s/rad]
         arm_pos_stiffness = robot_spec.ARM_POS_STIFFNESS
         arm_pos_damping = robot_spec.ARM_POS_DAMPING
+        gripper_pos_stiffness = robot_spec.GRIPPER_POS_STIFFNESS
+        gripper_pos_damping = robot_spec.GRIPPER_POS_DAMPING
 
         adaptive_arm_gains = False
         # action_scale: leg scales only; arm joints are controlled by IK position targets.
@@ -207,11 +214,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         base_offset = robot_spec.ARM_BASE_OFFSET  # arm_base_joint origin in the Go2-X5-lab URDF
         init_target_ee_base = [0.30, 0.0, 0.20]
         grasp_offset = 0.08
-        # Go2-X5 zero-action checks show that simultaneous position+orientation
-        # IK can roll the base over. Train the low-level controller with
-        # position-only EE IK first, then reintroduce orientation later.
         ik_gain = robot_spec.ARM_IK_GAIN
-        track_ee_orientation = False
+        ik_orientation_weight = robot_spec.ARM_IK_ORIENTATION_WEIGHT
+        track_ee_orientation = True
         target_mode = robot_spec.ARM_TARGET_MODE
         target_max_step = robot_spec.ARM_TARGET_MAX_STEP
         gripper_hold_mode = robot_spec.LOW_LEVEL_GRIPPER_HOLD_MODE
@@ -246,6 +251,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         tracking_sigma = 0.05
         # Metres in exp(-2 * L1_error / sigma).
         tracking_ee_sigma = 0.15
+        # Radians in exp(-quaternion_angle / sigma).
+        tracking_ee_orientation_sigma = 0.35
         soft_dof_pos_limit = 1.
         soft_dof_vel_limit = 1.
         soft_torque_limit = 0.4
@@ -277,10 +284,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         safety_base_height_floor = 0.20
         dof_error_deadzone = 0.12
         leg_action_deadzone = 0.20
-        min_body_height = 0.24        # Safely above the 0.18 m termination threshold.
-        height_adaptation_goal_z_low = 0.10
-        height_adaptation_goal_z_high = 0.35
-        max_forward_body_pitch = 0.12 # Positive pitch lowers the Go2 front/arm mount.
+        min_body_height = 0.22        # Still 4 cm above the 0.18 m termination threshold.
+        height_adaptation_goal_z_low = 0.05
+        height_adaptation_goal_z_high = 0.30
+        max_forward_body_pitch = 0.25 # Positive pitch lowers the Go2 front/arm mount.
         low_goal_height_thresh = 0.35 # Only trigger posture shaping when EE goal is low
         low_goal_hind_force_ratio_target = 0.30  # For low goals, hind legs should still carry a meaningful fraction of load
         pitch_soft_limit = 0.35
@@ -289,7 +296,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # No gait clock/contact schedule is active.
             tracking_contacts_shaped_force = 0.0
             tracking_contacts_shaped_vel = 0.0
-            feet_air_time = 1.0
+            feet_air_time = 0.0
             feet_height = 0.0
 
             # -------Tracking rewards ----------
@@ -307,24 +314,25 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             dof_error = 0.0
             alive = 1.0
             termination = -100.0
-            lin_vel_z = -1.5
+            lin_vel_z = -1.0
             roll = -2.0
 
-            # common rewards
-            ang_vel_xy = -0.2
-            dof_acc = -7.5e-7
+            # Minimal task/stability set: no prescribed gait and no overlapping
+            # acceleration/work/jerk curricula.
+            ang_vel_xy = 0.0
+            dof_acc = 0.0
             collision = -10.0
             action_rate = -0.015
             dof_pos_limits = -10.0
-            delta_torques = -1.0e-7
-            hip_pos = -0.3
-            work = -0.003
-            feet_jerk = -0.0002
-            feet_drag = -0.15
+            delta_torques = 0.0
+            hip_pos = 0.0
+            work = 0.0
+            feet_jerk = 0.0
+            feet_drag = -0.20
             foot_lateral_spacing = 0.0
-            feet_contact_forces = -0.001
-            height_adaptation = -5.0
-            pitch_adaptation = -2.0
+            feet_contact_forces = 0.0
+            height_adaptation = -3.0
+            pitch_adaptation = -1.0
             low_goal_front_leg_bend = 0.0
             low_goal_posture_asymmetry = 0.0
             low_goal_hind_leg_extension = 0.0
@@ -343,7 +351,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # Do not prescribe a gait, but prevent an unbounded actor mean from
             # buying velocity with saturated PD targets. Actions inside +/-0.2
             # remain free; the quadratic tail only constrains large offsets.
-            leg_action_l2_deadzone = -0.02
+            leg_action_l2_deadzone = -0.01
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -356,14 +364,14 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         class arm_scales:
             arm_termination = None
             tracking_ee_sphere = 0.
-            tracking_ee_world = 1.5
+            tracking_ee_world = 2.0
             tracking_ee_world_stable = 0.0
             tracking_ee_sphere_walking = 0.0
             tracking_ee_sphere_standing = 0.0
             tracking_ee_cart = None
             arm_orientation = None
             arm_energy_abs_sum = None
-            tracking_ee_orn = 0.
+            tracking_ee_orn = 0.6
             tracking_ee_orn_ry = None
 
     class viewer:
@@ -376,7 +384,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         z_threshold = 0.18
 
     class terrain:
-        mesh_type = 'trimesh'
+        # Go2-X5 starts on a native PhysX plane.  Do not construct a Terrain
+        # height map for the flat-training contract: its one-sided trimesh
+        # allowed the initially lower front feet to remain below the surface.
+        mesh_type = 'plane'
         hf2mesh_method = "fast"
         max_error = 0.1
         horizontal_scale = 0.05
@@ -428,49 +439,17 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         origin_zero_z = False
 
     class auto_curriculum:
-        enabled = True
-        profile_name = "go2x5_velocity_ee_coordination_v5_persistent_arm"
+        # A single static task distribution is easier to audit and avoids
+        # reward/range discontinuities. Curriculum machinery remains available
+        # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
+        enabled = False
+        profile_name = "go2x5_flat_tabletop_6d_v1"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
         current_stage_index = 0
-        current_stage_name = "S0_slow_velocity_coordinated_reach"
-        stages = [
-            {
-                "name": "S0_slow_velocity_coordinated_reach",
-                "min_iterations": 8000,
-                "action_scale": robot_spec.LOW_ACTION_SCALE,
-                "lin_vel_x_range": [-0.12, 0.12],
-                "ang_vel_yaw_range": [-0.15, 0.15],
-                "standing_probability": 0.40,
-                "turn_in_place_probability": 0.20,
-                "turn_in_place_min_abs_yaw": 0.10,
-                "goal_pos_x": [0.265, 0.415],
-                "goal_pos_y_cart": [-0.10, 0.10],
-                "goal_pos_z": [-0.314, -0.054],
-                "traj_time": [4.0, 6.0],
-                "hold_time": [2.0, 3.0],
-                "ee_tracking_weight": 1.5,
-                "advance": {},
-            },
-            {
-                "name": "S1_full_velocity_coordinated_reach",
-                "min_iterations": 8000,
-                "action_scale": robot_spec.LOW_ACTION_SCALE,
-                "lin_vel_x_range": [-0.30, 0.30],
-                "ang_vel_yaw_range": [-0.40, 0.40],
-                "standing_probability": 0.25,
-                "turn_in_place_probability": 0.20,
-                "turn_in_place_min_abs_yaw": 0.15,
-                "goal_pos_x": robot_spec.EE_GOAL_LOCAL_RANGES[0],
-                "goal_pos_y_cart": robot_spec.EE_GOAL_LOCAL_RANGES[1],
-                "goal_pos_z": robot_spec.EE_GOAL_LOCAL_RANGES[2],
-                "traj_time": [3.0, 5.0],
-                "hold_time": [1.5, 3.0],
-                "ee_tracking_weight": 2.0,
-                "advance": {},
-            },
-        ]
+        current_stage_name = "static_full_task"
+        stages = []
 
 
 class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):

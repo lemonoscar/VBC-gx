@@ -246,9 +246,9 @@ def _set_canonical_state(env, side, case="C0"):
     if case == "C3":
         canonical_ee_goal = [0.40, -0.08, -0.20]
     elif case == "C4":
-        canonical_ee_goal = [
-            ee_goal_ranges[0][1], ee_goal_ranges[1][1], ee_goal_ranges[2][0]
-        ]
+        # Inside the 0.64 m deployment reach envelope while still combining a
+        # low, lateral target with a near-limit arm state.
+        canonical_ee_goal = [0.50, 0.18, -0.30]
     else:
         canonical_ee_goal = initial_ee_goal
 
@@ -318,10 +318,20 @@ def _set_canonical_state(env, side, case="C0"):
         env.gait_indices[:] = 0.0
         env.clock_inputs[:] = 0.0
         env.curr_ee_goal_cart[:] = torch.tensor(canonical_ee_goal, device=env.device)
+        canonical_orn_rpy = torch.tensor(
+            [[0.0, 1.25, torch.atan2(
+                env.curr_ee_goal_cart[0, 1],
+                env.curr_ee_goal_cart[0, 0],
+            ).item()]],
+            device=env.device,
+        )
+        env.curr_ee_goal_orn_delta_rpy[:] = 0.0
+        env.curr_ee_goal_orn_rpy[:] = canonical_orn_rpy
         from isaacgym.torch_utils import quat_apply
         env.curr_ee_goal_cart_world[:] = env._get_ee_goal_spherical_center() + quat_apply(
             env.base_yaw_quat, env.curr_ee_goal_cart
         )
+        env._update_ee_goal_orientation()
     else:
         env._refresh_sim_tensors()
         env._robot_root_states[:, :13] = desired_root
@@ -340,6 +350,13 @@ def _set_canonical_state(env, side, case="C0"):
         env.gait_indices[:] = 0.0
         env.clock_inputs[:] = 0.0
         env.curr_ee_goal_cart[:] = torch.tensor(canonical_ee_goal, device=env.device)
+        env.curr_ee_goal_orn_rpy[:] = torch.tensor(
+            [[0.0, 1.25, torch.atan2(
+                env.curr_ee_goal_cart[0, 1],
+                env.curr_ee_goal_cart[0, 0],
+            ).item()]],
+            device=env.device,
+        )
         env._update_ee_goal_world()
     if case == "C3":
         env.commands[:, 0] = 0.10

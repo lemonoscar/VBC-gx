@@ -107,7 +107,6 @@ def train(args):
     task_config_files = {
         "b1z1": "b1z1_config.py",
         "go2x5": "go2x5_config.py",
-        "go2x5_ftlift": "go2x5_ftlift_config.py",
     }
     task_config_file = task_config_files.get(args.task)
     if task_config_file is not None:

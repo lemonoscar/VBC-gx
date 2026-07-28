@@ -24,7 +24,9 @@ env:
   numGripperDof: 1
   numPhysicalGripperDof: 2
   gripperOpenAtUpper: True
-  low_policy_path: "../low-level/logs/go2x5-low/go2x5_v11_persistent_arm_gain010_seed1/model_45000.pt"
+  # No bundled Go2-X5 policy is considered valid. Training and evaluation
+  # entrypoints must receive an explicit schema-v2 12D checkpoint path.
+  low_policy_path: ""
   requireLowPolicyMetadata: True
   lowPolicyNumActions: 12
   lowPolicyObserveGaitCommands: False
@@ -36,18 +38,22 @@ env:
   lowLevelAngVelYawClip: 0.05
   lowLevelAngVelPitchClip: 0.25
   lowFootContactThreshold: 1.5
-  lowEeGoalRanges: [[0.215, 0.465], [-0.15, 0.15], [-0.334, 0.036]]
-  robotStartPose: [-0.65, 0.0, 0.32]
-  evalRobotStartPose: [-0.65, 0.0, 0.32]
+  lowEeGoalRanges: [[0.215, 0.565], [-0.225, 0.225], [-0.364, 0.036]]
+  lowEeGoalMaxNominalReachRadius: 0.64
+  lowEeGoalOrnRanges: [[-0.35, 0.35], [1.0, 1.5], [-1.0, 1.0]]
+  robotStartPose: [-0.45, 0.0, 0.32]
+  evalRobotStartPose: [-0.45, 0.0, 0.32]
   resetEEGoalToCurrent: True
   initialEEGoalCart: [0.365, 0.0, -0.164]
-  initialEEGoalOrnRPY: [1.57079632679, 0.0, 0.0]
+  initialEEGoalOrnRPY: [0.0, 1.25, 0.0]
   maskArmGoalCart: [0.365, 0.0, -0.064]
   armBaseOffset: [0.085, 0.0, 0.094]
   eeGoalCenterOffset: [0.085, 0.0, 0.414]
   eeFrame: "TERRAIN_INVARIANT_YAW"
-  armIkGain: 0.10
-  trackEeOrientation: False
+  armIkGain: 0.20
+  armIkOrientationWeight: 0.35
+  trackEeOrientation: True
+  lowPolicyOrientationObservation: True
   armTargetMode: "persistent_joint_command"
   armTargetMaxStep: 0.08
   armTargetUpdatePeriod: 4
@@ -58,9 +64,9 @@ env:
   fingerBodyNames: ["arm_link7", "arm_link8"]
   tableDims: [0.30, 0.60, 0.10]
   tablePositionXY: [0.0, 0.0]
-  tableHeightRange: [0.10, 0.15]
-  objectPositionRangeX: [-0.05, 0.05]
-  objectPositionRangeY: [-0.10, 0.10]
+  tableHeightRange: [0.10, 0.20]
+  objectPositionRangeX: [-0.10, 0.10]
+  objectPositionRangeY: [-0.20, 0.20]
   objectFallTolerance: 0.02
   robotResetPositionRangeXY: [0.03, 0.03]
   robotResetYawRange: 0.08
@@ -76,8 +82,8 @@ env:
     action_scale: [0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25, 0.125, 0.25, 0.25]
     leg_stiffness: 40.0
     leg_damping: 1.0
-    arm_position_stiffness: 110.0
-    arm_position_damping: 7.5
+    arm_position_stiffness: [120.0, 120.0, 100.0, 45.0, 35.0, 25.0]
+    arm_position_damping: [4.0, 4.0, 3.5, 1.5, 1.2, 0.8]
     gripper_position_stiffness: 110.0
     gripper_position_damping: 7.5
     sim_dt: 0.005
@@ -101,10 +107,17 @@ env:
       ang_vel_yaw: 0.05
     foot_contact_threshold: 1.5
     ee_frame: "TERRAIN_INVARIANT_YAW"
-    ik_gain: 0.10
+    ik_gain: 0.20
     ik_damping: 0.05
-    track_ee_orientation: false
-    ik_task: "position_only_translation_3d"
+    ik_orientation_weight: 0.35
+    track_ee_orientation: true
+    ik_task: "pose_6d_weighted_dls"
+    ee_goal_ranges: [[0.215, 0.565], [-0.225, 0.225], [-0.364, 0.036]]
+    ee_goal_max_nominal_reach_radius: 0.64
+    ee_orientation_delta_ranges: [[-0.35, 0.35], [-0.25, 0.25], [-0.35, 0.35]]
+    ee_orientation_nominal_rpy: [0.0, 1.25, 0.0]
+    ee_orientation_command_frame: "TERRAIN_INVARIANT_YAW_LOCAL_RPY"
+    ee_orientation_observation: "local_rpy"
     arm_target_mode: "persistent_joint_command"
     arm_target_max_step: 0.08
     gripper_hold_mode: "open_upper_limit"
@@ -294,8 +307,8 @@ env:
     control:
       stiffness: {'hip': 40, 'thigh': 40, 'calf': 40, 'arm': 5}
       damping: {'hip': 1.0, 'thigh': 1.0, 'calf': 1.0, 'arm': 0.5}
-      armPositionDriveStiffness: 110.0
-      armPositionDriveDamping: 7.5
+      armPositionDriveStiffness: [120.0, 120.0, 100.0, 45.0, 35.0, 25.0]
+      armPositionDriveDamping: [4.0, 4.0, 3.5, 1.5, 1.2, 0.8]
       gripperPositionDriveStiffness: 110.0
       gripperPositionDriveDamping: 7.5
 
@@ -338,7 +351,9 @@ reward:
     command_reward: 0.25
     standpick: 0.25
     action_rate: -0.001
-    ee_orn: 0.0
+    # Align the gripper approach x-axis with the object instead of leaving the
+    # high-level orientation actions unsupervised.
+    ee_orn: 0.25
     base_dir: 0.25
     rad_penalty: 0.0
     base_ang_pen: 0.0

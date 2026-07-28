@@ -137,6 +137,9 @@ def configure_env(env_cfg, cli):
 
     env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
     env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
+    env_cfg.commands.standing_probability = 1.0
+    env_cfg.commands.turn_in_place_probability = 0.0
+    env_cfg.commands.turn_in_place_min_abs_yaw = 0.0
 
     if hasattr(env_cfg, "auto_curriculum"):
         env_cfg.auto_curriculum.enabled = False

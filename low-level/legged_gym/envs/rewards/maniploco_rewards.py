@@ -103,9 +103,22 @@ class ManipLoco_rewards:
         return torch.exp(-ee_pos_error/self.env.cfg.rewards.tracking_ee_sigma), ee_pos_error
 
     def _reward_tracking_ee_orn(self):
-        ee_orn_euler = torch.stack(euler_from_quat(self.env.ee_orn), dim=-1)
-        orn_err = torch.sum(torch.abs(torch_wrap_to_pi_minuspi(self.env.ee_goal_orn_euler - ee_orn_euler)) * self.env.orn_error_scale, dim=1)
-        return torch.exp(-orn_err/self.env.cfg.rewards.tracking_ee_sigma), orn_err
+        ee_orn = self.env.ee_orn / torch.norm(
+            self.env.ee_orn, dim=-1, keepdim=True
+        ).clamp(min=1e-6)
+        quaternion_vector_error = orientation_error(
+            self.env.ee_goal_orn_quat, ee_orn
+        )
+        half_angle_sine = torch.clamp(
+            torch.norm(quaternion_vector_error, dim=-1), max=1.0
+        )
+        angle_error = 2.0 * torch.asin(half_angle_sine)
+        sigma = getattr(
+            self.env.cfg.rewards,
+            "tracking_ee_orientation_sigma",
+            self.env.cfg.rewards.tracking_ee_sigma,
+        )
+        return torch.exp(-angle_error / sigma), angle_error
 
     def _reward_arm_energy_abs_sum(self):
         num_gripper = self.env.cfg.env.num_gripper_joints

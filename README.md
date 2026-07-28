@@ -1,5 +1,16 @@
 # Visual Whole-Body for Loco-Manipulation
 
+## Go2-X5 current status
+
+The Go2 + ARX-X5 port is being retrained from scratch. No local checkpoint is
+treated as valid or bundled with this repository. The active low-level task
+uses the production `go2_x5.urdf`, a native PhysX plane (without a generated
+`Terrain` object), a 0.32 m nominal base height, and a 12D leg policy.
+
+See [the current Go2-X5 training contract](docs/go2x5_current_training_contract.md)
+before starting a run. Superseded experiments and reports are retained only
+under [docs/scrap](docs/scrap/README.md).
+
 https://wholebody-b1.github.io/
 
 Related to paper <[Visual Whole-Body Control for Legged Loco-Manipulation](https://arxiv.org/abs/2403.16967)>
