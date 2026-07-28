@@ -10,8 +10,6 @@ import statistics
 import time
 from pathlib import Path
 
-import torch
-
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -133,6 +131,8 @@ def summarize_episode_records(records):
 
 
 def first_nonfinite(fields):
+    import torch
+
     checks = []
     names = []
     for name, value in fields:
@@ -158,6 +158,8 @@ def first_nonfinite(fields):
 
 
 def _finger_contact_force(raw_env):
+    import torch
+
     if not getattr(raw_env, "finger_indices", None):
         return torch.zeros(raw_env.num_envs, device=raw_env.device)
     forces = raw_env._contact_forces[:, raw_env.finger_indices, :]
@@ -165,8 +167,9 @@ def _finger_contact_force(raw_env):
 
 
 def evaluate(args):
-    from skrl.utils import set_seed
     from train_multistate import get_trainer
+    import torch
+    from skrl.utils import set_seed
     from utils.config import get_params
 
     set_seed(args.seed, deterministic=True)

@@ -144,6 +144,16 @@ def test_training_argument_parser_accepts_explicit_argv():
     assert "if args is None:" in trainer_source
 
 
+def test_evaluator_imports_isaacgym_before_torch():
+    source = EVALUATOR.read_text(encoding="utf-8")
+    prefix = source[:source.index("def evaluate(args):")]
+    evaluate_body = source[source.index("def evaluate(args):"):]
+    assert "\nimport torch\n" not in prefix
+    assert evaluate_body.index(
+        "from train_multistate import get_trainer"
+    ) < evaluate_body.index("    import torch")
+
+
 if __name__ == "__main__":
     for name, function in sorted(globals().items()):
         if name.startswith("test_") and callable(function):
