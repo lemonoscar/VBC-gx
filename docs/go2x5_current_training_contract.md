@@ -93,12 +93,15 @@ high-level teacher/student。因而该合同与最终抓取任务在“稳定移
 - 命令范围：`vx=[-0.30, 0.30] m/s`、`vy=[-0.10, 0.10] m/s`、
   `yaw=[-0.25, 0.25] rad/s`
 - 每个 10 秒 episode 只保持一个命令
-- 互斥命令人口：20% 站立、35% 纯直行、10% 原地转向、35% 一般运动
+- 互斥命令人口：10% 站立、50% 纯直行、10% 原地转向、30% 一般运动
 - 速度奖励采用 Walk These Ways 的平方误差指数核；针对低速范围将
   `tracking_sigma` 设为 `0.05`
-- `feet_air_time` 权重为 2，只奖励完成摆动并重新落地的事件；短步不罚、
+- `feet_air_time` 权重为 1，只奖励完成摆动并重新落地的事件；短步不罚、
   永久悬空不得分
 - `feet_drag` 只惩罚接触脚的水平滑动，不惩罚正常落脚的竖直速度
+- 遵循 WTW 的 `only_positive_rewards=True`；关闭旧 stability-first 的
+  `alive`、额外 `termination` 和 action-magnitude shaping，避免静止保命
+  成为局部最优
 - 不启用 gait clock、固定 trot、四拍 walk 或接触相位目标
 - 初始探索 std 为每腿 `[0.25, 0.30, 0.30]`，最低 std 为
   `[0.08, 0.12, 0.12]`；`entropy_coef=0.01` 保留 WTW 的持续探索，

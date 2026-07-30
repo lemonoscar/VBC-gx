@@ -104,8 +104,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # Keep explicit, easily learned command populations.  The previous
         # sampler devoted only a small fraction of episodes to exact straight
         # walking because almost every non-standing sample also contained yaw.
-        standing_probability = 0.20
-        straight_line_probability = 0.35
+        standing_probability = 0.10
+        straight_line_probability = 0.50
         turn_in_place_probability = 0.10
         # The v3 remote smoke converged to an all-feet-contact policy because
         # 0.10 m/s commands were still well rewarded at zero velocity.  Keep
@@ -263,7 +263,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
     class rewards:
         reward_container_name = "maniploco_rewards"
-        only_positive_rewards = False
+        only_positive_rewards = True
         # Keep Walk These Ways' squared-error exponential kernel, but scale its
         # width to this task's much smaller (+/-0.30 m/s) command envelope.
         # With the paper's 0.25 width, standing still at a 0.10 m/s command
@@ -327,7 +327,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # Phase-free Walk These Ways/legged-gym stepping incentive.  It
             # rewards completed swing-and-land events for all four feet but
             # does not prescribe trot, walk, or a fixed phase relationship.
-            feet_air_time = 2.0
+            feet_air_time = 1.0
             feet_height = 0.0
 
             # -------Tracking rewards ----------
@@ -344,8 +344,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             walking_dof = 0.0
             dof_default_pos = 0.0
             dof_error = 0.0
-            alive = 1.0
-            termination = -100.0
+            # Episode truncation already removes future tracking reward.
+            # Legacy survival/terminal shaping made standing still a local
+            # optimum; Walk These Ways leaves both terms disabled.
+            alive = 0.0
+            termination = 0.0
             lin_vel_z = -1.0
             roll = -2.0
 
@@ -391,7 +394,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # Do not prescribe a gait, but prevent an unbounded actor mean from
             # buying velocity with saturated PD targets. Actions inside +/-0.2
             # remain free; the quadratic tail only constrains large offsets.
-            leg_action_l2_deadzone = -0.01
+            leg_action_l2_deadzone = 0.0
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -487,7 +490,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v6"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v7"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True

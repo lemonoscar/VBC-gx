@@ -973,12 +973,12 @@ def build_report() -> str:
     if (
         auto_curriculum_cfg.get("enabled") is not False
         or auto_curriculum_cfg.get("profile_name")
-        != "go2x5_flat_tabletop_6d_walk_v6"
+        != "go2x5_flat_tabletop_6d_walk_v7"
     ):
         contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
     if (
-        commands_cfg.get("standing_probability") != 0.20
-        or commands_cfg.get("straight_line_probability") != 0.35
+        commands_cfg.get("standing_probability") != 0.10
+        or commands_cfg.get("straight_line_probability") != 0.50
         or commands_cfg.get("turn_in_place_probability") != 0.10
         or commands_cfg.get("straight_line_min_abs_vx") != 0.15
     ):
@@ -997,6 +997,10 @@ def build_report() -> str:
         contract_failures.append("deployment and training policy outputs must both be tanh-bounded")
     if normalization_cfg.get("clip_actions") != 1.0:
         contract_failures.append("training action clip must match the bounded deployment action")
+    if reward_cfg.get("only_positive_rewards") is not True:
+        contract_failures.append(
+            "negative total rewards must use the Walk These Ways clipping rule"
+        )
     if ppo_policy_cfg.get("init_std") != [[0.25, 0.30, 0.30] * 4]:
         contract_failures.append(
             "initial exploration std must stay inside the X5-payload stability bound"
@@ -1013,7 +1017,7 @@ def build_report() -> str:
         contract_failures.append("contact-phase shaping must remain disabled")
     if scales.get("feet_height") != 0.0 or scales.get("walking_dof") != 0.0:
         contract_failures.append("named-gait clearance and posture shaping must remain disabled")
-    if scales.get("feet_air_time") != 2.0:
+    if scales.get("feet_air_time") != 1.0:
         contract_failures.append(
             "phase-free all-foot air-time shaping must remain enabled"
         )
@@ -1021,8 +1025,14 @@ def build_report() -> str:
         contract_failures.append(
             "stopped commands must penalize permanently airborne feet"
         )
-    if scales.get("leg_action_l2_deadzone") != -0.01:
-        contract_failures.append("large policy actions must retain the bounded-action penalty")
+    if (
+        scales.get("alive") != 0.0
+        or scales.get("termination") != 0.0
+        or scales.get("leg_action_l2_deadzone") != 0.0
+    ):
+        contract_failures.append(
+            "legacy survival, terminal, and action-magnitude shaping must remain disabled"
+        )
     if scales.get("collision") != -1.0 or scales.get("action_rate") != -0.01:
         contract_failures.append(
             "collision and action-rate costs must retain Walk These Ways-scale exploration costs"
@@ -1087,15 +1097,12 @@ def build_report() -> str:
         "feet_air_time",
         "feet_contact_standing",
         "torques",
-        "alive",
-        "termination",
         "lin_vel_z",
         "roll",
         "collision",
         "action_rate",
         "dof_pos_limits",
         "feet_drag",
-        "leg_action_l2_deadzone",
     }
     expected_arm_active = {
         "tracking_ee_world",
@@ -1104,7 +1111,7 @@ def build_report() -> str:
         "pitch_adaptation",
     }
     if set(leg_active) != expected_leg_active or set(arm_active) != expected_arm_active:
-        contract_failures.append("active rewards must match the audited minimal 14+4 task set")
+        contract_failures.append("active rewards must match the audited minimal 11+4 task set")
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()

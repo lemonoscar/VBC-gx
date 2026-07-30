@@ -366,7 +366,10 @@ def probe_rewards(env, checks):
         and "tracking_lin_vel_max" not in env.reward_scales
         and "height_adaptation" not in env.reward_scales
         and "pitch_adaptation" not in env.reward_scales
-        and abs(float(env.reward_scales["leg_action_l2_deadzone"]) + 0.01) <= 1e-9
+        and "alive" not in env.reward_scales
+        and "termination" not in env.reward_scales
+        and "leg_action_l2_deadzone" not in env.reward_scales
+        and bool(env.cfg.rewards.only_positive_rewards)
         and abs(float(env.reward_scales["tracking_lin_vel"]) - 2.0) <= 1e-9
         and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9
         and abs(float(env.reward_scales["collision"]) + 1.0) <= 1e-9
@@ -376,7 +379,7 @@ def probe_rewards(env, checks):
         and abs(float(env.cfg.rewards.feet_clearance_target) - 0.05) <= 1e-9
         and abs(float(env.cfg.rewards.feet_clearance_landing_bonus) - 0.20)
         <= 1e-9
-        and abs(float(env.reward_scales["feet_air_time"]) - 2.0) <= 1e-9
+        and abs(float(env.reward_scales["feet_air_time"]) - 1.0) <= 1e-9
         and abs(float(env.reward_scales["feet_contact_standing"]) + 0.5) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 2.0) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_orn"]) - 0.6) <= 1e-9
@@ -395,7 +398,7 @@ def probe_rewards(env, checks):
         tracking_sigma=float(env.cfg.rewards.tracking_sigma),
         feet_air_time=float(env.reward_scales["feet_air_time"]),
         feet_contact_standing=float(env.reward_scales["feet_contact_standing"]),
-        action_bound=float(env.reward_scales["leg_action_l2_deadzone"]),
+        action_bound=float(env.cfg.rewards.scales.leg_action_l2_deadzone),
         ee_tracking=float(env.arm_reward_scales["tracking_ee_world"]),
         ee_orientation_tracking=float(env.arm_reward_scales["tracking_ee_orn"]),
     )
@@ -405,15 +408,12 @@ def probe_rewards(env, checks):
         "feet_air_time",
         "feet_contact_standing",
         "torques",
-        "alive",
-        "termination",
         "lin_vel_z",
         "roll",
         "collision",
         "action_rate",
         "dof_pos_limits",
         "feet_drag",
-        "leg_action_l2_deadzone",
     }
     checks.require(
         "reward/minimal_active_set",
@@ -1040,7 +1040,7 @@ def probe_curriculum(env, checks):
         "curriculum/static_distribution",
         not env.auto_curriculum_enabled
         and len(env.curriculum_stages) == 0
-        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v6"
+        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v7"
         and env.command_ranges["lin_vel_x"] == [-0.30, 0.30]
         and env.command_ranges["lin_vel_y"] == [-0.10, 0.10]
         and env.command_ranges["ang_vel_yaw"] == [-0.25, 0.25]

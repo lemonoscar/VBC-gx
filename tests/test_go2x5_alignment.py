@@ -372,7 +372,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = False" in go2x5_config
-    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v6"' in go2x5_config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v7"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert "stages = []" in go2x5_config
     assert '"name": "S0_' not in go2x5_config
@@ -380,8 +380,8 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "safety_min_feet_contacts_standing = 3.0" in go2x5_config
     assert "safety_min_feet_contacts_walking = 2.0" in go2x5_config
     assert "feet_height_target = 0.12" in go2x5_config
-    assert "standing_probability = 0.20" in go2x5_config
-    assert "straight_line_probability = 0.35" in go2x5_config
+    assert "standing_probability = 0.10" in go2x5_config
+    assert "straight_line_probability = 0.50" in go2x5_config
     assert "turn_in_place_probability = 0.10" in go2x5_config
     assert "straight_line_min_abs_vx = 0.15" in go2x5_config
     assert "lin_vel_x = [-0.30, 0.30]" in go2x5_config
@@ -391,7 +391,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "height_adaptation = -3.0" in go2x5_config
     assert "pitch_adaptation = -1.0" in go2x5_config
     assert "stand_still = 0.0" in go2x5_config
-    assert "termination = -100.0" in go2x5_config
+    assert "termination = 0.0" in go2x5_config
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
     assert "tracking_lin_vel_max = 0.0" in go2x5_config
     assert "tracking_lin_vel_x_exp = 0.0" in go2x5_config
@@ -475,11 +475,11 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
     assert "tracking_contacts_shaped_vel = 0.0" in go2x5_config
     assert "feet_height = 0.0" in go2x5_config
-    assert "feet_air_time = 2.0" in go2x5_config
+    assert "feet_air_time = 1.0" in go2x5_config
     assert "feet_contact_standing = -0.5" in go2x5_config
     assert "walking_dof = 0.0" in go2x5_config
     assert "stability_safety = 0.0" in go2x5_config
-    assert "leg_action_l2_deadzone = -0.01" in go2x5_config
+    assert "leg_action_l2_deadzone = 0.0" in go2x5_config
     assert "tracking_ee_world_stable = 0.0" in go2x5_config
 
     assert "base_height = 0.0" in go2x5_config
@@ -487,7 +487,7 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "pitch_adaptation = -1.0" in go2x5_config
     assert "tracking_lin_vel = 2.0" in go2x5_config
     assert "tracking_ang_vel = 0.5" in go2x5_config
-    assert "termination = -100.0" in go2x5_config
+    assert "termination = 0.0" in go2x5_config
     assert "lin_vel_z = -1.0" in go2x5_config
     assert "roll = -2.0" in go2x5_config
     assert "ang_vel_xy = 0.0" in go2x5_config

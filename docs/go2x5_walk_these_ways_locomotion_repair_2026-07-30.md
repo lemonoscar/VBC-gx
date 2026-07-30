@@ -173,6 +173,39 @@ entropy_coef = 0.01
 这不修改 PPO loss 公式或网络结构，只恢复官方 WTW 已在使用的 entropy
 配置，并把初始噪声限制在带 X5 负载的实测稳定边界内。
 
+v6 完成了 1024 env、1000 iteration smoke，进程正常退出，且后期
+episode length 接近完整 10 秒；但确定性策略仍然退化到静止：
+
+| checkpoint | forward progress | backward progress | left yaw | right yaw | 结论 |
+|---|---:|---:|---:|---:|---|
+| model_200 | -0.0% | 9.3% | -0.5% | -0.7% | 失败 |
+| model_400 | -15.9% | 27.5% | 7.3% | -14.6% | 失败 |
+| model_600 | -8.8% | 7.5% | 2.6% | -1.2% | 失败 |
+| model_800 | -0.5% | 3.1% | -6.7% | 2.3% | 失败 |
+| model_1000 | 3.0% | 3.7% | 14.3% | -19.0% | 失败 |
+
+v6 证明，仅维持 exploration 不足以摆脱旧 stability-first 奖励留下的局部
+最优。当前 leg reward 仍含 `alive=1`、`termination=-100` 且
+`only_positive_rewards=False`；这与 WTW 的无 survival、无 terminal
+penalty、负总 reward 裁剪相反。它会对一次探索性跌倒重复惩罚，同时给
+静止策略持续生存收益。
+
+v7 因此删除这三项遗留 shaping，并减少原地抬脚的额外激励：
+
+```text
+only_positive_rewards = true
+alive = 0
+termination = 0
+leg_action_l2_deadzone = 0
+feet_air_time = 1
+
+stand / straight / turn / general = 10% / 50% / 10% / 30%
+```
+
+环境的 roll/pitch/z/contact termination 本身仍启用；提前终止自然损失
+未来 tracking reward，因此没有删除安全约束。此变更只让 locomotion
+reward 回到 WTW 的简单核心，不引入 gait clock、固定步态或新网络。
+
 ## 行为门禁
 
 训练日志中的总 reward、episode length 或 timeout 不能证明会走。每个候选 checkpoint 必须用 deterministic inference、固定命令、相同 reset 评测：
@@ -236,9 +269,10 @@ from-scratch smoke，训练进程退出码为 0、无 nonfinite。
 | model_1500 | 2.4% | -5.1% | 2.2% | -17.5% | 失败 |
 
 最终 `model_1500` 在五种命令下四脚接触率均为 100%，没有任何接触切换。
-这证明 v3 是安全静止策略，不允许进入长训。v4 与 v5 readiness 虽通过，
-但探索 smoke 都因 roll reset 失败。v6 必须重新通过 GPU readiness 和
-远端 smoke。
+这证明 v3 是安全静止策略，不允许进入长训。v4 与 v5 是因早期高
+roll-reset 而终止的诊断运行；后来对照 v3 原始日志发现，早期高 reset
+本身不能独立判失败。v6 完整 smoke 则由确定性行为明确判失败。v7 必须
+重新通过 GPU readiness 和远端 smoke。
 
 ## 服务器状态与下一门禁
 
