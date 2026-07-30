@@ -372,7 +372,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = False" in go2x5_config
-    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v3"' in go2x5_config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v4"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert "stages = []" in go2x5_config
     assert '"name": "S0_' not in go2x5_config
@@ -383,6 +383,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "standing_probability = 0.20" in go2x5_config
     assert "straight_line_probability = 0.35" in go2x5_config
     assert "turn_in_place_probability = 0.10" in go2x5_config
+    assert "straight_line_min_abs_vx = 0.15" in go2x5_config
     assert "lin_vel_x = [-0.30, 0.30]" in go2x5_config
     assert "lin_vel_y = [-0.10, 0.10]" in go2x5_config
     assert "ang_vel_yaw = [-0.25, 0.25]" in go2x5_config
@@ -474,7 +475,7 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "tracking_contacts_shaped_force = 0.0" in go2x5_config
     assert "tracking_contacts_shaped_vel = 0.0" in go2x5_config
     assert "feet_height = 0.0" in go2x5_config
-    assert "feet_air_time = 1.0" in go2x5_config
+    assert "feet_air_time = 2.0" in go2x5_config
     assert "feet_contact_standing = -0.5" in go2x5_config
     assert "walking_dof = 0.0" in go2x5_config
     assert "stability_safety = 0.0" in go2x5_config
@@ -497,8 +498,8 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "enabled = False" in go2x5_config
     assert "output_tanh = True" in go2x5_config
     assert "clip_actions = 1.0" in go2x5_config
-    assert "init_std = [[0.15, 0.20, 0.20] * 4]" in go2x5_config
-    assert "min_policy_std = [[0.08, 0.12, 0.12] * 4]" in go2x5_config
+    assert "init_std = [[0.8, 1.0, 1.0] * 4]" in go2x5_config
+    assert "min_policy_std = [[0.15, 0.25, 0.25] * 4]" in go2x5_config
 
 
 def test_go2x5_runtime_contract_is_deterministic_and_name_based():

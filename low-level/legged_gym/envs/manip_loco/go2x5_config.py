@@ -107,7 +107,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         standing_probability = 0.20
         straight_line_probability = 0.35
         turn_in_place_probability = 0.10
-        straight_line_min_abs_vx = 0.10
+        # The v3 remote smoke converged to an all-feet-contact policy because
+        # 0.10 m/s commands were still well rewarded at zero velocity.  Keep
+        # 0.10 m/s in the general distribution, but make the dedicated
+        # locomotion population large enough to require a real step.
+        straight_line_min_abs_vx = 0.15
         turn_in_place_min_abs_yaw = 0.10
 
         lin_vel_x_schedule = [0, 0]
@@ -323,7 +327,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # Phase-free Walk These Ways/legged-gym stepping incentive.  It
             # rewards completed swing-and-land events for all four feet but
             # does not prescribe trot, walk, or a fixed phase relationship.
-            feet_air_time = 1.0
+            feet_air_time = 2.0
             feet_height = 0.0
 
             # -------Tracking rewards ----------
@@ -362,8 +366,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             feet_drag = -0.20
             foot_lateral_spacing = 0.0
             feet_contact_forces = 0.0
-            height_adaptation = -3.0
-            pitch_adaptation = -1.0
+            # EE-conditioned body coordination belongs to the whole-body
+            # advantage channel below. Keeping it here bypasses the PPO mixing
+            # delay and produced a static crouch before locomotion was learned.
+            height_adaptation = 0.0
+            pitch_adaptation = 0.0
             low_goal_front_leg_bend = 0.0
             low_goal_posture_asymmetry = 0.0
             low_goal_hind_leg_extension = 0.0
@@ -406,6 +413,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             arm_energy_abs_sum = None
             tracking_ee_orn = 0.6
             tracking_ee_orn_ry = None
+            # These terms still train the 12D leg policy, but only through the
+            # delayed whole-body advantage mixing schedule.
+            height_adaptation = -3.0
+            pitch_adaptation = -1.0
 
     class viewer:
         pos = [-20, 0, 20]
@@ -476,7 +487,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v3"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v4"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -490,9 +501,10 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        # Larger values caused roll-dominated resets before the policy could
-        # learn the standing manifold in from-scratch smoke tests.
-        init_std = [[0.15, 0.20, 0.20] * 4]
+        # Match the proven B1-Z1/Walk These Ways exploration regime. The v3
+        # remote smoke used its eventual minimum std as the initial std and
+        # collapsed to static joint offsets with all four feet in contact.
+        init_std = [[0.8, 1.0, 1.0] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'
@@ -523,13 +535,12 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         lam = 0.95
         desired_kl = None
         max_grad_norm = 1.
-        min_policy_std = [[0.08, 0.12, 0.12] * 4]
+        min_policy_std = [[0.15, 0.25, 0.25] * 4]
 
-        # Match the successful B1-Z1 learning order: first acquire a locomotion
-        # base, then blend the EE/body-coordination advantage over 3000 PPO
-        # updates.  This changes learning order only; the final objective still
-        # contains the complete whole-body reward.
-        mixing_schedule = [1.0, 0, 3000]
+        # Keep the first 3000 PPO updates locomotion-only, then blend the
+        # EE/body-coordination advantage over the next 3000 updates. The final
+        # objective is unchanged after iteration 6000.
+        mixing_schedule = [1.0, 3000, 3000]
         torque_supervision = Go2X5RoughCfg.control.torque_supervision
         torque_supervision_schedule = [0.0, 1000, 1000]
         adaptive_arm_gains = Go2X5RoughCfg.control.adaptive_arm_gains

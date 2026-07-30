@@ -364,10 +364,10 @@ def probe_rewards(env, checks):
         and "stand_still" not in env.reward_scales
         and "base_height" not in env.reward_scales
         and "tracking_lin_vel_max" not in env.reward_scales
+        and "height_adaptation" not in env.reward_scales
+        and "pitch_adaptation" not in env.reward_scales
         and abs(float(env.reward_scales["leg_action_l2_deadzone"]) + 0.01) <= 1e-9
         and abs(float(env.reward_scales["tracking_lin_vel"]) - 2.0) <= 1e-9
-        and abs(float(env.reward_scales["height_adaptation"]) + 3.0) <= 1e-9
-        and abs(float(env.reward_scales["pitch_adaptation"]) + 1.0) <= 1e-9
         and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9
         and abs(float(env.reward_scales["collision"]) + 1.0) <= 1e-9
         and abs(float(env.reward_scales["action_rate"]) + 0.01) <= 1e-9
@@ -376,17 +376,19 @@ def probe_rewards(env, checks):
         and abs(float(env.cfg.rewards.feet_clearance_target) - 0.05) <= 1e-9
         and abs(float(env.cfg.rewards.feet_clearance_landing_bonus) - 0.20)
         <= 1e-9
-        and abs(float(env.reward_scales["feet_air_time"]) - 1.0) <= 1e-9
+        and abs(float(env.reward_scales["feet_air_time"]) - 2.0) <= 1e-9
         and abs(float(env.reward_scales["feet_contact_standing"]) + 0.5) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 2.0) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_orn"]) - 0.6) <= 1e-9
+        and abs(float(env.arm_reward_scales["height_adaptation"]) + 3.0) <= 1e-9
+        and abs(float(env.arm_reward_scales["pitch_adaptation"]) + 1.0) <= 1e-9
         and "tracking_ee_world_stable" not in env.arm_reward_scales,
         num_proprio=int(env.cfg.env.num_proprio),
         observe_gait=bool(env.cfg.env.observe_gait_commands),
         replace_capsules=bool(env.cfg.asset.replace_cylinder_with_capsule),
         tracking_lin_vel=float(env.reward_scales["tracking_lin_vel"]),
-        height_adaptation=float(env.reward_scales["height_adaptation"]),
-        pitch_adaptation=float(env.reward_scales["pitch_adaptation"]),
+        height_adaptation=float(env.arm_reward_scales["height_adaptation"]),
+        pitch_adaptation=float(env.arm_reward_scales["pitch_adaptation"]),
         tracking_ang_vel=float(env.reward_scales["tracking_ang_vel"]),
         collision=float(env.reward_scales["collision"]),
         action_rate=float(env.reward_scales["action_rate"]),
@@ -411,15 +413,18 @@ def probe_rewards(env, checks):
         "action_rate",
         "dof_pos_limits",
         "feet_drag",
-        "height_adaptation",
-        "pitch_adaptation",
         "leg_action_l2_deadzone",
     }
     checks.require(
         "reward/minimal_active_set",
         set(env.reward_scales) == expected_leg_rewards
         and set(env.arm_reward_scales)
-        == {"tracking_ee_world", "tracking_ee_orn"},
+        == {
+            "tracking_ee_world",
+            "tracking_ee_orn",
+            "height_adaptation",
+            "pitch_adaptation",
+        },
         leg_rewards=sorted(env.reward_scales),
         arm_rewards=sorted(env.arm_reward_scales),
     )
@@ -1035,10 +1040,12 @@ def probe_curriculum(env, checks):
         "curriculum/static_distribution",
         not env.auto_curriculum_enabled
         and len(env.curriculum_stages) == 0
-        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v3"
+        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v4"
         and env.command_ranges["lin_vel_x"] == [-0.30, 0.30]
         and env.command_ranges["lin_vel_y"] == [-0.10, 0.10]
         and env.command_ranges["ang_vel_yaw"] == [-0.25, 0.25]
+        and abs(float(env.cfg.commands.straight_line_min_abs_vx) - 0.15)
+        <= 1e-9
         and [
             list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
         ] == go2x5_robot_spec.EE_GOAL_LOCAL_RANGES
@@ -1050,6 +1057,9 @@ def probe_curriculum(env, checks):
             axis: list(env.command_ranges[axis])
             for axis in ("lin_vel_x", "lin_vel_y", "ang_vel_yaw")
         },
+        straight_line_min_abs_vx=float(
+            env.cfg.commands.straight_line_min_abs_vx
+        ),
         goal_ranges=[
             list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
         ],

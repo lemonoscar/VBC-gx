@@ -973,13 +973,14 @@ def build_report() -> str:
     if (
         auto_curriculum_cfg.get("enabled") is not False
         or auto_curriculum_cfg.get("profile_name")
-        != "go2x5_flat_tabletop_6d_walk_v3"
+        != "go2x5_flat_tabletop_6d_walk_v4"
     ):
         contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
     if (
         commands_cfg.get("standing_probability") != 0.20
         or commands_cfg.get("straight_line_probability") != 0.35
         or commands_cfg.get("turn_in_place_probability") != 0.10
+        or commands_cfg.get("straight_line_min_abs_vx") != 0.15
     ):
         contract_failures.append(
             "command sampling must retain explicit stand/straight/turn populations"
@@ -996,15 +997,19 @@ def build_report() -> str:
         contract_failures.append("deployment and training policy outputs must both be tanh-bounded")
     if normalization_cfg.get("clip_actions") != 1.0:
         contract_failures.append("training action clip must match the bounded deployment action")
-    if ppo_policy_cfg.get("init_std") != [[0.15, 0.20, 0.20] * 4]:
-        contract_failures.append("initial exploration std must remain inside the bounded action regime")
-    if ppo_algorithm_cfg.get("min_policy_std") != [[0.08, 0.12, 0.12] * 4]:
-        contract_failures.append("minimum exploration std must preserve bounded leg exploration")
+    if ppo_policy_cfg.get("init_std") != [[0.8, 1.0, 1.0] * 4]:
+        contract_failures.append(
+            "initial exploration std must match the proven B1-Z1 leg regime"
+        )
+    if ppo_algorithm_cfg.get("min_policy_std") != [[0.15, 0.25, 0.25] * 4]:
+        contract_failures.append(
+            "minimum exploration std must preserve useful leg exploration"
+        )
     if scales.get("tracking_contacts_shaped_force") != 0.0 or scales.get("tracking_contacts_shaped_vel") != 0.0:
         contract_failures.append("contact-phase shaping must remain disabled")
     if scales.get("feet_height") != 0.0 or scales.get("walking_dof") != 0.0:
         contract_failures.append("named-gait clearance and posture shaping must remain disabled")
-    if scales.get("feet_air_time") != 1.0:
+    if scales.get("feet_air_time") != 2.0:
         contract_failures.append(
             "phase-free all-foot air-time shaping must remain enabled"
         )
@@ -1042,17 +1047,21 @@ def build_report() -> str:
         contract_failures.append(
             "completed-step reward must be nonnegative, clearance-aware, and bounded"
         )
-    if ppo_algorithm_cfg.get("mixing_schedule") != [1.0, 0, 3000]:
+    if ppo_algorithm_cfg.get("mixing_schedule") != [1.0, 3000, 3000]:
         contract_failures.append(
-            "whole-body advantage must ramp over the first 3000 PPO updates"
+            "whole-body advantage must start after 3000 locomotion-only updates"
         )
     if (
-        scales.get("height_adaptation") != -3.0
-        or scales.get("pitch_adaptation") != -1.0
+        scales.get("height_adaptation") != 0.0
+        or scales.get("pitch_adaptation") != 0.0
+        or arm_scales.get("height_adaptation") != -3.0
+        or arm_scales.get("pitch_adaptation") != -1.0
         or scales.get("base_height") != 0.0
         or scales.get("stand_still") != 0.0
     ):
-        contract_failures.append("EE-conditioned body height/pitch must not compete with fixed-height/default-pose rewards")
+        contract_failures.append(
+            "EE-conditioned body height/pitch must use the delayed whole-body channel"
+        )
     if (
         reward_cfg.get("min_body_height") != 0.22
         or reward_cfg.get("max_forward_body_pitch") != 0.25
@@ -1082,13 +1091,16 @@ def build_report() -> str:
         "action_rate",
         "dof_pos_limits",
         "feet_drag",
-        "height_adaptation",
-        "pitch_adaptation",
         "leg_action_l2_deadzone",
     }
-    expected_arm_active = {"tracking_ee_world", "tracking_ee_orn"}
+    expected_arm_active = {
+        "tracking_ee_world",
+        "tracking_ee_orn",
+        "height_adaptation",
+        "pitch_adaptation",
+    }
     if set(leg_active) != expected_leg_active or set(arm_active) != expected_arm_active:
-        contract_failures.append("active rewards must match the audited minimal 16+2 task set")
+        contract_failures.append("active rewards must match the audited minimal 14+4 task set")
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()
@@ -1136,7 +1148,7 @@ def build_report() -> str:
     lines.append("- Arm rewards are summed into `arm_rew_buf` and divided by 100.")
     lines.append("- Episode reward summaries remain per-second totals; `Episode_metric/*` summaries are raw per-policy-step means so curriculum thresholds keep their physical units.")
     lines.append("- PPO stores `[rew_buf, arm_rew_buf]` as a two-channel reward/value/advantage signal.")
-    lines.append("- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `mixing_schedule=[1.0, 0, 3000]` ramps that ratio from 0 to 1 over the first 3000 PPO updates.")
+    lines.append("- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `mixing_schedule=[1.0, 3000, 3000]` keeps iterations 0--3000 locomotion-only, then ramps the ratio from 0 to 1 during iterations 3000--6000.")
     lines.append("")
     lines.append("## Go2-X5 Order And Body Resolution")
     lines.append("")

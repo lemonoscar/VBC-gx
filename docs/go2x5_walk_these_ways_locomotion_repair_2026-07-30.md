@@ -93,15 +93,52 @@ clearance_bonus = 0.20 * normalized_clamp(
 
 ## Whole-body 学习顺序
 
-当前 actor 只有 12 个腿部 action，机械臂由 6D DLS IK 控制。若从第一个 PPO update 就把完整 EE advantage 注入腿策略，腿在尚未学会移动时会优先用静态姿态维持 EE。
+当前 actor 只有 12 个腿部 action，机械臂由 6D DLS IK 控制。远端 v3
+smoke 证明，即便将 EE advantage 从 0 线性渐入，iteration 1500 时的
+0.5 mixing ratio 仍足以让策略先收敛到静态关节偏置，而不是步行。
 
-因此恢复 B1-Z1 已验证过的渐入顺序：
+另外，旧实现把 `height_adaptation` 和 `pitch_adaptation` 放在 leg reward
+通道，它们从第一轮就作用于腿策略，实际绕过了 advantage mixing。
+
+v4 将四项 whole-body 目标统一放进 arm/whole-body reward 通道：
 
 ```text
-mixing_schedule = [1.0, 0, 3000]
+tracking_ee_world
+tracking_ee_orn
+height_adaptation
+pitch_adaptation
 ```
 
-最终 reward 没有删除 EE 目标；只是在前 3000 个 PPO update 内逐渐引入 EE/机身协同 advantage。
+并采用：
+
+```text
+mixing_schedule = [1.0, 3000, 3000]
+```
+
+即 iteration 0–3000 只优化 locomotion advantage，3000–6000 线性引入
+whole-body advantage，6000 后使用完整最终目标。最终 reward 没有删除
+EE 或俯身协同，只改变学习顺序。
+
+## 探索强度修复
+
+v3 错把 B1-Z1 的最低噪声量级当作随机初始化噪声：
+
+```text
+init_std = [0.15, 0.20, 0.20] × 4
+min_std  = [0.08, 0.12, 0.12] × 4
+```
+
+远端确定性回放显示，actor 最终只学到每条腿不同的静态偏置，四脚始终
+接触。v4 恢复 B1-Z1 已验证的腿部探索设置：
+
+```text
+init_std = [0.80, 1.00, 1.00] × 4
+min_std  = [0.15, 0.25, 0.25] × 4
+```
+
+Go2-X5 的 action scale 与 Kp 均小于 B1-Z1，因此这一设置对应的初始关节
+目标/力矩扰动仍更小。所有 action 继续经过 tanh mean、`clip_actions=1`
+和 torque limit。
 
 ## 行为门禁
 
@@ -152,19 +189,41 @@ conda run --no-capture-output -n vwc_go2x5 \
   --output docs/06_go2x5_low_level_reward_audit.md
 ```
 
-上述 CPU/静态测试通过。修订前的 GPU readiness 也验证了 plane、40/1 PD、12D action、IK、finite 和 reset 基线；最终配置仍需在 lab-server 的隔离干净仓库中重新执行 readiness 和 smoke。
+上述 CPU/静态测试通过。v3 在 `lab-server` 上的最终 GPU readiness
+通过，随后完成了 1024 env、1500 iteration、36,864,000 timesteps
+from-scratch smoke，训练进程退出码为 0、无 nonfinite。
+
+但是 v3 行为门禁失败：
+
+| checkpoint | forward progress | backward progress | left yaw | right yaw | 结论 |
+|---|---:|---:|---:|---:|---|
+| model_200 | -0.3% | 0.4% | 0.0% | -0.6% | 失败 |
+| model_600 | -18.9% | 18.3% | -31.0% | 26.0% | 失败 |
+| model_1000 | -7.5% | 2.7% | -7.6% | 6.7% | 失败 |
+| model_1500 | 2.4% | -5.1% | 2.2% | -17.5% | 失败 |
+
+最终 `model_1500` 在五种命令下四脚接触率均为 100%，没有任何接触切换。
+这证明 v3 是安全静止策略，不允许进入长训。v4 必须重新通过 GPU
+readiness 和远端 smoke。
 
 ## 服务器状态与下一门禁
 
-2026-07-30 预检结果：
+2026-07-30 预检与 v3 执行结果：
 
 - SSH 主机：`lab-server`，实际 hostname：`ubuntu1`；
 - canonical writable root：`/data4/duanzhibo/xhq_workload`；
 - 原仓库 `/data4/duanzhibo/xhq_workload/VBC-gx` 有多项未提交修改和未跟踪训练产物，不能安全 fast-forward；
 - `/data4` 使用率 99%，剩余约 23 GB；
-- GPU 2 和 GPU 3 当时无 compute process，各有约 24 GB 空闲显存。
+- 使用现有干净同源副本
+  `/data4/duanzhibo/xhq_workload/VBC-gx-highlevel-247b506`；
+- v3 smoke 使用物理 GPU 2，确定性评测使用物理 GPU 3；
+- readiness 报告：
+  `/data4/duanzhibo/xhq_workload/runs/go2x5-wtw-v3-smoke-20260730-r1/readiness.json`；
+- v3 最终行为报告：
+  `/data4/duanzhibo/xhq_workload/runs/go2x5-wtw-v3-smoke-20260730-r1/fixed_command_model_1500.json`。
 
-不得在脏仓库中覆盖或直接修改。经用户明确允许后，应在 `~/xhq_workload` 内创建隔离干净 clone，拉取精确提交，先运行：
+不得在脏仓库中覆盖或直接修改。后续只允许让上述干净工作副本
+fast-forward 到精确提交，然后运行：
 
 1. GPU readiness；
 2. 512–1024 env、约 1000–2000 iteration smoke；

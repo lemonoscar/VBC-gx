@@ -52,17 +52,18 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "tracking_contacts_shaped_vel = 0.0" in config
     assert "walking_dof = 0.0" in config
     assert "feet_height = 0.0" in config
-    assert "feet_air_time = 1.0" in config
+    assert "feet_air_time = 2.0" in config
     assert "feet_contact_standing = -0.5" in config
     assert "leg_action_l2_deadzone = -0.01" in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v3"' in config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v4"' in config
     assert "enabled = False" in config
     assert "stages = []" in config
     assert '"name": "S' not in config
     assert "standing_probability = 0.20" in config
     assert "straight_line_probability = 0.35" in config
     assert "turn_in_place_probability = 0.10" in config
+    assert "straight_line_min_abs_vx = 0.15" in config
     assert "lin_vel_y = [-0.10, 0.10]" in config
     assert "ang_vel_yaw = [-0.25, 0.25]" in config
     assert "clip_actions = 1.0" in config
@@ -74,7 +75,9 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "tracking_ang_vel_yaw_exp = 0.0" in config
     assert "tracking_ang_vel = 0.5" in config
     assert "tracking_sigma = 0.05" in config
-    assert "mixing_schedule = [1.0, 0, 3000]" in config
+    assert "mixing_schedule = [1.0, 3000, 3000]" in config
+    assert "init_std = [[0.8, 1.0, 1.0] * 4]" in config
+    assert "min_policy_std = [[0.15, 0.25, 0.25] * 4]" in config
     assert "resampling_time = 10." in config
     assert "collision = -1.0" in config
     assert "action_rate = -0.01" in config

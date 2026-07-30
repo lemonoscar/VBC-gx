@@ -96,12 +96,14 @@ high-level teacher/student。因而该合同与最终抓取任务在“稳定移
 - 互斥命令人口：20% 站立、35% 纯直行、10% 原地转向、35% 一般运动
 - 速度奖励采用 Walk These Ways 的平方误差指数核；针对低速范围将
   `tracking_sigma` 设为 `0.05`
-- `feet_air_time` 只奖励完成摆动并重新落地的事件；短步不罚、永久悬空
-  不得分
+- `feet_air_time` 权重为 2，只奖励完成摆动并重新落地的事件；短步不罚、
+  永久悬空不得分
 - `feet_drag` 只惩罚接触脚的水平滑动，不惩罚正常落脚的竖直速度
 - 不启用 gait clock、固定 trot、四拍 walk 或接触相位目标
-- whole-body advantage 在前 3000 个 PPO update 中从 0 渐入，先学习
-  locomotion，再逐渐引入 EE/机身协同
+- 初始探索 std 为每腿 `[0.8, 1.0, 1.0]`，最低 std 为
+  `[0.15, 0.25, 0.25]`，与已验证的 B1-Z1 探索量级一致
+- iteration 0–3000 只优化 locomotion advantage；3000–6000 再渐入
+  EE、姿态追踪和机身俯身协同
 
 完整设计、旧模型定量失败证据和固定命令门禁见
 `docs/go2x5_walk_these_ways_locomotion_repair_2026-07-30.md`。

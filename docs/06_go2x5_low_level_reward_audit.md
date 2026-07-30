@@ -25,12 +25,12 @@ python3 low-level/legged_gym/scripts/audit_go2x5_low_level_rewards.py --output d
 - collision_soft_clip: `50.0`
 - feet_height_target: `0.12`
 - max_contact_force: `200.0`
-- Active leg reward terms: `16`
-- Active arm reward terms: `2`
+- Active leg reward terms: `14`
+- Active arm reward terms: `4`
 - Reward implementations with reviewed metadata: `75/75`
 - PPO policy num_leg_actions: `12`
 - PPO policy num_arm_actions: `0`
-- PPO reward mixing_schedule: `[1.0, 0, 3000]`
+- PPO reward mixing_schedule: `[1.0, 3000, 3000]`
 
 Reward aggregation details:
 
@@ -38,7 +38,7 @@ Reward aggregation details:
 - Arm rewards are summed into `arm_rew_buf` and divided by 100.
 - Episode reward summaries remain per-second totals; `Episode_metric/*` summaries are raw per-policy-step means so curriculum thresholds keep their physical units.
 - PPO stores `[rew_buf, arm_rew_buf]` as a two-channel reward/value/advantage signal.
-- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `mixing_schedule=[1.0, 0, 3000]` ramps that ratio from 0 to 1 over the first 3000 PPO updates.
+- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `mixing_schedule=[1.0, 3000, 3000]` keeps iterations 0--3000 locomotion-only, then ramps the ratio from 0 to 1 during iterations 3000--6000.
 
 ## Go2-X5 Order And Body Resolution
 
@@ -66,7 +66,7 @@ Reward aggregation details:
 
 | term | channel | scale | raw meaning | expected sign | sign check | source | dependency | Go2-X5 migration risk | verification |
 |---|---:|---:|---|---:|---|---|---|---|---|
-| `feet_air_time` | leg | 1.0 | sum((clamp(air_time - 0.10, 0, 0.25) + bounded swing-clearance bonus) on completed landing) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:656` | force_sensor_tensor order, per-foot contact timing, terrain-relative swing peak height | Short landings must remain neutral, permanently airborne feet must earn zero, and all four feet must use the same phase-free formula. | Touch each foot independently; verify no pre-landing reward, no negative short-step reward, bounded long-step reward, and state reset on contact. |
+| `feet_air_time` | leg | 2.0 | sum((clamp(air_time - 0.10, 0, 0.25) + bounded swing-clearance bonus) on completed landing) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:656` | force_sensor_tensor order, per-foot contact timing, terrain-relative swing peak height | Short landings must remain neutral, permanently airborne feet must earn zero, and all four feet must use the same phase-free formula. | Touch each foot independently; verify no pre-landing reward, no negative short-step reward, bounded long-step reward, and state reset on contact. |
 | `tracking_lin_vel` | leg | 2.0 | exp(-squared xy command tracking error / sigma) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:165` | commands[:,0:2] and base_lin_vel[:,0:2] | Go2-X5 samples a small lateral range, so command and observation order must remain x,y,yaw. | Check maximum at exact xy tracking. |
 | `tracking_ang_vel` | leg | 0.5 | exp(-square(command_yaw - base_yaw_rate) / tracking_sigma) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:241` | commands[:,2], base_ang_vel[:,2] | Sign is correct; confirm command yaw is not confused with vertical linear velocity in any caller. | Probe yaw-rate error 0, small, large; weighted reward should monotonically decrease with error. |
 | `torques` | leg | -2.5e-05 | sum(square(all torques)) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:217` | torques tensor, leg plus zero arm/gripper torque convention | Sign is correct; with low-level 12D actions arm torques should not dominate this term. | Check per-joint torque contribution; arm/gripper entries should be zero or intentionally excluded. |
@@ -78,12 +78,12 @@ Reward aggregation details:
 | `action_rate` | leg | -0.01 | sum(square(last_actions - actions) over leg actions) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:254` | policy action order before/after _reindex_all | Sign is correct; action-order bugs can still hide behind a smooth but wrong action stream. | Pulse policy FR hip action and confirm the smoothness term uses the policy-order action history consistently. |
 | `dof_pos_limits` | leg | -10.0 | sum soft joint-limit violation over leg joints | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:258` | dof_pos_limits, URDF leg dof order | Sign is correct; verify Go2-X5 URDF limits are not inherited from B1/Z1 or too tight after mimic edits. | Sweep each leg joint near lower/upper limit; raw should be zero inside and positive outside soft range. |
 | `feet_drag` | leg | -0.2 | sum squared horizontal foot speed for filtered contacting feet | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:325` | feet_indices, filtered contacts, and live horizontal foot velocity | Vertical touchdown speed must not be mislabeled as drag; foot and contact order must both be FL,FR,RL,RR. | Slide one contacting foot horizontally; vertical-only or airborne motion must contribute zero. |
-| `height_adaptation` | leg | -3.0 | absolute base-height error from a 0.22--0.32 m target interpolated over EE goal z 0.05--0.30 m | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:470` | terrain-relative EE goal z and base height | The crouch target must remain above termination height and use terrain-relative coordinates. | Probe goal z below/inside/above the anchors; target height must be 0.22/interpolated/0.32 m. |
-| `pitch_adaptation` | leg | -1.0 | absolute base-pitch error from a 0.25--0.00 rad target interpolated over EE goal z 0.05--0.30 m | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:477` | terrain-relative EE goal z and base pitch | The pitch sign must lower the front/arm mount and remain well inside the termination threshold. | Probe low/high goal z; target pitch must be +0.25/0.00 rad and the error must vanish at the target. |
 | `feet_contact_standing` | leg | -0.5 | number of feet off ground while the command is stopped | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:347` | force-sensor contact booleans and walking command mask | A bad contact threshold can penalize a nominal four-foot stance. | At zero command lift one foot at a time; the raw penalty should rise by one and be zero while walking. |
 | `leg_action_l2_deadzone` | leg | -0.01 | sum(square(max(abs(applied_leg_action)-deadzone, 0))) | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:155` | 12D applied leg action in URDF order | An overly small dead zone can suppress useful corrective actions during early learning. | Sweep one action around the dead zone; penalty must be zero inside and quadratic outside. |
 | `tracking_ee_world` | arm | 2.0 | exp(-2 * L1(ee_pos - curr_ee_goal_cart_world) / tracking_ee_sigma) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:17` | gripper_idx=arm_eef_link, ee_pos rigid body state, world-frame EE goal | Sign is correct; with num_arm_actions=0 it influences the leg policy through PPO reward mixing, not a separate arm action head. | Set goal exactly at arm_eef_link and then offset x/y/z; raw should be highest at zero offset and decay monotonically. |
 | `tracking_ee_orn` | arm | 0.6 | exp(-quaternion angular error / tracking_ee_orientation_sigma) | + | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:105` | ee_goal_orn_quat, normalized ee_orn, arm_eef_link grasp direction | The X5 +x approach axis and quaternion sign invariance must not be confused with the legacy Z1 Euler convention. | Sweep equivalent quaternion signs and bounded X5 local RPY targets; reward must peak at the same physical pose. |
+| `height_adaptation` | arm | -3.0 | absolute base-height error from a 0.22--0.32 m target interpolated over EE goal z 0.05--0.30 m | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:470` | terrain-relative EE goal z and base height | The crouch target must remain above termination height and use terrain-relative coordinates. | Probe goal z below/inside/above the anchors; target height must be 0.22/interpolated/0.32 m. |
+| `pitch_adaptation` | arm | -1.0 | absolute base-pitch error from a 0.25--0.00 rad target interpolated over EE goal z 0.05--0.30 m | - | OK | `low-level/legged_gym/envs/rewards/maniploco_rewards.py:477` | terrain-relative EE goal z and base pitch | The pitch sign must lower the front/arm mount and remain well inside the termination threshold. | Probe low/high goal z; target pitch must be +0.25/0.00 rad and the error must vanish at the target. |
 
 ## Curriculum Reward Overrides
 
