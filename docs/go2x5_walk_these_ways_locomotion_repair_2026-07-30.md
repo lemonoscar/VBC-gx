@@ -32,7 +32,8 @@
 | hip action scale | 0.25 × 0.5 | 0.125 |
 | thigh/calf action scale | 0.25 | 0.25 |
 | 腿部 PD | 20 / 0.5 | 40 / 1（用户指定，保持同一 Kp:Kd 比） |
-| 初始 action std | 1.0 | 0.5（按执行器力矩尺度等效） |
+| 初始 action std | 1.0 | 0.25 / 0.30 / 0.30（按 X5 负载实测降额） |
+| PPO entropy coefficient | 0.01 | 0.01 |
 | 速度奖励核 | `exp(-||v_cmd-v||²/sigma)` | 相同 |
 | 偏航奖励核 | `exp(-(w_cmd-w)²/sigma)` | 相同 |
 | feet air-time | landing event | landing event |
@@ -156,6 +157,22 @@ min_std  = [0.15, 0.25, 0.25] × 4
 `[2.5, 5.0, 5.0] Nm`。所有 action 继续经过 tanh mean、
 `clip_actions=1` 和 torque limit。
 
+但是 v5 的远端 smoke 到 iteration 39 仍有 `100%` roll reset，说明裸
+Go1 执行器尺度未考虑 X5 机械臂带来的惯量和重心变化。另一方面，检查
+WTW 官方 PPO 后确认其 `entropy_coef=0.01`，而 v3–v5 的 Go2 配置一直
+为 `0.0`，会让 std 在没有探索激励时迅速塌到下限。
+
+v6 因此不再追求裸 Go1 的绝对扰动力矩，而使用已有稳定/失败区间的中间值：
+
+```text
+init_std = [0.25, 0.30, 0.30] × 4
+min_std  = [0.08, 0.12, 0.12] × 4
+entropy_coef = 0.01
+```
+
+这不修改 PPO loss 公式或网络结构，只恢复官方 WTW 已在使用的 entropy
+配置，并把初始噪声限制在带 X5 负载的实测稳定边界内。
+
 ## 行为门禁
 
 训练日志中的总 reward、episode length 或 timeout 不能证明会走。每个候选 checkpoint 必须用 deterministic inference、固定命令、相同 reset 评测：
@@ -219,9 +236,9 @@ from-scratch smoke，训练进程退出码为 0、无 nonfinite。
 | model_1500 | 2.4% | -5.1% | 2.2% | -17.5% | 失败 |
 
 最终 `model_1500` 在五种命令下四脚接触率均为 100%，没有任何接触切换。
-这证明 v3 是安全静止策略，不允许进入长训。v4 readiness 虽通过，但高
-探索 smoke 因 roll reset 失败。v5 必须重新通过 GPU readiness 和远端
-smoke。
+这证明 v3 是安全静止策略，不允许进入长训。v4 与 v5 readiness 虽通过，
+但探索 smoke 都因 roll reset 失败。v6 必须重新通过 GPU readiness 和
+远端 smoke。
 
 ## 服务器状态与下一门禁
 

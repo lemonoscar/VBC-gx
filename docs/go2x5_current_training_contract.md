@@ -100,9 +100,9 @@ high-level teacher/student。因而该合同与最终抓取任务在“稳定移
   永久悬空不得分
 - `feet_drag` 只惩罚接触脚的水平滑动，不惩罚正常落脚的竖直速度
 - 不启用 gait clock、固定 trot、四拍 walk 或接触相位目标
-- 初始探索 std 为每腿 `[0.5, 0.5, 0.5]`，最低 std 为
-  `[0.15, 0.25, 0.25]`；该初值按 WTW 的
-  `Kp × action_scale × std` 等效力矩尺度换算
+- 初始探索 std 为每腿 `[0.25, 0.30, 0.30]`，最低 std 为
+  `[0.08, 0.12, 0.12]`；`entropy_coef=0.01` 保留 WTW 的持续探索，
+  同时按带 X5 负载的远端 roll-reset 实测对裸 Go1 力矩尺度降额
 - iteration 0–3000 只优化 locomotion advantage；3000–6000 再渐入
   EE、姿态追踪和机身俯身协同
 

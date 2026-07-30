@@ -973,7 +973,7 @@ def build_report() -> str:
     if (
         auto_curriculum_cfg.get("enabled") is not False
         or auto_curriculum_cfg.get("profile_name")
-        != "go2x5_flat_tabletop_6d_walk_v5"
+        != "go2x5_flat_tabletop_6d_walk_v6"
     ):
         contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
     if (
@@ -997,13 +997,17 @@ def build_report() -> str:
         contract_failures.append("deployment and training policy outputs must both be tanh-bounded")
     if normalization_cfg.get("clip_actions") != 1.0:
         contract_failures.append("training action clip must match the bounded deployment action")
-    if ppo_policy_cfg.get("init_std") != [[0.5, 0.5, 0.5] * 4]:
+    if ppo_policy_cfg.get("init_std") != [[0.25, 0.30, 0.30] * 4]:
         contract_failures.append(
-            "initial exploration std must match the Walk These Ways actuator-level torque scale"
+            "initial exploration std must stay inside the X5-payload stability bound"
         )
-    if ppo_algorithm_cfg.get("min_policy_std") != [[0.15, 0.25, 0.25] * 4]:
+    if ppo_algorithm_cfg.get("entropy_coef") != 0.01:
         contract_failures.append(
-            "minimum exploration std must preserve useful leg exploration"
+            "PPO entropy must preserve Walk These Ways-style locomotion exploration"
+        )
+    if ppo_algorithm_cfg.get("min_policy_std") != [[0.08, 0.12, 0.12] * 4]:
+        contract_failures.append(
+            "minimum exploration std must retain the verified stable floor"
         )
     if scales.get("tracking_contacts_shaped_force") != 0.0 or scales.get("tracking_contacts_shaped_vel") != 0.0:
         contract_failures.append("contact-phase shaping must remain disabled")

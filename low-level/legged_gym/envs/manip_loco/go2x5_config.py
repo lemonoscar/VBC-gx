@@ -487,7 +487,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v5"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v6"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -501,12 +501,11 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        # Match Walk These Ways at the actuator level. Its Go1 setup uses
-        # Kp=20 and a 0.25 action scale (0.125 at the hip); with Go2 Kp=40
-        # and 0.125/0.25/0.25 scales, std=0.5 yields the same initial
-        # 2.5/5/5 Nm target-error torque scale. Copying the larger B1-Z1 std
-        # caused about 98% roll resets in the v4 remote smoke.
-        init_std = [[0.5, 0.5, 0.5] * 4]
+        # The X5 payload makes the bare-Go1 Walk These Ways torque-equivalent
+        # std=0.5 unsafe: the v5 remote smoke still had 100% roll resets at
+        # iteration 39. Start midway between the previously stable v3 noise
+        # and that failed bound; PPO entropy below prevents silent collapse.
+        init_std = [[0.25, 0.30, 0.30] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'
@@ -528,7 +527,9 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         value_loss_coef = 1.0
         use_clipped_value_loss = True
         clip_param = 0.2
-        entropy_coef = 0.0
+        # Walk These Ways uses 0.01. The old zero value let action noise fall
+        # straight to its minimum and the deterministic policy became static.
+        entropy_coef = 0.01
         num_learning_epochs = 5
         num_mini_batches = 4
         learning_rate = 2e-4
@@ -537,7 +538,7 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         lam = 0.95
         desired_kl = None
         max_grad_norm = 1.
-        min_policy_std = [[0.15, 0.25, 0.25] * 4]
+        min_policy_std = [[0.08, 0.12, 0.12] * 4]
 
         # Keep the first 3000 PPO updates locomotion-only, then blend the
         # EE/body-coordination advantage over the next 3000 updates. The final
