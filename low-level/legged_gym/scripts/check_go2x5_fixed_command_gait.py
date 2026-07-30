@@ -10,6 +10,7 @@ from pathlib import Path
 import check_go2x5_training_readiness as readiness
 import torch
 
+from legged_gym.envs.manip_loco import go2x5_robot_spec
 from legged_gym.utils import task_registry
 from legged_gym.utils.helpers import class_to_dict
 from rsl_rl.runners import OnPolicyRunner
@@ -38,6 +39,18 @@ def parse_args():
     parser.add_argument("--min-yaw-progress-ratio", type=float, default=0.35)
     parser.add_argument("--max-swing-contact-fraction", type=float, default=0.75)
     parser.add_argument("--min-swing-height", type=float, default=0.04)
+    parser.add_argument(
+        "--min-translation-foot-transition-fraction",
+        type=float,
+        default=0.005,
+        help="Minimum contact-change fraction required for every foot in translation cases.",
+    )
+    parser.add_argument(
+        "--min-translation-airborne-height",
+        type=float,
+        default=0.04,
+        help="Minimum mean foot-center height while airborne for every translating foot.",
+    )
     parser.add_argument("--max-stand-vx-error", type=float, default=0.03)
     parser.add_argument("--max-stand-yaw-error", type=float, default=0.03)
     parser.add_argument("--max-moving-vx-error", type=float, default=0.04)
@@ -64,11 +77,14 @@ def set_fixed_command(env, vx, yaw):
     # This evaluator injects an exact command after every reset/step, so normal
     # categorical command sampling must be disabled before reset_idx calls it.
     env.cfg.commands.standing_probability = 0.0
+    env.cfg.commands.straight_line_probability = 0.0
     env.cfg.commands.turn_in_place_probability = 0.0
     env.command_ranges["lin_vel_x"] = [vx, vx]
+    env.command_ranges["lin_vel_y"] = [0.0, 0.0]
     env.command_ranges["ang_vel_yaw"] = [yaw, yaw]
     env.commands.zero_()
     env.commands[:, 0] = vx
+    env.commands[:, 1] = 0.0
     env.commands[:, 2] = yaw
 
 
@@ -103,6 +119,16 @@ def evaluate_case(env, policy, name, vx, yaw, cli):
         "stance_weight": 0.0,
         "collision": 0.0,
     }
+    per_foot = {
+        "contact_steps": torch.zeros(4, device=env.device),
+        "height": torch.zeros(4, device=env.device),
+        "airborne_height": torch.zeros(4, device=env.device),
+        "airborne_steps": torch.zeros(4, device=env.device),
+        "contact_xy_speed": torch.zeros(4, device=env.device),
+        "contact_transitions": torch.zeros(4, device=env.device),
+    }
+    per_policy_leg_action = torch.zeros(4, device=env.device)
+    previous_contacts = None
     early_resets = 0
     reset_causes = {"roll": 0, "pitch": 0, "z": 0, "contact": 0}
     nonfinite = {}
@@ -172,6 +198,24 @@ def evaluate_case(env, policy, name, vx, yaw, cli):
         totals["stance_speed"] += float((stance_weight * foot_speed).sum().item())
         totals["stance_weight"] += float(stance_weight.sum().item())
 
+        contact_bool = env.foot_contacts_from_sensor.bool()
+        airborne = ~contact_bool
+        per_foot["contact_steps"] += contacts.sum(dim=0)
+        per_foot["height"] += foot_height.sum(dim=0)
+        per_foot["airborne_height"] += (foot_height * airborne.float()).sum(dim=0)
+        per_foot["airborne_steps"] += airborne.float().sum(dim=0)
+        per_foot["contact_xy_speed"] += (
+            torch.norm(live_foot_velocity[:, :, :2], dim=2) * contacts
+        ).sum(dim=0)
+        if previous_contacts is not None:
+            per_foot["contact_transitions"] += (
+                contact_bool != previous_contacts
+            ).float().sum(dim=0)
+        previous_contacts = contact_bool.clone()
+        per_policy_leg_action += (
+            actions[:, :12].reshape(env.num_envs, 4, 3).abs().mean(dim=2).sum(dim=0)
+        )
+
     samples = float(cli.measure_steps)
     base_vx_mean = totals["base_vx"] / samples
     yaw_rate_mean = totals["base_yaw_rate"] / samples
@@ -214,8 +258,58 @@ def evaluate_case(env, policy, name, vx, yaw, cli):
         gait_shape_checks.append(swing_height_mean >= cli.min_swing_height)
     tracking_passed = all(tracking_checks)
     gait_shape_passed = all(gait_shape_checks)
-    behavior_passed = tracking_passed and (
-        not cli.require_gait_shape or gait_shape_passed
+
+    urdf_foot_names = list(go2x5_robot_spec.URDF_FOOT_BODY_NAMES)
+    policy_leg_names = [
+        go2x5_robot_spec.POLICY_LEG_JOINT_NAMES[index].split("_", 1)[0]
+        for index in range(0, 12, 3)
+    ]
+    foot_sample_count = float(cli.measure_steps * env.num_envs)
+    transition_sample_count = float(max(cli.measure_steps - 1, 1) * env.num_envs)
+    per_foot_report = {}
+    for index, foot_name in enumerate(urdf_foot_names):
+        contact_steps = float(per_foot["contact_steps"][index].item())
+        airborne_steps = float(per_foot["airborne_steps"][index].item())
+        per_foot_report[foot_name] = {
+            "contact_fraction": contact_steps / foot_sample_count,
+            "airborne_fraction": airborne_steps / foot_sample_count,
+            "mean_height": float(per_foot["height"][index].item()) / foot_sample_count,
+            "mean_airborne_height": (
+                float(per_foot["airborne_height"][index].item()) / airborne_steps
+                if airborne_steps > 0.0
+                else None
+            ),
+            "mean_contact_xy_speed": (
+                float(per_foot["contact_xy_speed"][index].item()) / contact_steps
+                if contact_steps > 0.0
+                else None
+            ),
+            "contact_transition_fraction": (
+                float(per_foot["contact_transitions"][index].item())
+                / transition_sample_count
+            ),
+        }
+    per_leg_action_report = {
+        name: float(per_policy_leg_action[index].item()) / foot_sample_count
+        for index, name in enumerate(policy_leg_names)
+    }
+    foot_participation_checks = []
+    if translation_ratio is not None:
+        for foot in per_foot_report.values():
+            foot_participation_checks.extend(
+                (
+                    foot["contact_transition_fraction"]
+                    >= cli.min_translation_foot_transition_fraction,
+                    foot["mean_airborne_height"] is not None
+                    and foot["mean_airborne_height"]
+                    >= cli.min_translation_airborne_height,
+                )
+            )
+    foot_participation_passed = all(foot_participation_checks)
+    behavior_passed = (
+        tracking_passed
+        and foot_participation_passed
+        and (not cli.require_gait_shape or gait_shape_passed)
     )
 
     return {
@@ -233,6 +327,8 @@ def evaluate_case(env, policy, name, vx, yaw, cli):
             totals["stance_speed"] / totals["stance_weight"]
             if totals["stance_weight"] > 0.0 else None
         ),
+        "per_foot": per_foot_report,
+        "mean_abs_policy_action_by_leg": per_leg_action_report,
         "collision_raw_mean": totals["collision"] / samples,
         "foot_velocity_cache_max_error": foot_cache_max_error,
         "early_resets": early_resets,
@@ -242,6 +338,8 @@ def evaluate_case(env, policy, name, vx, yaw, cli):
         "first_nonfinite": first_nonfinite,
         "safety_passed": safety_passed,
         "tracking_passed": tracking_passed,
+        "foot_participation_evaluated": translation_ratio is not None,
+        "foot_participation_passed": foot_participation_passed,
         "gait_shape_evaluated": bool(cli.require_gait_shape),
         "gait_shape_passed": gait_shape_passed,
         "behavior_passed": behavior_passed,
@@ -275,6 +373,12 @@ def run(cli):
             "min_yaw_progress_ratio": cli.min_yaw_progress_ratio,
             "max_swing_contact_fraction": cli.max_swing_contact_fraction,
             "min_swing_height": cli.min_swing_height,
+            "min_translation_foot_transition_fraction": (
+                cli.min_translation_foot_transition_fraction
+            ),
+            "min_translation_airborne_height": (
+                cli.min_translation_airborne_height
+            ),
             "max_stand_vx_error": cli.max_stand_vx_error,
             "max_stand_yaw_error": cli.max_stand_yaw_error,
             "max_moving_vx_error": cli.max_moving_vx_error,

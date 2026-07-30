@@ -177,16 +177,26 @@ class ManipLoco_rewards:
         return rew, error
 
     def _reward_tracking_lin_vel_x_exp(self):
-        error = torch.abs(self.env.commands[:, 0] - self.env.base_lin_vel[:, 0])
-        return torch.exp(-error/self.env.cfg.rewards.tracking_sigma), error
+        squared_error = torch.square(
+            self.env.commands[:, 0] - self.env.base_lin_vel[:, 0]
+        )
+        return (
+            torch.exp(-squared_error / self.env.cfg.rewards.tracking_sigma),
+            squared_error,
+        )
 
     def _reward_tracking_ang_vel_yaw_l1(self):
         error = torch.abs(self.env.commands[:, 2] - self.env.base_ang_vel[:, 2])
         return - error + torch.abs(self.env.commands[:, 2]), error
 
     def _reward_tracking_ang_vel_yaw_exp(self):
-        error = torch.abs(self.env.commands[:, 2] - self.env.base_ang_vel[:, 2])
-        return torch.exp(-error/self.env.cfg.rewards.tracking_sigma), error
+        squared_error = torch.square(
+            self.env.commands[:, 2] - self.env.base_ang_vel[:, 2]
+        )
+        return (
+            torch.exp(-squared_error / self.env.cfg.rewards.tracking_sigma),
+            squared_error,
+        )
 
     def _reward_tracking_lin_vel_y_l2(self):
         squared_error = (self.env.commands[:, 1] - self.env.base_lin_vel[:, 1]) ** 2
@@ -313,10 +323,20 @@ class ManipLoco_rewards:
         return alive, alive
 
     def _reward_feet_drag(self):
-        feet_xyz_vel = torch.abs(self.env.rigid_body_state[:, self.env.feet_indices, 7:10]).sum(dim=-1)
-        dragging_vel = self.env.foot_contacts_from_sensor * feet_xyz_vel
-        rew = dragging_vel.sum(dim=-1)
-        return rew, rew
+        # Walk These Ways' slip term penalizes horizontal foot speed squared
+        # only while the foot is in contact.  Including vertical touchdown
+        # velocity here incorrectly punishes a normal swing-and-land cycle.
+        contacts = getattr(
+            self.env, "contact_filt", self.env.foot_contacts_from_sensor
+        ).float()
+        feet_xy_vel_sq = torch.sum(
+            torch.square(
+                self.env.rigid_body_state[:, self.env.feet_indices, 7:9]
+            ),
+            dim=-1,
+        )
+        slip = torch.sum(contacts * feet_xy_vel_sq, dim=-1)
+        return slip, slip
 
     def _reward_feet_contact_forces(self):
         reset_flag = (self.env.episode_length_buf > 2./self.env.dt).type(torch.float)
@@ -634,20 +654,67 @@ class ManipLoco_rewards:
         return -penalty, penalty
 
     def _reward_feet_air_time(self):
-        # Reward long steps
-        # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
-        first_contact = (self.env.feet_air_time > 0.) * self.env.foot_contacts_from_sensor  #self.env.contact_filt
+        # Reward completed swing-and-land events without prescribing a gait.
+        # The original (air_time - target) expression penalized short steps,
+        # which made "never land this foot" a local optimum.  This variant is
+        # fail-closed: short steps are neutral, long/clear steps are bounded,
+        # and no reward is paid until the foot actually lands.
+        contacts = getattr(
+            self.env, "contact_filt", self.env.foot_contacts_from_sensor
+        ).bool()
+        first_contact = (self.env.feet_air_time > 0.0) & contacts
         self.env.feet_air_time += self.env.dt
 
         target_air_time = getattr(self.env.cfg.rewards, "feet_air_time_target", 0.5)
-        if self.env.cfg.rewards.feet_aritime_allfeet:
-            rew_airTime = torch.sum((self.env.feet_air_time - target_air_time) * first_contact, dim=1)
+        max_air_bonus = getattr(
+            self.env.cfg.rewards, "feet_air_time_max_bonus", target_air_time
+        )
+        terrain_height = self._terrain_height().unsqueeze(1)
+        foot_height = (
+            self.env.rigid_body_state[:, self.env.feet_indices, 2]
+            - terrain_height
+        )
+        self.env.feet_swing_peak_height[:] = torch.maximum(
+            self.env.feet_swing_peak_height,
+            foot_height,
+        )
+        air_bonus = torch.clamp(
+            self.env.feet_air_time - target_air_time,
+            min=0.0,
+            max=max_air_bonus,
+        )
+        clearance_floor = getattr(
+            self.env.cfg.rewards, "feet_clearance_floor", 0.0
+        )
+        clearance_target = getattr(
+            self.env.cfg.rewards, "feet_clearance_target", clearance_floor
+        )
+        clearance_denominator = max(
+            float(clearance_target) - float(clearance_floor), 1.0e-6
+        )
+        clearance_bonus = torch.clamp(
+            (self.env.feet_swing_peak_height - clearance_floor)
+            / clearance_denominator,
+            min=0.0,
+            max=1.0,
+        )
+        clearance_weight = getattr(
+            self.env.cfg.rewards, "feet_clearance_landing_bonus", 0.0
+        )
+        completed_step_bonus = (
+            air_bonus + clearance_weight * clearance_bonus
+        ) * first_contact
+        all_feet = getattr(
+            self.env.cfg.rewards,
+            "feet_air_time_all_feet",
+            getattr(self.env.cfg.rewards, "feet_aritime_allfeet", True),
+        )
+        if all_feet:
+            rew_airTime = torch.sum(completed_step_bonus, dim=1)
         else:
-            rew_airTime = torch.sum(
-                (self.env.feet_air_time[:, :2] - target_air_time) * first_contact[:, :2],
-                dim=1,
-            )
+            rew_airTime = torch.sum(completed_step_bonus[:, :2], dim=1)
 
         rew_airTime *= self.env._get_walking_cmd_mask()  # reward for stepping for any of the 3 motions
-        self.env.feet_air_time *= ~ self.env.foot_contacts_from_sensor  #self.env.contact_filt
+        self.env.feet_air_time *= ~contacts
+        self.env.feet_swing_peak_height *= ~contacts
         return rew_airTime, rew_airTime

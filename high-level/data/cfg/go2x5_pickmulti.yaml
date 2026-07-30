@@ -101,9 +101,11 @@ env:
     replace_cylinder_with_capsule: false
     command_ranges:
       lin_vel_x: [-0.3, 0.3]
-      ang_vel_yaw: [-0.4, 0.4]
+      lin_vel_y: [-0.1, 0.1]
+      ang_vel_yaw: [-0.25, 0.25]
     command_dead_zone:
       lin_vel_x: 0.05
+      lin_vel_y: 0.05
       ang_vel_yaw: 0.05
     foot_contact_threshold: 1.5
     ee_frame: "TERRAIN_INVARIANT_YAW"

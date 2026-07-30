@@ -60,12 +60,25 @@ AUDIT: dict[str, RewardAudit] = {
         verification="Inject stance-foot velocity into live rigid_body_state, refresh the cache, and confirm both the raw reward and cache value change.",
     ),
     "feet_air_time": RewardAudit(
-        raw_formula="sum((feet_air_time - configured target) on first contact)",
+        raw_formula=(
+            "sum((clamp(air_time - 0.10, 0, 0.25) + bounded "
+            "swing-clearance bonus) on completed landing)"
+        ),
         raw_direction="larger is better",
         expected_scale_sign="+",
-        dependency="force_sensor_tensor order and per-foot contact timing",
-        migration_risk="This generic stepping incentive must cover all four feet without prescribing their phase relationship.",
-        verification="Touch each foot independently; first contact below/above 0.25 s should contribute negative/positive air-time margin.",
+        dependency=(
+            "force_sensor_tensor order, per-foot contact timing, terrain-relative "
+            "swing peak height"
+        ),
+        migration_risk=(
+            "Short landings must remain neutral, permanently airborne feet must "
+            "earn zero, and all four feet must use the same phase-free formula."
+        ),
+        verification=(
+            "Touch each foot independently; verify no pre-landing reward, no "
+            "negative short-step reward, bounded long-step reward, and state reset "
+            "on contact."
+        ),
     ),
     "feet_height": RewardAudit(
         raw_formula="negative mean per-foot swing-clearance shortfall relative to terrain",
@@ -220,12 +233,12 @@ AUDIT: dict[str, RewardAudit] = {
         verification="Log raw term on flat standing and rough stepping; it should not dominate early reward breakdown.",
     ),
     "feet_drag": RewardAudit(
-        raw_formula="sum foot xyz velocity for feet detected in contact",
+        raw_formula="sum squared horizontal foot speed for filtered contacting feet",
         raw_direction="larger is worse",
         expected_scale_sign="-",
-        dependency="feet_indices and force_sensor_tensor contact booleans",
-        migration_risk="Sign is correct; requires feet_indices and force_sensor_tensor to describe the same FL,FR,RL,RR order.",
-        verification="Slide one contacting foot in sim; raw should increase only for that foot.",
+        dependency="feet_indices, filtered contacts, and live horizontal foot velocity",
+        migration_risk="Vertical touchdown speed must not be mislabeled as drag; foot and contact order must both be FL,FR,RL,RR.",
+        verification="Slide one contacting foot horizontally; vertical-only or airborne motion must contribute zero.",
     ),
     "foot_lateral_spacing": RewardAudit(
         raw_formula="sum lateral-width shortfall for FL/RL on +y and FR/RR on -y",
@@ -548,7 +561,7 @@ AUDIT: dict[str, RewardAudit] = {
         verification="Call directly in both command modes.",
     ),
     "tracking_ang_vel_yaw_exp": RewardAudit(
-        raw_formula="exp(-abs(commanded yaw rate - measured yaw rate) / sigma)",
+        raw_formula="exp(-squared commanded yaw-rate error / sigma)",
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="commands[:,2] and base_ang_vel[:,2]",
@@ -608,15 +621,15 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="commands[:,0:2] and base_lin_vel[:,0:2]",
-        migration_risk="Go2-X5 commands lateral velocity as zero but still observes the channel.",
+        migration_risk="Go2-X5 samples a small lateral range, so command and observation order must remain x,y,yaw.",
         verification="Check maximum at exact xy tracking.",
     ),
     "tracking_lin_vel_x_exp": RewardAudit(
-        raw_formula="exp(-absolute x velocity tracking error / sigma)",
+        raw_formula="exp(-squared x velocity tracking error / sigma)",
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="commands[:,0] and base_lin_vel[:,0]",
-        migration_risk="A large sigma weakens the overspeed gradient; this is the active symmetric speed-catch term.",
+        migration_risk="This compatibility term is disabled for Go2-X5 in favor of the squared XY tracking term.",
         verification="Sweep equal under- and overspeed errors; rewards must match and peak only at exact tracking.",
     ),
     "tracking_lin_vel_x_l1": RewardAudit(
@@ -632,8 +645,8 @@ AUDIT: dict[str, RewardAudit] = {
         raw_direction="larger is better",
         expected_scale_sign="+",
         dependency="commands[:,1] and base_lin_vel[:,1]",
-        migration_risk="Lateral command is fixed to zero in Go2-X5.",
-        verification="Check maximum at zero lateral velocity.",
+        migration_risk="The compatibility scalar-y term remains disabled because XY tracking already includes lateral velocity.",
+        verification="Check maximum at exact lateral-velocity tracking.",
     ),
     "tracking_lin_vel_y_l2": RewardAudit(
         raw_formula="squared lateral velocity tracking error",
@@ -923,6 +936,11 @@ def build_report() -> str:
     normalization_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfg", "normalization"], names))
     asset_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfg", "asset"], names))
     commands_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfg", "commands"], names))
+    command_ranges_cfg = dict(
+        class_assignments(
+            CONFIG_PATH, ["Go2X5RoughCfg", "commands", "ranges"], names
+        )
+    )
     ppo_policy_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfgPPO", "policy"], names))
     ppo_algorithm_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfgPPO", "algorithm"], names))
     auto_curriculum_cfg = dict(class_assignments(CONFIG_PATH, ["Go2X5RoughCfg", "auto_curriculum"], names))
@@ -954,11 +972,26 @@ def build_report() -> str:
         contract_failures.append("simple locomotion must not prescribe a gait clock")
     if (
         auto_curriculum_cfg.get("enabled") is not False
-        or auto_curriculum_cfg.get("profile_name") != "go2x5_flat_tabletop_6d_v1"
+        or auto_curriculum_cfg.get("profile_name")
+        != "go2x5_flat_tabletop_6d_walk_v3"
     ):
         contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
-    if commands_cfg.get("turn_in_place_probability") != 0.20:
-        contract_failures.append("command sampling must retain an explicit in-place-turn population")
+    if (
+        commands_cfg.get("standing_probability") != 0.20
+        or commands_cfg.get("straight_line_probability") != 0.35
+        or commands_cfg.get("turn_in_place_probability") != 0.10
+    ):
+        contract_failures.append(
+            "command sampling must retain explicit stand/straight/turn populations"
+        )
+    if (
+        command_ranges_cfg.get("lin_vel_x") != [-0.30, 0.30]
+        or command_ranges_cfg.get("lin_vel_y") != [-0.10, 0.10]
+        or command_ranges_cfg.get("ang_vel_yaw") != [-0.25, 0.25]
+    ):
+        contract_failures.append(
+            "command ranges must match the low-speed x/y/yaw locomotion profile"
+        )
     if ppo_policy_cfg.get("output_tanh") is not True or env_cfg.get("policy_output_tanh") is not True:
         contract_failures.append("deployment and training policy outputs must both be tanh-bounded")
     if normalization_cfg.get("clip_actions") != 1.0:
@@ -971,17 +1004,48 @@ def build_report() -> str:
         contract_failures.append("contact-phase shaping must remain disabled")
     if scales.get("feet_height") != 0.0 or scales.get("walking_dof") != 0.0:
         contract_failures.append("named-gait clearance and posture shaping must remain disabled")
-    if scales.get("feet_air_time") != 0.0:
-        contract_failures.append("generic air-time shaping must remain disabled")
+    if scales.get("feet_air_time") != 1.0:
+        contract_failures.append(
+            "phase-free all-foot air-time shaping must remain enabled"
+        )
+    if scales.get("feet_contact_standing") != -0.5:
+        contract_failures.append(
+            "stopped commands must penalize permanently airborne feet"
+        )
     if scales.get("leg_action_l2_deadzone") != -0.01:
         contract_failures.append("large policy actions must retain the bounded-action penalty")
+    if scales.get("collision") != -1.0 or scales.get("action_rate") != -0.01:
+        contract_failures.append(
+            "collision and action-rate costs must retain Walk These Ways-scale exploration costs"
+        )
+    if commands_cfg.get("resampling_time") != 10.0:
+        contract_failures.append(
+            "velocity commands must remain coherent for the 10-second episode"
+        )
     if (
         scales.get("tracking_lin_vel_max") != 0.0
-        or scales.get("tracking_lin_vel_x_exp") != 2.0
-        or scales.get("tracking_ang_vel") != 0.0
-        or scales.get("tracking_ang_vel_yaw_exp") != 1.0
+        or scales.get("tracking_lin_vel_x_exp") != 0.0
+        or scales.get("tracking_lin_vel") != 2.0
+        or scales.get("tracking_ang_vel") != 0.5
+        or scales.get("tracking_ang_vel_yaw_exp") != 0.0
+        or reward_cfg.get("tracking_sigma") != 0.05
     ):
-        contract_failures.append("speed catch must use symmetric absolute-error x/yaw tracking, not progress saturation")
+        contract_failures.append(
+            "speed tracking must use the low-speed-scaled Walk These Ways squared-error XY/yaw kernel"
+        )
+    if (
+        reward_cfg.get("feet_air_time_target") != 0.10
+        or reward_cfg.get("feet_air_time_max_bonus") != 0.25
+        or reward_cfg.get("feet_clearance_target") != 0.05
+        or reward_cfg.get("feet_clearance_landing_bonus") != 0.20
+    ):
+        contract_failures.append(
+            "completed-step reward must be nonnegative, clearance-aware, and bounded"
+        )
+    if ppo_algorithm_cfg.get("mixing_schedule") != [1.0, 0, 3000]:
+        contract_failures.append(
+            "whole-body advantage must ramp over the first 3000 PPO updates"
+        )
     if (
         scales.get("height_adaptation") != -3.0
         or scales.get("pitch_adaptation") != -1.0
@@ -1005,8 +1069,10 @@ def build_report() -> str:
     if stages:
         contract_failures.append("Go2-X5 static task profile must not contain curriculum stages")
     expected_leg_active = {
-        "tracking_lin_vel_x_exp",
-        "tracking_ang_vel_yaw_exp",
+        "tracking_lin_vel",
+        "tracking_ang_vel",
+        "feet_air_time",
+        "feet_contact_standing",
         "torques",
         "alive",
         "termination",
@@ -1022,7 +1088,7 @@ def build_report() -> str:
     }
     expected_arm_active = {"tracking_ee_world", "tracking_ee_orn"}
     if set(leg_active) != expected_leg_active or set(arm_active) != expected_arm_active:
-        contract_failures.append("active rewards must match the audited minimal 14+2 task set")
+        contract_failures.append("active rewards must match the audited minimal 16+2 task set")
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()
@@ -1070,7 +1136,7 @@ def build_report() -> str:
     lines.append("- Arm rewards are summed into `arm_rew_buf` and divided by 100.")
     lines.append("- Episode reward summaries remain per-second totals; `Episode_metric/*` summaries are raw per-policy-step means so curriculum thresholds keep their physical units.")
     lines.append("- PPO stores `[rew_buf, arm_rew_buf]` as a two-channel reward/value/advantage signal.")
-    lines.append("- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; the first actual PPO update advances the ratio from 0 to 1, and subsequent PPO updates fully mix the arm advantage.")
+    lines.append("- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `mixing_schedule=[1.0, 0, 3000]` ramps that ratio from 0 to 1 over the first 3000 PPO updates.")
     lines.append("")
     lines.append("## Go2-X5 Order And Body Resolution")
     lines.append("")
@@ -1106,8 +1172,8 @@ def build_report() -> str:
     for failure in contract_failures:
         lines.append(f"   - CONTRACT_MISMATCH: {failure}.")
     lines.append("2. No named gait is prescribed: gait-clock observations, contact-phase shaping, swing-height shaping, and walking-posture shaping are disabled.")
-    lines.append("3. From iteration zero, one static distribution samples full bidirectional x/yaw commands, a 25% standing population, and a 20% non-dead-zone in-place-turn population.")
-    lines.append("4. Locomotion is rewarded through symmetric x/yaw velocity-error tracking; foot drag, collision, vertical motion, roll, action rate, and excessive action magnitude remain penalized without an air-time or gait-shape target.")
+    lines.append("3. One 10-second command is held for the whole episode: 20% exact standing, 35% exact bidirectional straight walking, 10% non-dead-zone in-place turning, and 35% general x/y/yaw motion.")
+    lines.append("4. Locomotion uses squared-error x/y and yaw tracking, a completed-landing air-time/clearance bonus, and contact-filtered horizontal foot-slip penalty. It does not prescribe gait phase, trot, or four-beat walk.")
     lines.append("5. `tracking_ee_world` and quaternion `tracking_ee_orn` use `arm_eef_link` as active raw PPO channels. They are not multiplied by a support gate, so coordinated crouching can improve low terrain-fixed reach targets.")
     lines.append("6. `collision` is fail-visible for base, head, non-foot leg, arm, wrist, and finger contacts; the four feet remain outside this penalty.")
     lines.append("7. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.")

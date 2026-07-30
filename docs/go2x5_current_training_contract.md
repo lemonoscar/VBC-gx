@@ -1,15 +1,17 @@
 # Go2-X5 当前训练合同
 
-更新日期：2026-07-29
+更新日期：2026-07-30
 
 ## 当前结论
 
 - 旧 Go2-X5 low-level 和 high-level checkpoint 均已判定为不可复用并从本地清除。
 - 下一次 low-level 训练必须从随机初始化开始，任务名仅为 `go2x5`。
 - `go2x5_ftlift` 空别名任务已经删除，不再作为训练阶段或恢复入口。
-- 当前源码已经通过静态门禁、Isaac Gym readiness、6D IK 网格、low/high
-  controller parity、真实 12D production-loader parity 和 300 iteration
-  from-scratch smoke，可以启动新的 low-level 长训。
+- 当前 locomotion 修订已经通过 CPU/静态门禁；修订前的 Isaac Gym
+  readiness 已验证 plane、6D IK、40/1 PD、finite 和 reset 基线。
+- 当前版本仍必须在 `lab-server` 上重新执行最终 GPU readiness、短程
+  from-scratch smoke 和固定命令行为门禁；在这些门禁通过前，不允许直接
+  启动 45000 iteration 长训。
 - high-level 暂不可训练；必须等新的 low-level 12D schema-v2 checkpoint 通过确定性评测后，再通过 `--low_policy_path` 显式传入。
 
 ## 唯一有效的机器人与地面配置
@@ -86,6 +88,24 @@ low-level 不负责感知物体、闭合夹爪、判断抓取或抬升物体。�
 high-level teacher/student。因而该合同与最终抓取任务在“稳定移动和 6D
 预抓取执行底座”层面吻合，但 low-level 长训完成本身不等于抓取成功。
 
+## 简化 locomotion 合同
+
+- 命令范围：`vx=[-0.30, 0.30] m/s`、`vy=[-0.10, 0.10] m/s`、
+  `yaw=[-0.25, 0.25] rad/s`
+- 每个 10 秒 episode 只保持一个命令
+- 互斥命令人口：20% 站立、35% 纯直行、10% 原地转向、35% 一般运动
+- 速度奖励采用 Walk These Ways 的平方误差指数核；针对低速范围将
+  `tracking_sigma` 设为 `0.05`
+- `feet_air_time` 只奖励完成摆动并重新落地的事件；短步不罚、永久悬空
+  不得分
+- `feet_drag` 只惩罚接触脚的水平滑动，不惩罚正常落脚的竖直速度
+- 不启用 gait clock、固定 trot、四拍 walk 或接触相位目标
+- whole-body advantage 在前 3000 个 PPO update 中从 0 渐入，先学习
+  locomotion，再逐渐引入 EE/机身协同
+
+完整设计、旧模型定量失败证据和固定命令门禁见
+`docs/go2x5_walk_these_ways_locomotion_repair_2026-07-30.md`。
+
 ## 训练前门禁
 
 从仓库根目录执行：
@@ -103,7 +123,10 @@ conda run --no-capture-output -n vwc_go2x5 \
   --output /tmp/go2x5_training_readiness.json
 ```
 
-只有报告 `"passed": true` 时才允许启动长训。
+readiness 报告 `"passed": true` 后，还必须运行短程 smoke，并用
+`check_go2x5_fixed_command_gait.py` 验证站立、前进、后退和双向转弯。
+只有各方向正确、每只脚均发生接触切换且无 nonfinite/early reset 时，
+才允许启动长训。
 
 本轮完整证据与可复制命令见
 `docs/go2x5_lowlevel_flat_tabletop_6d_readiness_2026-07-29.md`。

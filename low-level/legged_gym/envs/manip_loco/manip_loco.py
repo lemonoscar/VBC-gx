@@ -408,10 +408,20 @@ class ManipLoco(LeggedRobot):
             "replace_cylinder_with_capsule": bool(self.cfg.asset.replace_cylinder_with_capsule),
             "command_ranges": {
                 "lin_vel_x": list(self.cfg.commands.ranges.lin_vel_x),
+                "lin_vel_y": list(
+                    getattr(self.cfg.commands.ranges, "lin_vel_y", [0.0, 0.0])
+                ),
                 "ang_vel_yaw": list(self.cfg.commands.ranges.ang_vel_yaw),
             },
             "command_dead_zone": {
                 "lin_vel_x": float(self.cfg.commands.lin_vel_x_clip),
+                "lin_vel_y": float(
+                    getattr(
+                        self.cfg.commands,
+                        "lin_vel_y_clip",
+                        self.cfg.commands.lin_vel_x_clip,
+                    )
+                ),
                 "ang_vel_yaw": float(self.cfg.commands.ang_vel_yaw_clip),
             },
             "foot_contact_threshold": 1.5,
@@ -1059,6 +1069,7 @@ class ManipLoco(LeggedRobot):
         self.last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
+        self.feet_swing_peak_height[env_ids] = 0.
         self.last_contacts[env_ids] = False
         self.gait_indices[env_ids] = 0.
         self.clock_inputs[env_ids] = 0.
@@ -1769,6 +1780,7 @@ class ManipLoco(LeggedRobot):
         self.gripper_torques_zero = torch.zeros(self.num_envs, self.cfg.env.num_gripper_joints, device=self.device)
 
         self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
+        self.feet_swing_peak_height = torch.zeros_like(self.feet_air_time)
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
@@ -1915,11 +1927,20 @@ class ManipLoco(LeggedRobot):
             device=self.device,
         ).squeeze(1)
 
-        self.commands[env_ids, 1] = 0
+        lin_vel_y_range = self.command_ranges.get("lin_vel_y", [0.0, 0.0])
+        self.commands[env_ids, 1] = torch_rand_float(
+            lin_vel_y_range[0],
+            lin_vel_y_range[1],
+            (len(env_ids), 1),
+            device=self.device,
+        ).squeeze(1)
         self.commands[env_ids, 2] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        # Preserve explicit standing and in-place-turning populations instead
-        # of relying on two independently sampled commands to hit those modes.
+        # Preserve explicit standing, straight-walking, and in-place-turning
+        # populations instead of relying on continuous sampling to hit them.
         standing_probability = float(getattr(self.cfg.commands, "standing_probability", 0.0))
+        straight_probability = float(
+            getattr(self.cfg.commands, "straight_line_probability", 0.0)
+        )
         turn_probability = float(
             getattr(self.cfg.commands, "turn_in_place_probability", 0.0)
         )
@@ -1927,15 +1948,52 @@ class ManipLoco(LeggedRobot):
             raise ValueError("standing_probability must be in [0, 1]")
         if not 0.0 <= turn_probability <= 1.0:
             raise ValueError("turn_in_place_probability must be in [0, 1]")
-        if standing_probability + turn_probability > 1.0:
+        if not 0.0 <= straight_probability <= 1.0:
+            raise ValueError("straight_line_probability must be in [0, 1]")
+        if standing_probability + straight_probability + turn_probability > 1.0:
             raise ValueError(
-                "standing_probability + turn_in_place_probability must be <= 1"
+                "standing_probability + straight_line_probability + "
+                "turn_in_place_probability must be <= 1"
             )
         mode_sample = torch.rand(len(env_ids), device=self.device)
         standing = mode_sample < standing_probability
-        turn_in_place = (mode_sample >= standing_probability) & (
-            mode_sample < standing_probability + turn_probability
+        straight_line = (mode_sample >= standing_probability) & (
+            mode_sample < standing_probability + straight_probability
         )
+        turn_in_place = (
+            mode_sample >= standing_probability + straight_probability
+        ) & (
+            mode_sample
+            < standing_probability + straight_probability + turn_probability
+        )
+        if straight_probability > 0.0:
+            min_abs_vx = float(self.cfg.commands.straight_line_min_abs_vx)
+            vx_low, vx_high = self.command_ranges["lin_vel_x"]
+            max_abs_vx = min(abs(float(vx_low)), abs(float(vx_high)))
+            if min_abs_vx <= self.cfg.commands.lin_vel_x_clip:
+                raise ValueError(
+                    "straight_line_min_abs_vx must exceed the x command dead zone"
+                )
+            if max_abs_vx < min_abs_vx:
+                raise ValueError(
+                    "straight_line_min_abs_vx is outside the symmetric x command range"
+                )
+            straight_magnitude = torch_rand_float(
+                min_abs_vx,
+                max_abs_vx,
+                (len(env_ids), 1),
+                device=self.device,
+            ).squeeze(1)
+            straight_sign = torch.where(
+                torch.rand(len(env_ids), device=self.device) < 0.5,
+                -torch.ones(len(env_ids), device=self.device),
+                torch.ones(len(env_ids), device=self.device),
+            )
+            straight_ids = env_ids[straight_line]
+            self.commands[straight_ids, 0] = (
+                straight_sign * straight_magnitude
+            )[straight_line]
+            self.commands[straight_ids, 1:] = 0.0
         if turn_probability > 0.0:
             min_abs_yaw = float(self.cfg.commands.turn_in_place_min_abs_yaw)
             yaw_low, yaw_high = self.command_ranges["ang_vel_yaw"]
@@ -1960,10 +2018,18 @@ class ManipLoco(LeggedRobot):
                 torch.ones(len(env_ids), device=self.device),
             )
             turn_ids = env_ids[turn_in_place]
-            self.commands[turn_ids, 0] = 0.0
+            self.commands[turn_ids, :2] = 0.0
             self.commands[turn_ids, 2] = (turn_sign * turn_magnitude)[turn_in_place]
         moving = torch.logical_or(
-            torch.abs(self.commands[env_ids, 0]) > self.cfg.commands.lin_vel_x_clip,
+            torch.logical_or(
+                torch.abs(self.commands[env_ids, 0]) > self.cfg.commands.lin_vel_x_clip,
+                torch.abs(self.commands[env_ids, 1])
+                > getattr(
+                    self.cfg.commands,
+                    "lin_vel_y_clip",
+                    self.cfg.commands.lin_vel_x_clip,
+                ),
+            ),
             torch.abs(self.commands[env_ids, 2]) > self.cfg.commands.ang_vel_yaw_clip,
         )
         self.commands[env_ids[standing | ~moving], :] = 0.0
@@ -2507,7 +2573,11 @@ class ManipLoco(LeggedRobot):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
         walking_mask0 = torch.abs(self.commands[env_ids, 0]) > self.cfg.commands.lin_vel_x_clip
-        walking_mask1 = torch.abs(self.commands[env_ids, 1]) > self.cfg.commands.lin_vel_x_clip
+        walking_mask1 = torch.abs(self.commands[env_ids, 1]) > getattr(
+            self.cfg.commands,
+            "lin_vel_y_clip",
+            self.cfg.commands.lin_vel_x_clip,
+        )
         walking_mask2 = torch.abs(self.commands[env_ids, 2]) > self.cfg.commands.ang_vel_yaw_clip
         walking_mask = walking_mask0 | walking_mask1 | walking_mask2
         if return_all:

@@ -51,7 +51,8 @@ def make_low_env(state_mode="canonical_injected", case="C0", policy_mode=None, c
     env_cfg.domain_rand.randomize_gripper_mass = False
     env_cfg.domain_rand.push_robots = False
     env_cfg.commands.ranges.lin_vel_x = [-0.3, 0.3]
-    env_cfg.commands.ranges.ang_vel_yaw = [-0.4, 0.4]
+    env_cfg.commands.ranges.lin_vel_y = [-0.1, 0.1]
+    env_cfg.commands.ranges.ang_vel_yaw = [-0.25, 0.25]
     from legged_gym.envs.manip_loco import go2x5_robot_spec
     env_cfg.control.action_scale = list(go2x5_robot_spec.LOW_ACTION_SCALE)
     env_cfg.auto_curriculum.enabled = False

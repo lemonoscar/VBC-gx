@@ -214,7 +214,8 @@ def test_schema_v2_smoke_checkpoint_metadata_shape_and_purpose():
 def test_parity_factory_uses_final_command_contract():
     factory = (ROOT / "tools/go2x5_parity_factories.py").read_text(encoding="utf-8")
     assert "env_cfg.commands.ranges.lin_vel_x = [-0.3, 0.3]" in factory
-    assert "env_cfg.commands.ranges.ang_vel_yaw = [-0.4, 0.4]" in factory
+    assert "env_cfg.commands.ranges.lin_vel_y = [-0.1, 0.1]" in factory
+    assert "env_cfg.commands.ranges.ang_vel_yaw = [-0.25, 0.25]" in factory
 
 
 def test_robot_start_pose_precedence_and_b1_fallback():

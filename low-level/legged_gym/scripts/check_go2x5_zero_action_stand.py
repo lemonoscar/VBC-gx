@@ -136,8 +136,10 @@ def configure_env(env_cfg, cli):
     env_cfg.init_state.arm_reset_noise_range = [0.0, 0.0]
 
     env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
+    env_cfg.commands.ranges.lin_vel_y = [0.0, 0.0]
     env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
     env_cfg.commands.standing_probability = 1.0
+    env_cfg.commands.straight_line_probability = 0.0
     env_cfg.commands.turn_in_place_probability = 0.0
     env_cfg.commands.turn_in_place_min_abs_yaw = 0.0
 

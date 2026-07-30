@@ -96,10 +96,19 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class commands:
         curriculum = False
         num_commands = 3
-        resampling_time = 3.
-        standing_probability = 0.25
-        turn_in_place_probability = 0.20
-        turn_in_place_min_abs_yaw = 0.15
+        # Walk These Ways holds velocity commands for 10 s.  Go2-X5 episodes
+        # are also 10 s, so this gives the policy one coherent locomotion goal
+        # per episode instead of changing direction three times while it is
+        # still acquiring a gait.
+        resampling_time = 10.
+        # Keep explicit, easily learned command populations.  The previous
+        # sampler devoted only a small fraction of episodes to exact straight
+        # walking because almost every non-standing sample also contained yaw.
+        standing_probability = 0.20
+        straight_line_probability = 0.35
+        turn_in_place_probability = 0.10
+        straight_line_min_abs_vx = 0.10
+        turn_in_place_min_abs_yaw = 0.10
 
         lin_vel_x_schedule = [0, 0]
         ang_vel_yaw_schedule = [0, 0]
@@ -107,10 +116,14 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
 
         ang_vel_yaw_clip = 0.05
         lin_vel_x_clip = 0.05
+        lin_vel_y_clip = 0.05
 
         class ranges:
             lin_vel_x = [-0.30, 0.30]
-            ang_vel_yaw = [-0.40, 0.40]
+            # A small lateral range preserves useful body mobility without
+            # making the tabletop approach task primarily sideways.
+            lin_vel_y = [-0.10, 0.10]
+            ang_vel_yaw = [-0.25, 0.25]
 
     class normalization:
         class obs_scales:
@@ -247,7 +260,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
     class rewards:
         reward_container_name = "maniploco_rewards"
         only_positive_rewards = False
-        # Exact command tracking penalizes both underspeed and overspeed.
+        # Keep Walk These Ways' squared-error exponential kernel, but scale its
+        # width to this task's much smaller (+/-0.30 m/s) command envelope.
+        # With the paper's 0.25 width, standing still at a 0.10 m/s command
+        # already receives 96.1% of the maximum reward; 0.05 lowers that to
+        # 81.9% and gives the policy a meaningful low-speed tracking signal.
         tracking_sigma = 0.05
         # Metres in exp(-2 * L1_error / sigma).
         tracking_ee_sigma = 0.15
@@ -267,9 +284,16 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         kappa_gait_probs = 0.07
         feet_height_target = 0.12
 
-        feet_aritime_allfeet = True
+        feet_air_time_all_feet = True
         feet_height_allfeet = True
-        feet_air_time_target = 0.25
+        # Phase-free, completed-step shaping.  A short landing is neutral
+        # rather than negative, while a real swing that clears the foot radius
+        # and lands receives a small bounded bonus.
+        feet_air_time_target = 0.10
+        feet_air_time_max_bonus = 0.25
+        feet_clearance_floor = robot_spec.FOOT_COLLISION_RADIUS
+        feet_clearance_target = 0.05
+        feet_clearance_landing_bonus = 0.20
         foot_lateral_min = 0.06
         min_stance_feet = 3.0
         # Retained for diagnostics; the simplified active reward does not gate
@@ -296,15 +320,19 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # No gait clock/contact schedule is active.
             tracking_contacts_shaped_force = 0.0
             tracking_contacts_shaped_vel = 0.0
-            feet_air_time = 0.0
+            # Phase-free Walk These Ways/legged-gym stepping incentive.  It
+            # rewards completed swing-and-land events for all four feet but
+            # does not prescribe trot, walk, or a fixed phase relationship.
+            feet_air_time = 1.0
             feet_height = 0.0
 
             # -------Tracking rewards ----------
             tracking_lin_vel_max = 0.0
             tracking_lin_vel_x_l1 = 0.
-            tracking_lin_vel_x_exp = 2.0
-            tracking_ang_vel = 0.0
-            tracking_ang_vel_yaw_exp = 1.0
+            tracking_lin_vel_x_exp = 0.0
+            tracking_lin_vel = 2.0
+            tracking_ang_vel = 0.5
+            tracking_ang_vel_yaw_exp = 0.0
 
             torques = -2.5e-5
             # Standing targets may still require coordinated crouching.
@@ -321,8 +349,11 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # acceleration/work/jerk curricula.
             ang_vel_xy = 0.0
             dof_acc = 0.0
-            collision = -10.0
-            action_rate = -0.015
+            # Use the Walk These Ways order of magnitude.  The local collision
+            # metric is already force-normalized and can reach O(10) for one
+            # bad body contact; -10 suppressed early stepping exploration.
+            collision = -1.0
+            action_rate = -0.01
             dof_pos_limits = -10.0
             delta_torques = 0.0
             hip_pos = 0.0
@@ -337,7 +368,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             low_goal_posture_asymmetry = 0.0
             low_goal_hind_leg_extension = 0.0
             low_goal_hind_support_force = 0.0
-            feet_contact_standing = 0.0
+            # A stopped robot should not learn the old three-leg stance with
+            # one rear foot permanently airborne.
+            feet_contact_standing = -0.5
             hind_feet_contact_standing = 0.0
             foot_support_standing = 0.0
             pitch_soft_limit_standing = 0.0
@@ -443,7 +476,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_v1"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v3"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -492,9 +525,11 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         max_grad_norm = 1.
         min_policy_std = [[0.08, 0.12, 0.12] * 4]
 
-        # A 12D policy has no arm action head; EE advantage must reach the leg
-        # policy from the first actual PPO update.
-        mixing_schedule = [1.0, 0, 1]
+        # Match the successful B1-Z1 learning order: first acquire a locomotion
+        # base, then blend the EE/body-coordination advantage over 3000 PPO
+        # updates.  This changes learning order only; the final objective still
+        # contains the complete whole-body reward.
+        mixing_schedule = [1.0, 0, 3000]
         torque_supervision = Go2X5RoughCfg.control.torque_supervision
         torque_supervision_schedule = [0.0, 1000, 1000]
         adaptive_arm_gains = Go2X5RoughCfg.control.adaptive_arm_gains

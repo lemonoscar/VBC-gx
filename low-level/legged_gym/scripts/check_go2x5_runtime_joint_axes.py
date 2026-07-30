@@ -112,6 +112,7 @@ def configure_env(env_cfg):
     env_cfg.init_state.arm_reset_noise_range = [0.0, 0.0]
 
     env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
+    env_cfg.commands.ranges.lin_vel_y = [0.0, 0.0]
     env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
     if hasattr(env_cfg, "auto_curriculum"):
         env_cfg.auto_curriculum.enabled = False

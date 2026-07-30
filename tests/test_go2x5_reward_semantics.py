@@ -45,16 +45,30 @@ class FakeEnv:
                 tracking_sigma=0.05,
                 tracking_ee_sigma=1.0,
                 gait_force_sigma=0.5,
+                feet_air_time_target=0.10,
+                feet_air_time_max_bonus=0.25,
+                feet_clearance_floor=0.022,
+                feet_clearance_target=0.05,
+                feet_clearance_landing_bonus=0.20,
+                feet_air_time_all_feet=True,
             ),
             env=SimpleNamespace(observe_gait_commands=False),
-            commands=SimpleNamespace(lin_vel_x_clip=0.05, ang_vel_yaw_clip=0.05),
+            commands=SimpleNamespace(
+                lin_vel_x_clip=0.05,
+                lin_vel_y_clip=0.05,
+                ang_vel_yaw_clip=0.05,
+            ),
         )
+        self.dt = 0.02
         self.commands = torch.zeros(self.num_envs, 3)
         self.root_states = torch.zeros(self.num_envs, 13)
         self.root_states[:, 2] = 0.32
         self.measured_heights = torch.zeros(self.num_envs, 4)
         self.env_origins = torch.zeros(self.num_envs, 3)
         self.foot_contacts_from_sensor = torch.zeros(self.num_envs, 4, dtype=torch.bool)
+        self.contact_filt = torch.zeros(self.num_envs, 4, dtype=torch.bool)
+        self.feet_air_time = torch.zeros(self.num_envs, 4)
+        self.feet_swing_peak_height = torch.zeros(self.num_envs, 4)
         self.ee_pos = torch.zeros(self.num_envs, 3)
         self.curr_ee_goal_cart_world = torch.zeros(self.num_envs, 3)
         self.desired_contact_states = torch.tensor(
@@ -62,6 +76,7 @@ class FakeEnv:
         )
         self.contact_forces = torch.zeros(self.num_envs, 4, 3)
         self.feet_indices = torch.arange(4)
+        self.rigid_body_state = torch.zeros(self.num_envs, 4, 13)
         self.base_lin_vel = torch.zeros(self.num_envs, 3)
         self.base_ang_vel = torch.zeros(self.num_envs, 3)
         self.body_orientation = torch.zeros(self.num_envs, 2)
@@ -71,7 +86,10 @@ class FakeEnv:
 
     def _get_walking_cmd_mask(self):
         return torch.logical_or(
-            torch.abs(self.commands[:, 0]) > self.cfg.commands.lin_vel_x_clip,
+            torch.logical_or(
+                torch.abs(self.commands[:, 0]) > self.cfg.commands.lin_vel_x_clip,
+                torch.abs(self.commands[:, 1]) > self.cfg.commands.lin_vel_y_clip,
+            ),
             torch.abs(self.commands[:, 2]) > self.cfg.commands.ang_vel_yaw_clip,
         )
 
@@ -131,14 +149,92 @@ def test_exact_velocity_reward_penalizes_under_and_overspeed_symmetrically():
 
     assert torch.equal(exact_error, torch.zeros_like(exact_error))
     assert torch.all(exact > symmetric)
-    assert torch.allclose(symmetric_error, torch.tensor([0.10, 0.10]))
+    assert torch.allclose(symmetric_error, torch.tensor([0.01, 0.01]))
     assert torch.allclose(symmetric[0], symmetric[1])
+    assert torch.allclose(
+        symmetric,
+        torch.exp(torch.full((2,), -0.01 / env.cfg.rewards.tracking_sigma)),
+    )
 
     env.commands[:, 2] = 0.10
     env.base_ang_vel[:, 2] = torch.tensor([0.00, 0.20])
     symmetric_yaw, symmetric_yaw_error = reward._reward_tracking_ang_vel_yaw_exp()
-    assert torch.allclose(symmetric_yaw_error, torch.tensor([0.10, 0.10]))
+    assert torch.allclose(symmetric_yaw_error, torch.tensor([0.01, 0.01]))
     assert torch.allclose(symmetric_yaw[0], symmetric_yaw[1])
+
+
+def test_walk_these_ways_xy_tracking_kernel_is_squared_and_dense():
+    env, reward = make_reward()
+    env.commands[:] = torch.tensor([0.30, 0.10, 0.0])
+    env.base_lin_vel.zero_()
+
+    tracking, squared_error = reward._reward_tracking_lin_vel()
+
+    assert torch.allclose(squared_error, torch.full((2,), 0.10))
+    assert torch.allclose(
+        tracking,
+        torch.exp(torch.full((2,), -0.10 / env.cfg.rewards.tracking_sigma)),
+    )
+    assert torch.all(tracking > 0.0)
+    assert torch.all(tracking < 0.20)
+
+
+def test_contact_drag_is_horizontal_squared_slip_only():
+    env, reward = make_reward()
+    env.contact_filt[:, 0] = True
+    env.rigid_body_state[:, 0, 9] = 3.0
+
+    vertical_only, _ = reward._reward_feet_drag()
+    assert torch.equal(vertical_only, torch.zeros_like(vertical_only))
+
+    env.rigid_body_state[:, 0, 7] = 0.5
+    horizontal, _ = reward._reward_feet_drag()
+    assert torch.allclose(horizontal, torch.full((2,), 0.25))
+
+    env.contact_filt.zero_()
+    airborne, _ = reward._reward_feet_drag()
+    assert torch.equal(airborne, torch.zeros_like(airborne))
+
+
+def test_air_time_rewards_only_clear_completed_steps_and_resets_buffers():
+    env, reward = make_reward()
+    env.commands[:, 0] = 0.10
+
+    # An airborne foot builds a peak-clearance record but is not paid until it
+    # lands.  This prevents a permanently lifted foot from farming reward.
+    env.rigid_body_state[:, 0, 2] = 0.055
+    airborne, _ = reward._reward_feet_air_time()
+    assert torch.equal(airborne, torch.zeros_like(airborne))
+    assert torch.allclose(env.feet_swing_peak_height[:, 0], torch.full((2,), 0.055))
+
+    env.feet_air_time[:, 0] = 0.30
+    env.rigid_body_state[:, 0, 2] = 0.022
+    env.contact_filt[:, 0] = True
+
+    landing, _ = reward._reward_feet_air_time()
+
+    assert torch.allclose(landing, torch.full((2,), 0.42))
+    assert torch.equal(env.feet_air_time[:, 0], torch.zeros(2))
+    assert torch.equal(env.feet_swing_peak_height[:, 0], torch.zeros(2))
+
+    continuous_contact, _ = reward._reward_feet_air_time()
+    assert torch.equal(continuous_contact, torch.zeros_like(continuous_contact))
+
+    # A short, ground-skimming landing is neutral rather than negative.
+    env.contact_filt.zero_()
+    env.feet_air_time[:, 2] = 0.02
+    env.feet_swing_peak_height[:, 2] = 0.022
+    env.contact_filt[:, 2] = True
+    short_step, _ = reward._reward_feet_air_time()
+    assert torch.equal(short_step, torch.zeros_like(short_step))
+
+    env.commands.zero_()
+    env.contact_filt.zero_()
+    env.feet_air_time[:, 1] = 0.30
+    env.feet_swing_peak_height[:, 1] = 0.055
+    env.contact_filt[:, 1] = True
+    stopped, _ = reward._reward_feet_air_time()
+    assert torch.equal(stopped, torch.zeros_like(stopped))
 
 
 def test_adaptive_height_target_is_safe_monotonic_and_terrain_relative():

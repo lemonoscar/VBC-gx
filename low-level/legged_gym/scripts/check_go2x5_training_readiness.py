@@ -365,30 +365,43 @@ def probe_rewards(env, checks):
         and "base_height" not in env.reward_scales
         and "tracking_lin_vel_max" not in env.reward_scales
         and abs(float(env.reward_scales["leg_action_l2_deadzone"]) + 0.01) <= 1e-9
-        and abs(float(env.reward_scales["tracking_lin_vel_x_exp"]) - 2.0) <= 1e-9
+        and abs(float(env.reward_scales["tracking_lin_vel"]) - 2.0) <= 1e-9
         and abs(float(env.reward_scales["height_adaptation"]) + 3.0) <= 1e-9
         and abs(float(env.reward_scales["pitch_adaptation"]) + 1.0) <= 1e-9
-        and "tracking_ang_vel" not in env.reward_scales
-        and abs(float(env.reward_scales["tracking_ang_vel_yaw_exp"]) - 1.0) <= 1e-9
-        and "feet_air_time" not in env.reward_scales
+        and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9
+        and abs(float(env.reward_scales["collision"]) + 1.0) <= 1e-9
+        and abs(float(env.reward_scales["action_rate"]) + 0.01) <= 1e-9
+        and abs(float(env.cfg.rewards.tracking_sigma) - 0.05) <= 1e-9
+        and abs(float(env.cfg.rewards.feet_air_time_target) - 0.10) <= 1e-9
+        and abs(float(env.cfg.rewards.feet_clearance_target) - 0.05) <= 1e-9
+        and abs(float(env.cfg.rewards.feet_clearance_landing_bonus) - 0.20)
+        <= 1e-9
+        and abs(float(env.reward_scales["feet_air_time"]) - 1.0) <= 1e-9
+        and abs(float(env.reward_scales["feet_contact_standing"]) + 0.5) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 2.0) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_orn"]) - 0.6) <= 1e-9
         and "tracking_ee_world_stable" not in env.arm_reward_scales,
         num_proprio=int(env.cfg.env.num_proprio),
         observe_gait=bool(env.cfg.env.observe_gait_commands),
         replace_capsules=bool(env.cfg.asset.replace_cylinder_with_capsule),
-        tracking_lin_vel=float(env.reward_scales["tracking_lin_vel_x_exp"]),
+        tracking_lin_vel=float(env.reward_scales["tracking_lin_vel"]),
         height_adaptation=float(env.reward_scales["height_adaptation"]),
         pitch_adaptation=float(env.reward_scales["pitch_adaptation"]),
-        tracking_ang_vel=float(env.reward_scales["tracking_ang_vel_yaw_exp"]),
-        feet_air_time=env.reward_scales.get("feet_air_time"),
+        tracking_ang_vel=float(env.reward_scales["tracking_ang_vel"]),
+        collision=float(env.reward_scales["collision"]),
+        action_rate=float(env.reward_scales["action_rate"]),
+        tracking_sigma=float(env.cfg.rewards.tracking_sigma),
+        feet_air_time=float(env.reward_scales["feet_air_time"]),
+        feet_contact_standing=float(env.reward_scales["feet_contact_standing"]),
         action_bound=float(env.reward_scales["leg_action_l2_deadzone"]),
         ee_tracking=float(env.arm_reward_scales["tracking_ee_world"]),
         ee_orientation_tracking=float(env.arm_reward_scales["tracking_ee_orn"]),
     )
     expected_leg_rewards = {
-        "tracking_lin_vel_x_exp",
-        "tracking_ang_vel_yaw_exp",
+        "tracking_lin_vel",
+        "tracking_ang_vel",
+        "feet_air_time",
+        "feet_contact_standing",
         "torques",
         "alive",
         "termination",
@@ -439,29 +452,43 @@ def probe_rewards(env, checks):
     env.commands.zero_()
     env.commands[:, 0] = 0.10
     env.base_lin_vel[:, 0] = 0.10
-    velocity_best, _ = reward._reward_tracking_lin_vel_x_exp()
+    velocity_best, _ = reward._reward_tracking_lin_vel()
     env.base_lin_vel[:, 0] = 0.0
-    velocity_under, _ = reward._reward_tracking_lin_vel_x_exp()
+    velocity_under, velocity_error = reward._reward_tracking_lin_vel()
     env.base_lin_vel[:, 0] = 0.20
-    velocity_over, _ = reward._reward_tracking_lin_vel_x_exp()
+    velocity_over, _ = reward._reward_tracking_lin_vel()
+    expected_velocity_error = torch.full_like(velocity_error, 0.01)
+    expected_velocity_reward = torch.exp(
+        -expected_velocity_error / float(env.cfg.rewards.tracking_sigma)
+    )
     checks.require(
-        "reward/velocity_tracking_symmetric",
-        bool(torch.all(velocity_best > velocity_under) and torch.allclose(velocity_under, velocity_over)),
+        "reward/walk_these_ways_velocity_kernel",
+        bool(
+            torch.all(velocity_best > velocity_under)
+            and torch.allclose(velocity_under, velocity_over)
+            and torch.allclose(velocity_error, expected_velocity_error)
+            and torch.allclose(velocity_under, expected_velocity_reward)
+        ),
         best=float(velocity_best.mean().item()),
         underspeed=float(velocity_under.mean().item()),
         overspeed=float(velocity_over.mean().item()),
+        squared_error=float(velocity_error.mean().item()),
     )
 
     env.commands[:, 2] = 0.10
     env.base_ang_vel[:, 2] = 0.10
-    yaw_best, _ = reward._reward_tracking_ang_vel_yaw_exp()
+    yaw_best, _ = reward._reward_tracking_ang_vel()
     env.base_ang_vel[:, 2] = 0.0
-    yaw_under, _ = reward._reward_tracking_ang_vel_yaw_exp()
+    yaw_under, yaw_error = reward._reward_tracking_ang_vel()
     env.base_ang_vel[:, 2] = 0.20
-    yaw_over, _ = reward._reward_tracking_ang_vel_yaw_exp()
+    yaw_over, _ = reward._reward_tracking_ang_vel()
     checks.require(
-        "reward/yaw_tracking_symmetric",
-        bool(torch.all(yaw_best > yaw_under) and torch.allclose(yaw_under, yaw_over)),
+        "reward/walk_these_ways_yaw_kernel",
+        bool(
+            torch.all(yaw_best > yaw_under)
+            and torch.allclose(yaw_under, yaw_over)
+            and torch.allclose(yaw_error, expected_velocity_error)
+        ),
         best=float(yaw_best.mean().item()),
         underspeed=float(yaw_under.mean().item()),
         overspeed=float(yaw_over.mean().item()),
@@ -534,18 +561,56 @@ def probe_rewards(env, checks):
     )
 
     env.foot_contacts_from_sensor.fill_(True)
+    env.contact_filt.fill_(True)
     env.rigid_body_state[:, env.feet_indices, 7:10] = 0.0
     drag_still, _ = reward._reward_feet_drag()
+    env.rigid_body_state[:, env.feet_indices[0], 9] = 1.0
+    drag_vertical, _ = reward._reward_feet_drag()
+    env.rigid_body_state[:, env.feet_indices[0], 9] = 0.0
     env.rigid_body_state[:, env.feet_indices[0], 7] = 0.5
     drag_moving, _ = reward._reward_feet_drag()
+    env.contact_filt.zero_()
+    drag_airborne, _ = reward._reward_feet_drag()
     checks.require(
-        "reward/contact_drag_penalized",
-        bool(torch.all(drag_moving > drag_still)),
+        "reward/contact_horizontal_slip_penalized",
+        bool(
+            torch.all(drag_moving > drag_still)
+            and torch.equal(drag_vertical, drag_still)
+            and torch.equal(drag_airborne, drag_still)
+        ),
         still=float(drag_still.mean().item()),
+        vertical=float(drag_vertical.mean().item()),
         moving=float(drag_moving.mean().item()),
+        airborne=float(drag_airborne.mean().item()),
+    )
+
+    env.commands.zero_()
+    env.commands[:, 0] = 0.10
+    env.feet_air_time.zero_()
+    env.feet_swing_peak_height.zero_()
+    env.feet_swing_peak_height[:, 0] = 0.055
+    env.feet_air_time[:, 0] = 0.30
+    env.contact_filt.zero_()
+    env.contact_filt[:, 0] = True
+    air_time_landing, _ = reward._reward_feet_air_time()
+    air_time_reset = env.feet_air_time[:, 0].clone()
+    peak_height_reset = env.feet_swing_peak_height[:, 0].clone()
+    air_time_continuous, _ = reward._reward_feet_air_time()
+    checks.require(
+        "reward/all_foot_air_time_completed_step",
+        bool(
+            torch.all(air_time_landing > 0.0)
+            and torch.all(air_time_reset == 0.0)
+            and torch.all(peak_height_reset == 0.0)
+            and torch.all(air_time_continuous == 0.0)
+        ),
+        landing=float(air_time_landing.mean().item()),
+        continuous=float(air_time_continuous.mean().item()),
     )
 
     zero_commands = 0
+    straight_commands = 0
+    lateral_commands = 0
     turn_commands = 0
     positive_turn_commands = 0
     negative_turn_commands = 0
@@ -554,6 +619,16 @@ def probe_rewards(env, checks):
     for _ in range(100):
         env._resample_commands(ids)
         zero_commands += int((torch.abs(env.commands).sum(dim=1) == 0).sum().item())
+        straight_mask = (
+            torch.abs(env.commands[:, 0])
+            >= float(env.cfg.commands.straight_line_min_abs_vx) - 1e-7
+        ) & (torch.abs(env.commands[:, 1:]).sum(dim=1) <= 1e-7)
+        straight_commands += int(straight_mask.sum().item())
+        lateral_commands += int(
+            (torch.abs(env.commands[:, 1]) > env.cfg.commands.lin_vel_y_clip)
+            .sum()
+            .item()
+        )
         turn_mask = (torch.abs(env.commands[:, 0]) <= 1e-7) & (
             torch.abs(env.commands[:, 2])
             >= float(env.cfg.commands.turn_in_place_min_abs_yaw) - 1e-7
@@ -589,6 +664,23 @@ def probe_rewards(env, checks):
         positive_fraction=positive_turn_fraction,
         positive=positive_turn_commands,
         negative=negative_turn_commands,
+    )
+    straight_fraction = straight_commands / sample_count
+    expected_straight = float(env.cfg.commands.straight_line_probability)
+    checks.require(
+        "commands/explicit_straight_population",
+        expected_straight - 0.08
+        <= straight_fraction
+        <= expected_straight + 0.08,
+        fraction=straight_fraction,
+        configured=expected_straight,
+    )
+    checks.require(
+        "commands/lateral_population_present",
+        lateral_commands > 0,
+        samples=lateral_commands,
+        fraction=lateral_commands / sample_count,
+        range=list(env.command_ranges["lin_vel_y"]),
     )
 
     env.episode_length_buf.fill_(51)
@@ -888,6 +980,10 @@ def probe_training_metadata(env, checks):
         == go2x5_robot_spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS
         and alignment["control_contract"]["ee_orientation_observation"]
         == "local_rpy"
+        and alignment["control_contract"]["command_ranges"]["lin_vel_y"]
+        == [-0.10, 0.10]
+        and alignment["control_contract"]["command_dead_zone"]["lin_vel_y"]
+        == 0.05
         and "gait_frequency" not in alignment["control_contract"],
     )
     env.global_steps = 0
@@ -939,9 +1035,10 @@ def probe_curriculum(env, checks):
         "curriculum/static_distribution",
         not env.auto_curriculum_enabled
         and len(env.curriculum_stages) == 0
-        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_v1"
+        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v3"
         and env.command_ranges["lin_vel_x"] == [-0.30, 0.30]
-        and env.command_ranges["ang_vel_yaw"] == [-0.40, 0.40]
+        and env.command_ranges["lin_vel_y"] == [-0.10, 0.10]
+        and env.command_ranges["ang_vel_yaw"] == [-0.25, 0.25]
         and [
             list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
         ] == go2x5_robot_spec.EE_GOAL_LOCAL_RANGES
@@ -949,7 +1046,10 @@ def probe_curriculum(env, checks):
         <= 1e-9,
         enabled=bool(env.auto_curriculum_enabled),
         profile=env.curriculum_profile_name,
-        command_range=list(env.command_ranges["lin_vel_x"]),
+        command_ranges={
+            axis: list(env.command_ranges[axis])
+            for axis in ("lin_vel_x", "lin_vel_y", "ang_vel_yaw")
+        },
         goal_ranges=[
             list(env.goal_ee_ranges[axis]) for axis in ("pos_x", "pos_y_cart", "pos_z")
         ],
