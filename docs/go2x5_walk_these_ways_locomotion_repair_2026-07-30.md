@@ -20,6 +20,7 @@
 - 官方基础配置：[legged_robot_config.py](https://github.com/Improbable-AI/walk-these-ways/blob/master/go1_gym/envs/base/legged_robot_config.py)
 - 官方 Go1 配置：[go1_config.py](https://github.com/Improbable-AI/walk-these-ways/blob/master/go1_gym/envs/go1/go1_config.py)
 - 官方奖励实现：[corl_rewards.py](https://github.com/Improbable-AI/walk-these-ways/blob/master/go1_gym/envs/rewards/corl_rewards.py)
+- 官方策略初始化：[actor_critic.py](https://github.com/Improbable-AI/walk-these-ways/blob/master/go1_gym_learn/ppo_cse/actor_critic.py)
 
 保留的基本结构：
 
@@ -31,6 +32,7 @@
 | hip action scale | 0.25 × 0.5 | 0.125 |
 | thigh/calf action scale | 0.25 | 0.25 |
 | 腿部 PD | 20 / 0.5 | 40 / 1（用户指定，保持同一 Kp:Kd 比） |
+| 初始 action std | 1.0 | 0.5（按执行器力矩尺度等效） |
 | 速度奖励核 | `exp(-||v_cmd-v||²/sigma)` | 相同 |
 | 偏航奖励核 | `exp(-(w_cmd-w)²/sigma)` | 相同 |
 | feet air-time | landing event | landing event |
@@ -129,16 +131,30 @@ min_std  = [0.08, 0.12, 0.12] × 4
 ```
 
 远端确定性回放显示，actor 最终只学到每条腿不同的静态偏置，四脚始终
-接触。v4 恢复 B1-Z1 已验证的腿部探索设置：
+接触。v4 曾直接恢复 B1-Z1 的腿部探索设置：
 
 ```text
 init_std = [0.80, 1.00, 1.00] × 4
 min_std  = [0.15, 0.25, 0.25] × 4
 ```
 
-Go2-X5 的 action scale 与 Kp 均小于 B1-Z1，因此这一设置对应的初始关节
-目标/力矩扰动仍更小。所有 action 继续经过 tanh mean、`clip_actions=1`
-和 torque limit。
+远端 from-scratch smoke 到 iteration 43 时 roll reset 仍为 `97.9%`，
+所以 v4 被明确拒绝。问题是 B1-Z1 的绝对 std 不是 Go2-X5 的正确尺度。
+
+v5 改为对齐 Walk These Ways 的执行器扰动。WTW Go1 使用
+`Kp=20`、hip/thigh/calf action scale `0.125/0.25/0.25`；Go2-X5 使用
+`Kp=40`、相同 action scale。因此：
+
+```text
+std_go2 = std_wtw * Kp_wtw / Kp_go2 = 1.0 * 20 / 40 = 0.5
+
+init_std = [0.50, 0.50, 0.50] × 4
+min_std  = [0.15, 0.25, 0.25] × 4
+```
+
+两者的初始 target-error torque 标度均为每腿
+`[2.5, 5.0, 5.0] Nm`。所有 action 继续经过 tanh mean、
+`clip_actions=1` 和 torque limit。
 
 ## 行为门禁
 
@@ -203,8 +219,9 @@ from-scratch smoke，训练进程退出码为 0、无 nonfinite。
 | model_1500 | 2.4% | -5.1% | 2.2% | -17.5% | 失败 |
 
 最终 `model_1500` 在五种命令下四脚接触率均为 100%，没有任何接触切换。
-这证明 v3 是安全静止策略，不允许进入长训。v4 必须重新通过 GPU
-readiness 和远端 smoke。
+这证明 v3 是安全静止策略，不允许进入长训。v4 readiness 虽通过，但高
+探索 smoke 因 roll reset 失败。v5 必须重新通过 GPU readiness 和远端
+smoke。
 
 ## 服务器状态与下一门禁
 

@@ -973,7 +973,7 @@ def build_report() -> str:
     if (
         auto_curriculum_cfg.get("enabled") is not False
         or auto_curriculum_cfg.get("profile_name")
-        != "go2x5_flat_tabletop_6d_walk_v4"
+        != "go2x5_flat_tabletop_6d_walk_v5"
     ):
         contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
     if (
@@ -997,9 +997,9 @@ def build_report() -> str:
         contract_failures.append("deployment and training policy outputs must both be tanh-bounded")
     if normalization_cfg.get("clip_actions") != 1.0:
         contract_failures.append("training action clip must match the bounded deployment action")
-    if ppo_policy_cfg.get("init_std") != [[0.8, 1.0, 1.0] * 4]:
+    if ppo_policy_cfg.get("init_std") != [[0.5, 0.5, 0.5] * 4]:
         contract_failures.append(
-            "initial exploration std must match the proven B1-Z1 leg regime"
+            "initial exploration std must match the Walk These Ways actuator-level torque scale"
         )
     if ppo_algorithm_cfg.get("min_policy_std") != [[0.15, 0.25, 0.25] * 4]:
         contract_failures.append(

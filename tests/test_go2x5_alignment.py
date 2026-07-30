@@ -372,7 +372,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = False" in go2x5_config
-    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v4"' in go2x5_config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v5"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert "stages = []" in go2x5_config
     assert '"name": "S0_' not in go2x5_config
@@ -498,7 +498,7 @@ def test_go2x5_simple_training_design_matches_current_plan():
     assert "enabled = False" in go2x5_config
     assert "output_tanh = True" in go2x5_config
     assert "clip_actions = 1.0" in go2x5_config
-    assert "init_std = [[0.8, 1.0, 1.0] * 4]" in go2x5_config
+    assert "init_std = [[0.5, 0.5, 0.5] * 4]" in go2x5_config
     assert "min_policy_std = [[0.15, 0.25, 0.25] * 4]" in go2x5_config
 
 

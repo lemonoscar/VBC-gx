@@ -1040,7 +1040,7 @@ def probe_curriculum(env, checks):
         "curriculum/static_distribution",
         not env.auto_curriculum_enabled
         and len(env.curriculum_stages) == 0
-        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v4"
+        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v5"
         and env.command_ranges["lin_vel_x"] == [-0.30, 0.30]
         and env.command_ranges["lin_vel_y"] == [-0.10, 0.10]
         and env.command_ranges["ang_vel_yaw"] == [-0.25, 0.25]

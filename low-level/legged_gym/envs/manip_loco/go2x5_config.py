@@ -487,7 +487,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v4"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v5"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -501,10 +501,12 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        # Match the proven B1-Z1/Walk These Ways exploration regime. The v3
-        # remote smoke used its eventual minimum std as the initial std and
-        # collapsed to static joint offsets with all four feet in contact.
-        init_std = [[0.8, 1.0, 1.0] * 4]
+        # Match Walk These Ways at the actuator level. Its Go1 setup uses
+        # Kp=20 and a 0.25 action scale (0.125 at the hip); with Go2 Kp=40
+        # and 0.125/0.25/0.25 scales, std=0.5 yields the same initial
+        # 2.5/5/5 Nm target-error torque scale. Copying the larger B1-Z1 std
+        # caused about 98% roll resets in the v4 remote smoke.
+        init_std = [[0.5, 0.5, 0.5] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'
