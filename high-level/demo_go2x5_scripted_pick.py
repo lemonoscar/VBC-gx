@@ -34,6 +34,16 @@ BASE_HOLD_MAX_SPEED = 0.18
 MAX_BASE_FORWARD_DRIFT = 0.04
 BODY_CONTACT_FORCE_THRESHOLD = 1.0
 FOOT_GROUND_MAX_HEIGHT = 0.06
+FOOT_SUPPORT_FORCE_THRESHOLD = 1.5
+MIN_SUPPORTED_FEET = 2
+MAX_FOOT_HEIGHT = 0.12
+BASE_HEIGHT_RANGE = (0.25, 0.39)
+MAX_ABS_BASE_ROLL_PITCH = 0.25
+# Render from behind and above the robot, looking below the base.  Keeping the
+# table farther from the camera than the robot prevents the tabletop from
+# visually hiding the legs.
+CAMERA_POSITION_LOCAL = (-0.65, 0.75, 0.30)
+CAMERA_TARGET_LOCAL = (0.10, 0.0, -0.14)
 
 
 def phase_at(step, phases=PHASE_STEPS):
@@ -108,6 +118,54 @@ def required_foot_body_names(body_names):
     if missing:
         raise ValueError(f"missing required foot bodies: {missing}")
     return preferred
+
+
+def evaluate_stance_frame(
+    base_height,
+    base_roll,
+    base_pitch,
+    foot_heights,
+    foot_contact_forces,
+    *,
+    base_height_range=BASE_HEIGHT_RANGE,
+    maximum_abs_roll_pitch=MAX_ABS_BASE_ROLL_PITCH,
+    foot_ground_max_height=FOOT_GROUND_MAX_HEIGHT,
+    foot_support_force_threshold=FOOT_SUPPORT_FORCE_THRESHOLD,
+    minimum_supported_feet=MIN_SUPPORTED_FEET,
+    maximum_foot_height=MAX_FOOT_HEIGHT,
+):
+    """Fail closed unless the base is upright and supported by ground feet."""
+    if len(foot_heights) != 4 or len(foot_contact_forces) != 4:
+        raise ValueError("stance validation requires exactly four feet")
+    values = [
+        base_height,
+        base_roll,
+        base_pitch,
+        *foot_heights,
+        *foot_contact_forces,
+    ]
+    failures = []
+    if not all(math.isfinite(float(value)) for value in values):
+        failures.append("nonfinite")
+    supported = [
+        float(height) <= foot_ground_max_height
+        and float(force) >= foot_support_force_threshold
+        for height, force in zip(foot_heights, foot_contact_forces)
+    ]
+    if not base_height_range[0] <= float(base_height) <= base_height_range[1]:
+        failures.append("base_height")
+    if max(abs(float(base_roll)), abs(float(base_pitch))) > maximum_abs_roll_pitch:
+        failures.append("base_tilt")
+    if sum(supported) < minimum_supported_feet:
+        failures.append("insufficient_foot_support")
+    if max(float(height) for height in foot_heights) > maximum_foot_height:
+        failures.append("foot_too_high")
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "supported_foot_count": sum(supported),
+        "supported_feet": supported,
+    }
 
 
 def evaluate_pick_trace(
@@ -377,6 +435,7 @@ def run(args):
     )
     robot_body_count = len(env.body_names)
     foot_body_names = required_foot_body_names(env.body_names)
+    foot_body_indices = [env.body_names.index(name) for name in foot_body_names]
     target_orientation = torch.tensor(
         [args.target_roll, args.target_pitch, args.target_yaw],
         device=env.device,
@@ -391,6 +450,12 @@ def run(args):
         device=env.device,
         dtype=torch.float,
     )
+    camera_position_local = torch.tensor(
+        CAMERA_POSITION_LOCAL, device=env.device, dtype=torch.float
+    ).unsqueeze(0)
+    camera_target_local = torch.tensor(
+        CAMERA_TARGET_LOCAL, device=env.device, dtype=torch.float
+    ).unsqueeze(0)
 
     writer = None
     trace = []
@@ -402,6 +467,12 @@ def run(args):
     quadruped_collision_steps = []
     quadruped_collision_bodies = set()
     base_forward_drifts = []
+    base_heights = []
+    base_roll_pitch_abs = []
+    supported_foot_counts = []
+    foot_heights_trace = []
+    stance_failure_steps = []
+    stance_failure_reasons = set()
     gripper_latched = False
     reference_object_world = None
     reference_object_z = None
@@ -414,16 +485,20 @@ def run(args):
         finger_forces,
         base_forward_drift,
         collision_bodies,
+        base_rpy,
+        foot_heights,
+        stance,
     ):
         nonlocal writer
         if video_path is None:
             return
         root_pos = env._robot_root_states[0, :3].detach().cpu().numpy()
-        # A lower side view keeps the legs and the thin tabletop visually
-        # separated.  The old steep view made a white 0.10 m slab look like
-        # ground passing through the robot.
-        camera_position = root_pos + np.array([0.05, 1.10, 0.36])
-        camera_target = root_pos + np.array([0.22, 0.0, 0.18])
+        camera_position = root_pos + quat_apply(
+            env.base_yaw_quat[0:1], camera_position_local
+        )[0].detach().cpu().numpy()
+        camera_target = root_pos + quat_apply(
+            env.base_yaw_quat[0:1], camera_target_local
+        )[0].detach().cpu().numpy()
         camera = env._rendering_camera_handles[0]
         env.gym.set_camera_location(
             camera,
@@ -457,7 +532,31 @@ def run(args):
                 f"base drift {100.0 * base_forward_drift:+4.1f} cm  "
                 f"body collision {','.join(collision_bodies) or 'none'}"
             ),
+            (20, 136),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (20, 20, 20),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            (
+                f"stance {stance['supported_foot_count']}/4  "
+                f"base z {root_pos[2]:.3f} m  "
+                f"r/p {base_rpy[0]:+.2f}/{base_rpy[1]:+.2f} rad"
+            ),
             (20, 88),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.50,
+            (20, 20, 20),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            "feet z " + "/".join(f"{height:.3f}" for height in foot_heights),
+            (20, 112),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.48,
             (20, 20, 20),
@@ -619,6 +718,29 @@ def run(args):
             if collision_bodies:
                 quadruped_collision_steps.append(step)
                 quadruped_collision_bodies.update(collision_bodies)
+            base_rpy = torch.stack(
+                euler_from_quat(env._robot_root_states[:, 3:7]), dim=-1
+            )
+            foot_height_values = robot_body_heights[foot_body_indices]
+            foot_force_values = contact_force_norms[foot_body_indices]
+            foot_heights = foot_height_values.detach().cpu().tolist()
+            foot_contact_forces = foot_force_values.detach().cpu().tolist()
+            stance = evaluate_stance_frame(
+                base_height=float(env._robot_root_states[0, 2].item()),
+                base_roll=float(base_rpy[0, 0].item()),
+                base_pitch=float(base_rpy[0, 1].item()),
+                foot_heights=foot_heights,
+                foot_contact_forces=foot_contact_forces,
+            )
+            base_heights.append(float(env._robot_root_states[0, 2].item()))
+            base_roll_pitch_abs.append(
+                max(abs(float(base_rpy[0, 0].item())), abs(float(base_rpy[0, 1].item())))
+            )
+            supported_foot_counts.append(stance["supported_foot_count"])
+            foot_heights_trace.extend(foot_heights)
+            if not stance["passed"]:
+                stance_failure_steps.append(step)
+                stance_failure_reasons.update(stance["failures"])
             if reference_object_z is None:
                 lift_margin_tensor = torch.zeros(env.num_envs, device=env.device)
             else:
@@ -634,9 +756,6 @@ def run(args):
                 )
             finger_force_tensor = torch.norm(
                 env._contact_forces[:, env.finger_indices, :], dim=-1
-            )
-            base_rpy = torch.stack(
-                euler_from_quat(env._robot_root_states[:, 3:7]), dim=-1
             )
             ee_rpy = torch.stack(euler_from_quat(env.ee_orn), dim=-1)
             ik_height_error = torch.abs(env.ee_goal_world[:, 2] - env.ee_pos[:, 2])
@@ -695,6 +814,11 @@ def run(args):
                     "table_top_height_m": float(table_top[0].item()),
                     "base_forward_drift_m": base_forward_drift,
                     "quadruped_collision_bodies": collision_bodies,
+                    "foot_body_names": list(foot_body_names),
+                    "foot_heights_m": foot_heights,
+                    "foot_contact_force_n": foot_contact_forces,
+                    "supported_foot_count": stance["supported_foot_count"],
+                    "stance_failures": stance["failures"],
                     "ik_height_error_m": float(ik_height_error[0].item()),
                     "termination_predicates": {
                         "roll": bool(torch.abs(base_rpy[0, 0]) > 0.8),
@@ -714,11 +838,16 @@ def run(args):
                 finger_forces,
                 base_forward_drift,
                 collision_bodies,
+                base_rpy[0].detach().cpu().tolist(),
+                foot_heights,
+                stance,
             )
 
             if first_bad is not None:
                 break
             if collision_bodies:
+                break
+            if not stance["passed"]:
                 break
             if bool(done[0].item()):
                 reset_step = step
@@ -736,9 +865,10 @@ def run(args):
     scene_geometry_passed = (
         not quadruped_collision_steps
         and maximum_base_forward_drift <= MAX_BASE_FORWARD_DRIFT
+        and not stance_failure_steps
     )
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "demo_type": "scripted_ground_truth_high_level",
         "learned_high_level_policy": False,
         "production_low_level_loader": True,
@@ -780,6 +910,11 @@ def run(args):
             "maximum_base_forward_drift_m": MAX_BASE_FORWARD_DRIFT,
             "body_contact_force_n": BODY_CONTACT_FORCE_THRESHOLD,
             "foot_ground_max_height_m": FOOT_GROUND_MAX_HEIGHT,
+            "foot_support_force_n": FOOT_SUPPORT_FORCE_THRESHOLD,
+            "minimum_supported_feet": MIN_SUPPORTED_FEET,
+            "maximum_foot_height_m": MAX_FOOT_HEIGHT,
+            "base_height_range_m": list(BASE_HEIGHT_RANGE),
+            "maximum_abs_base_roll_pitch_rad": MAX_ABS_BASE_ROLL_PITCH,
         },
         "maximum_lift_margin_m": max(lift_margins),
         "final_lift_margin_m": lift_margins[-1],
@@ -788,6 +923,15 @@ def run(args):
         "maximum_abs_base_forward_drift_m": maximum_base_forward_drift,
         "quadruped_collision_steps": quadruped_collision_steps,
         "quadruped_collision_bodies": sorted(quadruped_collision_bodies),
+        "stance_passed": not stance_failure_steps,
+        "stance_failure_steps": stance_failure_steps,
+        "stance_failure_reasons": sorted(stance_failure_reasons),
+        "minimum_base_height_m": min(base_heights),
+        "maximum_base_height_m": max(base_heights),
+        "maximum_abs_base_roll_pitch_rad": max(base_roll_pitch_abs),
+        "minimum_supported_foot_count": min(supported_foot_counts),
+        "minimum_foot_height_m": min(foot_heights_trace),
+        "maximum_foot_height_m": max(foot_heights_trace),
         "scene_geometry_passed": scene_geometry_passed,
         **trace_result,
         "reset_step": reset_step,

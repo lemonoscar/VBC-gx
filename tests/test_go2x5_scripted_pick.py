@@ -135,6 +135,47 @@ def test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm():
     ) == ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
 
 
+def test_stance_gate_requires_an_upright_supported_quadruped():
+    upright = MODULE.evaluate_stance_frame(
+        base_height=0.32,
+        base_roll=0.04,
+        base_pitch=-0.08,
+        foot_heights=[0.02, 0.02, 0.03, 0.03],
+        foot_contact_forces=[20.0, 18.0, 22.0, 19.0],
+    )
+    assert upright["passed"]
+    assert upright["supported_foot_count"] == 4
+    assert upright["failures"] == []
+
+    unsupported = MODULE.evaluate_stance_frame(
+        base_height=0.32,
+        base_roll=0.0,
+        base_pitch=0.0,
+        foot_heights=[0.18, 0.20, 0.02, 0.03],
+        foot_contact_forces=[0.0, 0.0, 0.0, 0.0],
+    )
+    assert not unsupported["passed"]
+    assert "insufficient_foot_support" in unsupported["failures"]
+    assert "foot_too_high" in unsupported["failures"]
+
+    fallen = MODULE.evaluate_stance_frame(
+        base_height=0.18,
+        base_roll=0.30,
+        base_pitch=0.0,
+        foot_heights=[0.02] * 4,
+        foot_contact_forces=[20.0] * 4,
+    )
+    assert not fallen["passed"]
+    assert "base_height" in fallen["failures"]
+    assert "base_tilt" in fallen["failures"]
+
+
+def test_render_camera_is_behind_robot_and_looks_below_the_base():
+    assert MODULE.CAMERA_POSITION_LOCAL[0] < 0.0
+    assert MODULE.CAMERA_POSITION_LOCAL[1] > 0.0
+    assert MODULE.CAMERA_TARGET_LOCAL[2] < 0.0
+
+
 def test_scripted_demo_has_a_bounded_forward_pose_hold():
     assert MODULE.BASE_HOLD_GAIN > 0.0
     assert 0.05 < MODULE.BASE_HOLD_MAX_SPEED <= 0.20
@@ -148,5 +189,7 @@ if __name__ == "__main__":
     test_object_offset_cli_defaults_to_near_reachable_table_region()
     test_fixed_table_height_is_available_before_actor_creation()
     test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm()
+    test_stance_gate_requires_an_upright_supported_quadruped()
+    test_render_camera_is_behind_robot_and_looks_below_the_base()
     test_scripted_demo_has_a_bounded_forward_pose_hold()
     print("Go2-X5 scripted pick tests passed")
