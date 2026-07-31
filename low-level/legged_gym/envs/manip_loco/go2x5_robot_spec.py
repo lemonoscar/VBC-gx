@@ -65,14 +65,15 @@ ARM_READY_JOINT_ANGLES = [0.0, 2.4, 1.15, 0.0, 0.0, 0.0]
 # Go2-X5 tabletop task geometry, scaled from the original B1-Z1 solid support
 # box (0.60 x 1.00 x 0.25 m) by the 0.32 / 0.55 stance-height ratio.  Keep the
 # support grounded: a floating thin slab visually cuts through the legs.  The
-# near edge is 0.45 m from the nominal root and leaves 0.11 m in front of the
-# foremost collision geometry.  Objects remain on the near side of the support
-# so their root-forward positions stay inside the low-level EE workspace.
+# B1 starts 2.0 m behind the table; scaling that distance by 0.32 / 0.55 gives
+# 1.16 m.  The Go2 root-to-table-center distance below is 1.15 m.  Therefore
+# high-level must first command locomotion and only then use the arm workspace;
+# requiring initial arm reach is precisely what made the old scene overlap.
 HIGH_LEVEL_ROBOT_START_POSE = [-0.45, 0.0, BASE_INIT_HEIGHT]
 HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT = 0.34
 HIGH_LEVEL_TABLE_MIN_FRONT_CLEARANCE = 0.05
 HIGH_LEVEL_TABLE_DIMS = [0.40, 0.60, 0.15]
-HIGH_LEVEL_TABLE_POSITION_XY = [0.20, 0.0]
+HIGH_LEVEL_TABLE_POSITION_XY = [0.70, 0.0]
 HIGH_LEVEL_TABLE_COLOR = [0.36, 0.20, 0.08]
 HIGH_LEVEL_TABLE_HEIGHT_RANGE = [0.15, 0.15]
 HIGH_LEVEL_OBJECT_POSITION_RANGE_X = [-0.18, -0.09]

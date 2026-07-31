@@ -188,7 +188,7 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["fingerBodyNames"] == spec.FINGER_BODY_NAMES
     assert asset_cfg["robotAssetRoot"] == spec.HIGH_LEVEL_ASSET_ROOT
     assert asset_cfg["assetFileRobot"] == spec.HIGH_LEVEL_ASSET_FILE
-    assert asset_cfg["flipVisualAttachments"] is True
+    assert asset_cfg["flipVisualAttachments"] is False
 
     high_level_root = ROOT / "high-level"
     high_level_asset = (high_level_root / asset_cfg["robotAssetRoot"] / asset_cfg["assetFileRobot"]).resolve()
@@ -245,21 +245,22 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
     table_center_x = spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
     table_near_edge_x = table_center_x - spec.HIGH_LEVEL_TABLE_DIMS[0] / 2.0
     robot_front_x = robot_x + spec.HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT
-    assert round(table_near_edge_x - robot_x, 6) == 0.45
+    root_to_table_center = table_center_x - robot_x
+    b1_scaled_center_distance = 2.0 * spec.BASE_INIT_HEIGHT / 0.55
+    assert abs(root_to_table_center - b1_scaled_center_distance) <= 0.02
+    assert round(table_near_edge_x - robot_x, 6) == 0.95
     assert (
         table_near_edge_x - robot_front_x
         >= spec.HIGH_LEVEL_TABLE_MIN_FRONT_CLEARANCE
     )
-    object_root_forward_x = [
-        spec.HIGH_LEVEL_TABLE_POSITION_XY[0] + bound - robot_x
+    object_world_x = [
+        spec.HIGH_LEVEL_TABLE_POSITION_XY[0] + bound
         for bound in spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X
     ]
-    assert (
-        spec.EE_GOAL_WORLD_RANGES[0][0]
-        <= min(object_root_forward_x)
-        <= max(object_root_forward_x)
-        <= spec.EE_GOAL_WORLD_RANGES[0][1]
-    )
+    initial_arm_base_x = robot_x + spec.ARM_BASE_OFFSET[0]
+    initial_arm_object_distance = min(object_world_x) - initial_arm_base_x
+    assert initial_arm_object_distance > spec.HIGH_LEVEL_BASE_OBJECT_DISTANCE
+    assert initial_arm_object_distance > spec.EE_GOAL_WORLD_RANGES[0][1]
     assert (
         spec.EE_GOAL_WORLD_RANGES[1][0]
         <= spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y[0]

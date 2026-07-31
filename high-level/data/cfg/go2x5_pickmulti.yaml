@@ -63,7 +63,7 @@ env:
   flangeBodyName: "arm_link6"
   fingerBodyNames: ["arm_link7", "arm_link8"]
   tableDims: [0.40, 0.60, 0.15]
-  tablePositionXY: [0.20, 0.0]
+  tablePositionXY: [0.70, 0.0]
   tableColor: [0.36, 0.20, 0.08]
   tableHeightRange: [0.15, 0.15]
   objectPositionRangeX: [-0.18, -0.09]
@@ -138,7 +138,7 @@ env:
     assetFileRobot: "go2x5/go2_x5.urdf"
     baseBodyName: "base"
     replaceCylinderWithCapsule: false
-    flipVisualAttachments: true
+    flipVisualAttachments: false
     assetFileObj: "obj_set/"
 
     asset_multi:
