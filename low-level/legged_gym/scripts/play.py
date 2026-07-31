@@ -108,6 +108,7 @@ def play(args):
         env_cfg.commands.ranges.lin_vel_y = [0.0, 0.0]
         env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
         env_cfg.commands.straight_line_probability = 0.0
+        env_cfg.commands.turn_in_place_probability = 0.0
         # Remove observation noise for cleaner stability observation.
         env_cfg.noise.add_noise = False
         env_cfg.noise.noise_level = 0.0

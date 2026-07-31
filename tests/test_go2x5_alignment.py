@@ -699,6 +699,18 @@ def test_high_level_training_entrypoint_is_fail_closed_and_one_shot():
     assert "nonfinite_count == 0" in readiness_source
 
 
+def test_flat_playback_disables_incompatible_command_modes():
+    play_source = (
+        ROOT / "low-level/legged_gym/scripts/play.py"
+    ).read_text(encoding="utf-8")
+    flat_start = play_source.index("    if args.flat_terrain:")
+    flat_end = play_source.index("    # prepare environment", flat_start)
+    flat_block = play_source[flat_start:flat_end]
+    assert "ranges.ang_vel_yaw = [0.0, 0.0]" in flat_block
+    assert "straight_line_probability = 0.0" in flat_block
+    assert "turn_in_place_probability = 0.0" in flat_block
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
