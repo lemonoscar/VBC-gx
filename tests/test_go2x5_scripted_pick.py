@@ -1,9 +1,11 @@
 import importlib.util
+import ast
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "high-level/demo_go2x5_scripted_pick.py"
+PICKMULTI = ROOT / "high-level/envs/b1z1_pickmulti.py"
 SPEC = importlib.util.spec_from_file_location("go2x5_scripted_pick", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
@@ -46,7 +48,51 @@ def test_pick_trace_requires_sustained_lift_and_two_finger_contact():
     assert not one_finger["two_finger_contact_passed"]
 
 
+def test_preclose_is_distance_gated_during_descent():
+    assert not MODULE.should_close_gripper("approach", 0.01, 0.13)
+    assert not MODULE.should_close_gripper("descend", 0.14, 0.13)
+    assert MODULE.should_close_gripper("descend", 0.13, 0.13)
+    assert MODULE.should_close_gripper("close", 1.0, 0.0)
+
+
+def test_fixed_table_height_is_available_before_actor_creation():
+    tree = ast.parse(PICKMULTI.read_text(encoding="utf-8"))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "B1Z1PickMulti"
+    )
+    init_node = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assignment = next(
+        node
+        for node in ast.walk(init_node)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Attribute)
+            and target.attr == "table_heights_fix"
+            for target in node.targets
+        )
+    )
+    super_call = next(
+        node
+        for node in ast.walk(init_node)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "__init__"
+        and isinstance(node.func.value, ast.Call)
+        and isinstance(node.func.value.func, ast.Name)
+        and node.func.value.func.id == "super"
+    )
+    assert assignment.lineno < super_call.lineno
+
+
 if __name__ == "__main__":
     test_phase_schedule_is_contiguous_and_complete()
     test_pick_trace_requires_sustained_lift_and_two_finger_contact()
+    test_preclose_is_distance_gated_during_descent()
+    test_fixed_table_height_is_available_before_actor_creation()
     print("Go2-X5 scripted pick tests passed")

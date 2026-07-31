@@ -20,10 +20,13 @@ import torchvision.transforms as transforms
 class B1Z1PickMulti(B1Z1Base):
     def __init__(self, table_height=None, *args, **kwargs):
         self.num_actors = 3
+        # The table is a fixed-base actor, so its physical pose must be chosen
+        # before actor creation. Updating only its root-state tensor on reset
+        # leaves the collision geometry at the original height.
+        self.table_heights_fix = table_height
         super().__init__(*args, **kwargs)
         self.near_goal_stop = self.cfg["env"].get("near_goal_stop", False)
         self.obj_move_prob = self.cfg["env"].get("obj_move_prob", 0.0)
-        self.table_heights_fix = table_height
 
     def update_roboinfo(self):
         super().update_roboinfo()
@@ -69,6 +72,14 @@ class B1Z1PickMulti(B1Z1Base):
             raise ValueError(
                 "tableHeightRange minimum must keep the tabletop box above the ground: "
                 f"height={self.table_height_range[0]}, thickness={self.table_dims_cfg[2]}"
+            )
+        if (
+            self.table_heights_fix is not None
+            and float(self.table_heights_fix) < float(self.table_dims_cfg[2])
+        ):
+            raise ValueError(
+                "fixed table height must keep the tabletop box above the ground: "
+                f"height={self.table_heights_fix}, thickness={self.table_dims_cfg[2]}"
             )
         self.obj_list = list(self.multi_obj.keys())
         self.obj_height = [self.multi_obj[obj]["height"] for obj in self.obj_list]
@@ -127,8 +138,16 @@ class B1Z1PickMulti(B1Z1Base):
         col_filter = 0
         i = env_i
         
-        table_pos = [self.table_position_xy[0], self.table_position_xy[1], self.table_dims.z / 2]
-        self.table_heights[i] = table_pos[-1] + self.table_dims.z / 2
+        if self.table_heights_fix is None:
+            table_height = np.random.uniform(*self.table_height_range)
+        else:
+            table_height = float(self.table_heights_fix)
+        table_pos = [
+            self.table_position_xy[0],
+            self.table_position_xy[1],
+            table_height - self.table_dims.z / 2,
+        ]
+        self.table_heights[i] = table_height
 
         obj_idx = i % len(self.obj_list)
         obj_asset = self.ycb_asset_list[obj_idx]
@@ -346,18 +365,14 @@ class B1Z1PickMulti(B1Z1Base):
     def _reset_table(self, env_ids):
         if len(env_ids)==0:
             return
-        
+
+        # Fixed-base actors cannot be height-randomized by rewriting their
+        # root-state tensor. Keep the per-environment height sampled at actor
+        # creation so the state and collision geometry remain identical.
         self._table_root_states[env_ids] = self._initial_table_root_states[env_ids]
-        if self.table_heights_fix is None:
-            rand_heights = torch_rand_float(
-                self.table_height_range[0], self.table_height_range[1],
-                (len(env_ids), 1), device=self.device,
-            )
-        else:
-            rand_heights = torch.ones((len(env_ids), 1), device=self.device, dtype=torch.float) * self.table_heights_fix
-        
-        self._table_root_states[env_ids, 2] = rand_heights.squeeze(1) - self.table_dimz / 2.0
-        self.table_heights[env_ids] = self._table_root_states[env_ids, 2] + self.table_dimz / 2.0
+        self.table_heights[env_ids] = (
+            self._initial_table_root_states[env_ids, 2] + self.table_dimz / 2.0
+        )
     
     def _reset_actors(self, env_ids):
         self._reset_table(env_ids)

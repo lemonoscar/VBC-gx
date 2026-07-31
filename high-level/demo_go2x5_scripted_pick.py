@@ -54,6 +54,16 @@ def longest_true_run(values):
     return longest
 
 
+def should_close_gripper(phase, ee_distance, preclose_distance):
+    if phase in {"close", "lift", "hold"}:
+        return True
+    return (
+        phase == "descend"
+        and preclose_distance > 0.0
+        and ee_distance <= preclose_distance
+    )
+
+
 def evaluate_pick_trace(
     lift_margins,
     ee_distances,
@@ -111,6 +121,8 @@ def parse_args(argv=None):
     parser.add_argument("--grasp-standoff", type=float, default=0.035)
     parser.add_argument("--grasp-z-offset", type=float, default=0.0)
     parser.add_argument("--lift-height", type=float, default=0.18)
+    parser.add_argument("--target-pitch", type=float, default=1.25)
+    parser.add_argument("--preclose-ee-distance", type=float, default=0.13)
     parser.add_argument("--seed", type=int, default=20260731)
     parser.add_argument("--sim-device", default="cuda:0")
     parser.add_argument("--rl-device", default="cuda:0")
@@ -130,6 +142,10 @@ def parse_args(argv=None):
     for field in ("approach_distance", "grasp_standoff", "lift_height"):
         if getattr(args, field) <= 0.0:
             parser.error(f"--{field.replace('_', '-')} must be positive")
+    if not 1.0 <= args.target_pitch <= 1.5:
+        parser.error("--target-pitch must be within the trained range [1.0, 1.5]")
+    if args.preclose_ee_distance < 0.0:
+        parser.error("--preclose-ee-distance must be non-negative")
     return args
 
 
@@ -185,7 +201,7 @@ def first_nonfinite(fields, torch):
 
 def run(args):
     bootstrap_runtime()
-    from isaacgym import gymtorch
+    from isaacgym import gymapi, gymtorch
     from isaacgym.torch_utils import (
         euler_from_quat,
         quat_apply,
@@ -283,10 +299,10 @@ def run(args):
     initial_goal_world = env.ee_goal_world.clone()
     initial_heading = torch.stack(euler_from_quat(env.base_yaw_quat), dim=-1)[:, 2]
     target_orientation = torch.tensor(
-        [0.0, 1.25, 0.0], device=env.device, dtype=torch.float
+        [0.0, args.target_pitch, 0.0], device=env.device, dtype=torch.float
     ).repeat(env.num_envs, 1)
     approach_direction_local = torch.tensor(
-        [math.cos(1.25), 0.0, -math.sin(1.25)],
+        [math.cos(args.target_pitch), 0.0, -math.sin(args.target_pitch)],
         device=env.device,
         dtype=torch.float,
     )
@@ -306,7 +322,25 @@ def run(args):
         nonlocal writer
         if video_path is None:
             return
-        rgba = np.asarray(env.render_record()[0], dtype=np.uint8)
+        root_pos = env._robot_root_states[0, :3].detach().cpu().numpy()
+        camera_position = root_pos + np.array([0.12, 1.05, 0.55])
+        camera_target = root_pos + np.array([0.22, 0.0, 0.12])
+        camera = env._rendering_camera_handles[0]
+        env.gym.set_camera_location(
+            camera,
+            env.envs[0],
+            gymapi.Vec3(*camera_position),
+            gymapi.Vec3(*camera_target),
+        )
+        env.gym.step_graphics(env.sim)
+        env.gym.render_all_camera_sensors(env.sim)
+        image = env.gym.get_camera_image(
+            env.sim, env.envs[0], camera, gymapi.IMAGE_COLOR
+        )
+        height, packed_width = image.shape
+        rgba = np.asarray(
+            image.reshape([height, packed_width // 4, 4]), dtype=np.uint8
+        )
         frame = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
         cv2.putText(
             frame,
@@ -417,8 +451,16 @@ def run(args):
                 torch.sin(orientation_error), torch.cos(orientation_error)
             )
             action[:, 3:6] = torch.clamp(orientation_error, -0.06, 0.06)
-            action[:, 6] = -1.0 if phase in {"close", "lift", "hold"} else 1.0
-            if phase not in {"close", "lift", "hold"}:
+            ee_distance_before = float(
+                torch.norm(
+                    env._cube_root_states[0, :3] - env.ee_pos[0]
+                ).item()
+            )
+            gripper_closed = should_close_gripper(
+                phase, ee_distance_before, args.preclose_ee_distance
+            )
+            action[:, 6] = -1.0 if gripper_closed else 1.0
+            if not gripper_closed:
                 heading = torch.stack(
                     euler_from_quat(env.base_yaw_quat), dim=-1
                 )[:, 2]
@@ -445,6 +487,15 @@ def run(args):
                 )
             finger_force_tensor = torch.norm(
                 env._contact_forces[:, env.finger_indices, :], dim=-1
+            )
+            base_rpy = torch.stack(
+                euler_from_quat(env._robot_root_states[:, 3:7]), dim=-1
+            )
+            ee_rpy = torch.stack(euler_from_quat(env.ee_orn), dim=-1)
+            ik_height_error = torch.abs(env.ee_goal_world[:, 2] - env.ee_pos[:, 2])
+            table_top = env._table_root_states[:, 2] + env.table_dimz / 2.0
+            cube_fell = env._cube_root_states[:, 2] < (
+                env.table_heights - env.object_fall_tolerance
             )
 
             first_bad = first_nonfinite(
@@ -480,10 +531,31 @@ def run(args):
                     .cpu()
                     .tolist(),
                     "ee_position": env.ee_pos[0].detach().cpu().tolist(),
+                    "ee_orientation_rpy": ee_rpy[0].detach().cpu().tolist(),
+                    "ee_goal_world": env.ee_goal_world[0].detach().cpu().tolist(),
                     "base_position": env._robot_root_states[0, :3]
                     .detach()
                     .cpu()
                     .tolist(),
+                    "base_orientation_rpy": base_rpy[0].detach().cpu().tolist(),
+                    "gripper_closed_command": gripper_closed,
+                    "gripper_dof_position": env._dof_pos[
+                        0, -env.num_physical_gripper_dof:
+                    ]
+                    .detach()
+                    .cpu()
+                    .tolist(),
+                    "table_top_height_m": float(table_top[0].item()),
+                    "ik_height_error_m": float(ik_height_error[0].item()),
+                    "termination_predicates": {
+                        "roll": bool(torch.abs(base_rpy[0, 0]) > 0.8),
+                        "pitch": bool(torch.abs(base_rpy[0, 1]) > 0.8),
+                        "base_height": bool(
+                            env._robot_root_states[0, 2] < 0.1
+                        ),
+                        "ik": bool(ik_height_error[0] > 0.2),
+                        "object_fell": bool(cube_fell[0]),
+                    },
                 }
             )
             capture_frame(phase, lift_margin, ee_distance, finger_forces)
@@ -524,6 +596,7 @@ def run(args):
             "grasp_standoff_m": args.grasp_standoff,
             "grasp_z_offset_m": args.grasp_z_offset,
             "lift_height_m": args.lift_height,
+            "preclose_ee_distance_m": args.preclose_ee_distance,
         },
         "thresholds": {
             "minimum_lift_m": 0.10,
