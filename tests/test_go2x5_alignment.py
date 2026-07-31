@@ -188,6 +188,7 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["fingerBodyNames"] == spec.FINGER_BODY_NAMES
     assert asset_cfg["robotAssetRoot"] == spec.HIGH_LEVEL_ASSET_ROOT
     assert asset_cfg["assetFileRobot"] == spec.HIGH_LEVEL_ASSET_FILE
+    assert asset_cfg["flipVisualAttachments"] is True
 
     high_level_root = ROOT / "high-level"
     high_level_asset = (high_level_root / asset_cfg["robotAssetRoot"] / asset_cfg["assetFileRobot"]).resolve()

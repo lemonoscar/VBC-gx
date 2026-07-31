@@ -138,6 +138,7 @@ env:
     assetFileRobot: "go2x5/go2_x5.urdf"
     baseBodyName: "base"
     replaceCylinderWithCapsule: false
+    flipVisualAttachments: true
     assetFileObj: "obj_set/"
 
     asset_multi:

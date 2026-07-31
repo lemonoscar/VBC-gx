@@ -797,7 +797,9 @@ class B1Z1Base(RewardVecTask):
         asset_options.replace_cylinder_with_capsule = bool(
             self.cfg["env"]["asset"].get("replaceCylinderWithCapsule", True)
         )
-        asset_options.flip_visual_attachments = False
+        asset_options.flip_visual_attachments = bool(
+            self.cfg["env"]["asset"].get("flipVisualAttachments", False)
+        )
         asset_options.fix_base_link = False
         asset_options.density = 1000.0
         asset_options.angular_damping = 0.
