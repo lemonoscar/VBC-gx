@@ -75,6 +75,9 @@ def test_object_offset_cli_defaults_to_table_center():
         )
         assert args.object_x_offset == 0.0
         assert args.object_y_offset == 0.0
+        assert args.target_roll == 0.0
+        assert args.target_pitch == 1.25
+        assert args.target_yaw == 0.0
 
 
 def test_fixed_table_height_is_available_before_actor_creation():

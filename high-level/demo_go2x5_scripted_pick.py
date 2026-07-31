@@ -123,7 +123,9 @@ def parse_args(argv=None):
     parser.add_argument("--grasp-standoff", type=float, default=0.035)
     parser.add_argument("--grasp-z-offset", type=float, default=0.0)
     parser.add_argument("--lift-height", type=float, default=0.18)
+    parser.add_argument("--target-roll", type=float, default=0.0)
     parser.add_argument("--target-pitch", type=float, default=1.25)
+    parser.add_argument("--target-yaw", type=float, default=0.0)
     parser.add_argument("--preclose-ee-distance", type=float, default=0.13)
     parser.add_argument("--seed", type=int, default=20260731)
     parser.add_argument("--sim-device", default="cuda:0")
@@ -146,6 +148,12 @@ def parse_args(argv=None):
             parser.error(f"--{field.replace('_', '-')} must be positive")
     if not 1.0 <= args.target_pitch <= 1.5:
         parser.error("--target-pitch must be within the trained range [1.0, 1.5]")
+    for field in ("target_roll", "target_yaw"):
+        if abs(getattr(args, field)) > 0.35:
+            parser.error(
+                f"--{field.replace('_', '-')} must be within the trained "
+                "delta range [-0.35, 0.35]"
+            )
     if args.preclose_ee_distance < 0.0:
         parser.error("--preclose-ee-distance must be non-negative")
     return args
@@ -315,10 +323,16 @@ def run(args):
     initial_goal_world = env.ee_goal_world.clone()
     initial_heading = torch.stack(euler_from_quat(env.base_yaw_quat), dim=-1)[:, 2]
     target_orientation = torch.tensor(
-        [0.0, args.target_pitch, 0.0], device=env.device, dtype=torch.float
+        [args.target_roll, args.target_pitch, args.target_yaw],
+        device=env.device,
+        dtype=torch.float,
     ).repeat(env.num_envs, 1)
     approach_direction_local = torch.tensor(
-        [math.cos(args.target_pitch), 0.0, -math.sin(args.target_pitch)],
+        [
+            math.cos(args.target_yaw) * math.cos(args.target_pitch),
+            math.sin(args.target_yaw) * math.cos(args.target_pitch),
+            -math.sin(args.target_pitch),
+        ],
         device=env.device,
         dtype=torch.float,
     )
