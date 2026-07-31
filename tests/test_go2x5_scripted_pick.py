@@ -54,6 +54,9 @@ def test_preclose_is_distance_gated_during_descent():
     assert not MODULE.should_close_gripper("descend", 0.14, 0.13)
     assert MODULE.should_close_gripper("descend", 0.13, 0.13)
     assert MODULE.should_close_gripper("close", 1.0, 0.0)
+    assert MODULE.update_gripper_latch(False, "descend", 0.12, 0.13)
+    assert MODULE.update_gripper_latch(True, "descend", 1.0, 0.13)
+    assert not MODULE.update_gripper_latch(False, "descend", 1.0, 0.13)
 
 
 def test_object_offset_cli_defaults_to_table_center():

@@ -64,6 +64,13 @@ def should_close_gripper(phase, ee_distance, preclose_distance):
     )
 
 
+def update_gripper_latch(latched, phase, ee_distance, preclose_distance):
+    return bool(
+        latched
+        or should_close_gripper(phase, ee_distance, preclose_distance)
+    )
+
+
 def evaluate_pick_trace(
     lift_margins,
     ee_distances,
@@ -344,6 +351,7 @@ def run(args):
     finger_forces_trace = []
     first_bad = None
     reset_step = None
+    gripper_latched = False
     reference_object_world = None
     reference_object_z = None
     waypoints = None
@@ -486,9 +494,13 @@ def run(args):
                     env._cube_root_states[0, :3] - env.ee_pos[0]
                 ).item()
             )
-            gripper_closed = should_close_gripper(
-                phase, ee_distance_before, args.preclose_ee_distance
+            gripper_latched = update_gripper_latch(
+                gripper_latched,
+                phase,
+                ee_distance_before,
+                args.preclose_ee_distance,
             )
+            gripper_closed = gripper_latched
             action[:, 6] = -1.0 if gripper_closed else 1.0
             if not gripper_closed:
                 heading = torch.stack(
