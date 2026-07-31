@@ -29,6 +29,9 @@ PHASE_STEPS = (
     ("lift", 20),
     ("hold", 12),
 )
+BASE_HOLD_GAIN = 2.0
+BASE_HOLD_MAX_SPEED = 0.12
+MAX_BASE_FORWARD_DRIFT = 0.06
 
 
 def phase_at(step, phases=PHASE_STEPS):
@@ -69,6 +72,27 @@ def update_gripper_latch(latched, phase, ee_distance, preclose_distance):
         latched
         or should_close_gripper(phase, ee_distance, preclose_distance)
     )
+
+
+def contact_body_pair(contact):
+    """Return environment-domain rigid-body indices from an Isaac contact."""
+    try:
+        return int(contact["body0"]), int(contact["body1"])
+    except (IndexError, KeyError, TypeError):
+        return int(contact.body0), int(contact.body1)
+
+
+def robot_table_contact_names(contacts, table_body_index, robot_body_names):
+    """List robot bodies contacting the table without using net-force guesses."""
+    names = set()
+    robot_body_count = len(robot_body_names)
+    for contact in contacts:
+        body0, body1 = contact_body_pair(contact)
+        if body0 == table_body_index and 0 <= body1 < robot_body_count:
+            names.add(robot_body_names[body1])
+        elif body1 == table_body_index and 0 <= body0 < robot_body_count:
+            names.add(robot_body_names[body0])
+    return sorted(names)
 
 
 def evaluate_pick_trace(
@@ -299,8 +323,11 @@ def run(args):
         robot_start_pose=None,
         rand_cmd_scale=False,
         rand_depth_clip=False,
-        stop_pick=True,
+        # The scripted controller holds the initial base pose throughout the
+        # grasp, including after closing the gripper.
+        stop_pick=False,
         table_height=args.table_height,
+        commands_curriculum=False,
         eval=False,
     )
 
@@ -328,7 +355,11 @@ def run(args):
     )
 
     initial_goal_world = env.ee_goal_world.clone()
+    initial_root_xy = env._robot_root_states[:, :2].clone()
     initial_heading = torch.stack(euler_from_quat(env.base_yaw_quat), dim=-1)[:, 2]
+    initial_forward = torch.stack(
+        [torch.cos(initial_heading), torch.sin(initial_heading)], dim=-1
+    )
     target_orientation = torch.tensor(
         [args.target_roll, args.target_pitch, args.target_yaw],
         device=env.device,
@@ -351,18 +382,31 @@ def run(args):
     finger_forces_trace = []
     first_bad = None
     reset_step = None
+    robot_table_contact_steps = []
+    robot_table_contact_bodies = set()
+    base_forward_drifts = []
     gripper_latched = False
     reference_object_world = None
     reference_object_z = None
     waypoints = None
 
-    def capture_frame(phase, lift_margin, ee_distance, finger_forces):
+    def capture_frame(
+        phase,
+        lift_margin,
+        ee_distance,
+        finger_forces,
+        base_forward_drift,
+        table_contact_bodies,
+    ):
         nonlocal writer
         if video_path is None:
             return
         root_pos = env._robot_root_states[0, :3].detach().cpu().numpy()
-        camera_position = root_pos + np.array([0.12, 1.05, 0.55])
-        camera_target = root_pos + np.array([0.22, 0.0, 0.12])
+        # A lower side view keeps the legs and the thin tabletop visually
+        # separated.  The old steep view made a white 0.10 m slab look like
+        # ground passing through the robot.
+        camera_position = root_pos + np.array([0.05, 1.10, 0.36])
+        camera_target = root_pos + np.array([0.22, 0.0, 0.18])
         camera = env._rendering_camera_handles[0]
         env.gym.set_camera_location(
             camera,
@@ -386,6 +430,19 @@ def run(args):
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
+            (20, 20, 20),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            (
+                f"base drift {100.0 * base_forward_drift:+4.1f} cm  "
+                f"table contact {','.join(table_contact_bodies) or 'none'}"
+            ),
+            (20, 88),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
             (20, 20, 20),
             2,
             cv2.LINE_AA,
@@ -502,18 +559,42 @@ def run(args):
             )
             gripper_closed = gripper_latched
             action[:, 6] = -1.0 if gripper_closed else 1.0
-            if not gripper_closed:
-                heading = torch.stack(
-                    euler_from_quat(env.base_yaw_quat), dim=-1
-                )[:, 2]
-                heading_error = torch.atan2(
-                    torch.sin(initial_heading - heading),
-                    torch.cos(initial_heading - heading),
-                )
-                action[:, 8] = torch.clamp(heading_error, -0.10, 0.10)
+            forward_displacement = torch.sum(
+                (env._robot_root_states[:, :2] - initial_root_xy)
+                * initial_forward,
+                dim=-1,
+            )
+            action[:, 7] = torch.clamp(
+                -BASE_HOLD_GAIN * forward_displacement,
+                -BASE_HOLD_MAX_SPEED,
+                BASE_HOLD_MAX_SPEED,
+            )
+            heading = torch.stack(
+                euler_from_quat(env.base_yaw_quat), dim=-1
+            )[:, 2]
+            heading_error = torch.atan2(
+                torch.sin(initial_heading - heading),
+                torch.cos(initial_heading - heading),
+            )
+            action[:, 8] = torch.clamp(heading_error, -0.10, 0.10)
 
             observation_dict, _, done, _ = env.step(action)
             observation = observation_dict["obs"]
+            base_forward_drift_tensor = torch.sum(
+                (env._robot_root_states[:, :2] - initial_root_xy)
+                * initial_forward,
+                dim=-1,
+            )
+            base_forward_drift = float(base_forward_drift_tensor[0].item())
+            base_forward_drifts.append(base_forward_drift)
+            table_contact_bodies = robot_table_contact_names(
+                env.gym.get_env_rigid_contacts(env.envs[0]),
+                int(env.table_idx),
+                env.body_names,
+            )
+            if table_contact_bodies:
+                robot_table_contact_steps.append(step)
+                robot_table_contact_bodies.update(table_contact_bodies)
             if reference_object_z is None:
                 lift_margin_tensor = torch.zeros(env.num_envs, device=env.device)
             else:
@@ -588,6 +669,8 @@ def run(args):
                     .cpu()
                     .tolist(),
                     "table_top_height_m": float(table_top[0].item()),
+                    "base_forward_drift_m": base_forward_drift,
+                    "robot_table_contact_bodies": table_contact_bodies,
                     "ik_height_error_m": float(ik_height_error[0].item()),
                     "termination_predicates": {
                         "roll": bool(torch.abs(base_rpy[0, 0]) > 0.8),
@@ -600,9 +683,18 @@ def run(args):
                     },
                 }
             )
-            capture_frame(phase, lift_margin, ee_distance, finger_forces)
+            capture_frame(
+                phase,
+                lift_margin,
+                ee_distance,
+                finger_forces,
+                base_forward_drift,
+                table_contact_bodies,
+            )
 
             if first_bad is not None:
+                break
+            if table_contact_bodies:
                 break
             if bool(done[0].item()):
                 reset_step = step
@@ -616,8 +708,13 @@ def run(args):
         ee_distances,
         finger_forces_trace,
     )
+    maximum_base_forward_drift = max(abs(value) for value in base_forward_drifts)
+    scene_geometry_passed = (
+        not robot_table_contact_steps
+        and maximum_base_forward_drift <= MAX_BASE_FORWARD_DRIFT
+    )
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "demo_type": "scripted_ground_truth_high_level",
         "learned_high_level_policy": False,
         "production_low_level_loader": True,
@@ -631,6 +728,11 @@ def run(args):
             args.object_y_offset,
         ],
         "table_height_m": args.table_height,
+        "table_dimensions_m": [float(value) for value in env.table_dims_cfg],
+        "table_position_xy_m": [
+            float(value) for value in env.table_position_xy
+        ],
+        "table_color_rgb": [float(value) for value in env.table_color],
         "object_yaw_rad": args.object_yaw,
         "schedule": dict(PHASE_STEPS),
         "controller": {
@@ -643,17 +745,24 @@ def run(args):
             "grasp_z_offset_m": args.grasp_z_offset,
             "lift_height_m": args.lift_height,
             "preclose_ee_distance_m": args.preclose_ee_distance,
+            "base_hold_gain": BASE_HOLD_GAIN,
+            "base_hold_max_speed_mps": BASE_HOLD_MAX_SPEED,
         },
         "thresholds": {
             "minimum_lift_m": 0.10,
             "maximum_ee_object_distance_m": 0.12,
             "minimum_finger_contact_force_n": 0.5,
             "required_hold_steps": 6,
+            "maximum_base_forward_drift_m": MAX_BASE_FORWARD_DRIFT,
         },
         "maximum_lift_margin_m": max(lift_margins),
         "final_lift_margin_m": lift_margins[-1],
         "minimum_ee_object_distance_m": min(ee_distances),
         "final_ee_object_distance_m": ee_distances[-1],
+        "maximum_abs_base_forward_drift_m": maximum_base_forward_drift,
+        "robot_table_contact_steps": robot_table_contact_steps,
+        "robot_table_contact_bodies": sorted(robot_table_contact_bodies),
+        "scene_geometry_passed": scene_geometry_passed,
         **trace_result,
         "reset_step": reset_step,
         "first_nonfinite": first_bad,
@@ -662,6 +771,7 @@ def run(args):
     }
     report["passed"] = (
         trace_result["passed"]
+        and scene_geometry_passed
         and reset_step is None
         and first_bad is None
     )

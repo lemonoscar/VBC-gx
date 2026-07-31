@@ -135,6 +135,7 @@ def test_high_level_yaml_uses_same_robot_interface():
     assert env_cfg["robotStartPose"] == spec.HIGH_LEVEL_ROBOT_START_POSE
     assert env_cfg["evalRobotStartPose"] == spec.HIGH_LEVEL_ROBOT_START_POSE
     assert env_cfg["tableDims"] == spec.HIGH_LEVEL_TABLE_DIMS
+    assert env_cfg["tableColor"] == spec.HIGH_LEVEL_TABLE_COLOR
     assert env_cfg["tablePositionXY"] == spec.HIGH_LEVEL_TABLE_POSITION_XY
     assert env_cfg["tableHeightRange"] == spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE
     assert env_cfg["objectPositionRangeX"] == spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X
@@ -241,7 +242,9 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
         <= spec.EE_GOAL_WORLD_RANGES[1][1]
     )
     assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE == [0.10, 0.20]
+    assert spec.HIGH_LEVEL_TABLE_DIMS[2] <= 0.02
     assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0] >= spec.HIGH_LEVEL_TABLE_DIMS[2]
+    assert all(0.0 <= value <= 1.0 for value in spec.HIGH_LEVEL_TABLE_COLOR)
     assert spec.HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY == [0.03, 0.03]
     assert spec.HIGH_LEVEL_ROBOT_RESET_YAW_RANGE == 0.08
 

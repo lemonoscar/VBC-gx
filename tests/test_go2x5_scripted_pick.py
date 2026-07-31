@@ -1,6 +1,7 @@
 import importlib.util
 import ast
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -118,10 +119,32 @@ def test_fixed_table_height_is_available_before_actor_creation():
     assert assignment.lineno < super_call.lineno
 
 
+def test_robot_table_contacts_are_identified_by_body_pair():
+    body_names = ["base", "FR_foot", "arm_link7"]
+    contacts = [
+        {"body0": 3, "body1": 1},
+        {"body0": 2, "body1": 3},
+        {"body0": 3, "body1": 4},
+        SimpleNamespace(body0=0, body1=-1),
+    ]
+    assert MODULE.robot_table_contact_names(contacts, 3, body_names) == [
+        "FR_foot",
+        "arm_link7",
+    ]
+
+
+def test_scripted_demo_has_a_bounded_forward_pose_hold():
+    assert MODULE.BASE_HOLD_GAIN > 0.0
+    assert 0.05 < MODULE.BASE_HOLD_MAX_SPEED <= 0.15
+    assert 0.0 < MODULE.MAX_BASE_FORWARD_DRIFT < 0.10
+
+
 if __name__ == "__main__":
     test_phase_schedule_is_contiguous_and_complete()
     test_pick_trace_requires_sustained_lift_and_two_finger_contact()
     test_preclose_is_distance_gated_during_descent()
     test_object_offset_cli_defaults_to_table_center()
     test_fixed_table_height_is_available_before_actor_creation()
+    test_robot_table_contacts_are_identified_by_body_pair()
+    test_scripted_demo_has_a_bounded_forward_pose_hold()
     print("Go2-X5 scripted pick tests passed")

@@ -41,6 +41,7 @@ class B1Z1PickMulti(B1Z1Base):
         self.multi_obj = self.cfg["env"]["asset"]["asset_multi"]
         self.table_dims_cfg = self.cfg["env"].get("tableDims", [0.6, 1.0, 0.25])
         self.table_position_xy = self.cfg["env"].get("tablePositionXY", [0.0, 0.0])
+        self.table_color = self.cfg["env"].get("tableColor", [0.55, 0.55, 0.55])
         self.table_height_range = self.cfg["env"].get("tableHeightRange", [0.0, 0.5])
         self.object_position_range_x = self.cfg["env"].get("objectPositionRangeX", [-0.15, 0.15])
         self.object_position_range_y = self.cfg["env"].get("objectPositionRangeY", [-0.10, 0.10])
@@ -54,6 +55,12 @@ class B1Z1PickMulti(B1Z1Base):
             raise ValueError(f"tableDims must contain three positive values, got {self.table_dims_cfg}")
         if len(self.table_position_xy) != 2:
             raise ValueError(f"tablePositionXY must contain two values, got {self.table_position_xy}")
+        if len(self.table_color) != 3 or any(
+            not 0.0 <= float(value) <= 1.0 for value in self.table_color
+        ):
+            raise ValueError(
+                f"tableColor must contain three values in [0, 1], got {self.table_color}"
+            )
         if self.object_fall_tolerance < 0.0:
             raise ValueError(
                 f"objectFallTolerance must be non-negative, got {self.object_fall_tolerance}"
@@ -157,6 +164,13 @@ class B1Z1PickMulti(B1Z1Base):
         table_start_pose.p = gymapi.Vec3(*table_pos)
         table_start_pose.r = gymapi.Quat(0, 0, 0, 1)
         table_handle = self.gym.create_actor(env_ptr, self.table_asset, table_start_pose, "table", col_group, col_filter, 1)
+        self.gym.set_rigid_body_color(
+            env_ptr,
+            table_handle,
+            0,
+            gymapi.MESH_VISUAL,
+            gymapi.Vec3(*[float(value) for value in self.table_color]),
+        )
         
         cube_start_pose = gymapi.Transform()
         cube_start_pose.p.x = table_start_pose.p.x + np.random.uniform(*self.object_position_range_x)

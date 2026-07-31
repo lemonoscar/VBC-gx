@@ -64,10 +64,12 @@ ARM_READY_JOINT_ANGLES = [0.0, 2.4, 1.15, 0.0, 0.0, 0.0]
 
 # Go2-X5 tabletop task geometry. The table near edge is 0.30 m ahead of the
 # nominal robot root, while its top height is randomized across the requested
-# 0.10--0.20 m interval.
+# 0.10--0.20 m interval.  The collision box is a thin tabletop, not a 0.10 m
+# tall solid platform that visually and physically overlaps the front legs.
 HIGH_LEVEL_ROBOT_START_POSE = [-0.45, 0.0, BASE_INIT_HEIGHT]
-HIGH_LEVEL_TABLE_DIMS = [0.30, 0.60, 0.10]
+HIGH_LEVEL_TABLE_DIMS = [0.30, 0.60, 0.02]
 HIGH_LEVEL_TABLE_POSITION_XY = [0.0, 0.0]
+HIGH_LEVEL_TABLE_COLOR = [0.36, 0.20, 0.08]
 HIGH_LEVEL_TABLE_HEIGHT_RANGE = [0.10, 0.20]
 HIGH_LEVEL_OBJECT_POSITION_RANGE_X = [-0.10, 0.10]
 HIGH_LEVEL_OBJECT_POSITION_RANGE_Y = [-0.20, 0.20]

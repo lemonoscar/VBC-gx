@@ -62,8 +62,9 @@ env:
   wristBodyName: "arm_link6"
   flangeBodyName: "arm_link6"
   fingerBodyNames: ["arm_link7", "arm_link8"]
-  tableDims: [0.30, 0.60, 0.10]
+  tableDims: [0.30, 0.60, 0.02]
   tablePositionXY: [0.0, 0.0]
+  tableColor: [0.36, 0.20, 0.08]
   tableHeightRange: [0.10, 0.20]
   objectPositionRangeX: [-0.10, 0.10]
   objectPositionRangeY: [-0.20, 0.20]
