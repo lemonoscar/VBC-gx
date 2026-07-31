@@ -109,7 +109,8 @@ num_observations = 66 * 11 + 18 = 744
 
 - 新增 / 使用 `low-level/resources/robots/go2x5/go2_x5.urdf`
 - 复制 Go2-X5-lab 的 mesh 资源到 `low-level/resources/robots/go2x5/meshes/`
-- 将 Go2 `.dae` mesh 的 `up_axis` 从 `Z_UP` 修正为 `Y_UP`
+- 历史上曾把 Go2 `.dae` mesh 从官方 `Z_UP` 改成 `Y_UP`；该修改已证实会
+  导致腿部视觉网格旋入机身平面，现已恢复 Go2-X5-lab 的 `Z_UP`。
 - 保留 `arm_eef_link` 作为 EE body，避免 Isaac Gym fixed joint collapse 后找不到末端
 
 验证过的 headless smoke 输出应包括：
@@ -321,4 +322,3 @@ rewards.arm_scales.tracking_ee_world = 0.4 ~ 0.6
 - 任何训练命令必须显式设置 `CUDA_VISIBLE_DEVICES`。
 - 修改 low-level 配置后，先跑 headless smoke test，再 GUI 可视化，再训练。
 - 如果用户要求“推到远端”，先检查 `git status --short`，不要把日志、模型、压缩包提交进去。
-
