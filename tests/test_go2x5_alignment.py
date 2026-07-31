@@ -49,14 +49,14 @@ def load_urdf_root():
     return ET.parse(URDF_PATH).getroot()
 
 
-def test_go2_visual_meshes_keep_the_go2x5_lab_z_up_axis():
+def test_go2_visual_meshes_use_legacy_isaac_gym_y_up_metadata():
     mesh_root = URDF_PATH.parent / "meshes"
     for mesh_name in GO2_VISUAL_MESHES:
         collada = ET.parse(mesh_root / mesh_name).getroot()
         namespace = {"c": "http://www.collada.org/2005/11/COLLADASchema"}
         up_axis = collada.find("c:asset/c:up_axis", namespace)
         assert up_axis is not None
-        assert up_axis.text == "Z_UP", mesh_name
+        assert up_axis.text == "Y_UP", mesh_name
 
 
 def test_robot_spec_matches_go2x5_urdf():

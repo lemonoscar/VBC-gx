@@ -17,9 +17,10 @@
 ## 唯一有效的机器人与地面配置
 
 - URDF：`low-level/resources/robots/go2x5/go2_x5.urdf`
-- Go2 视觉 DAE 与 Go2-X5-lab 保持 `Z_UP`；禁止改成 `Y_UP`。`Y_UP`
-  会让视觉腿网格旋入机身平面，而碰撞体仍按 Z-up 正常站立，造成严重的
-  visual/physics 不一致。
+- Go2 视觉 DAE 的几何数据与 Go2-X5-lab 一致，但旧 Isaac Gym 导入器
+  必须使用 `Y_UP` 元数据；Isaac Lab/Omniverse 资产中的 `Z_UP`
+  不能原样照搬。服务器同状态 A/B 渲染证明，`Z_UP` 会使腿部视觉
+  网格旋入水平面，而碰撞体仍按 Z-up 正常站立。
 - policy action dimension：12，仅控制四腿
 - base initial height：0.32 m
 - base height target：0.32 m

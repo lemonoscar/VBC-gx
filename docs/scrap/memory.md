@@ -109,8 +109,9 @@ num_observations = 66 * 11 + 18 = 744
 
 - 新增 / 使用 `low-level/resources/robots/go2x5/go2_x5.urdf`
 - 复制 Go2-X5-lab 的 mesh 资源到 `low-level/resources/robots/go2x5/meshes/`
-- 历史上曾把 Go2 `.dae` mesh 从官方 `Z_UP` 改成 `Y_UP`；该修改已证实会
-  导致腿部视觉网格旋入机身平面，现已恢复 Go2-X5-lab 的 `Z_UP`。
+- Go2-X5-lab 的 DAE 使用 `Z_UP`，但旧 Isaac Gym 的 Collada 导入路径需要
+  `Y_UP` 元数据。服务器在同一物理状态和同一相机下 A/B 证实，`Z_UP`
+  会导致腿部视觉网格旋入水平面；VBC 的 Isaac Gym 资产必须保持 `Y_UP`。
 - 保留 `arm_eef_link` 作为 EE body，避免 Isaac Gym fixed joint collapse 后找不到末端
 
 验证过的 headless smoke 输出应包括：

@@ -449,7 +449,7 @@ python train_multistate.py \
 | `PyTorch was imported before isaacgym` | 导入顺序错误 | 先 `import isaacgym`，再导入 torch |
 | W&B 初始化 90 秒超时 | 网络 / SSL 问题 | `export WANDB_MODE=offline` |
 | `nvrtc invalid value for --gpu-architecture` | torch CUDA 版本太旧，不支持本机 GPU | 使用 `torch==2.4.1+cu121` |
-| 机器人渲染散架 / 腿部不可见 | Go2 DAE 被错误改成 `Y_UP` | 保持 Go2-X5-lab 官方 `Z_UP`；历史 `Y_UP` 结论已证伪 |
+| 机器人渲染散架 / 腿部不可见 | 把 Isaac Lab 的 DAE `Z_UP` 元数据原样用于旧 Isaac Gym | 几何保持官方资产，但 `up_axis` 使用服务器 A/B 验证的 `Y_UP` |
 | 回放单环境按快捷键报 index out of bounds | viewer lookat index 超出 env 数量 | 当前已在 `base_task.py` 中做 modulo clamp |
 | high-level success rate 全 0 | low-level 不稳或 high-level 低层路径错误 | 先回放 low-level，再确认 `low_policy_path` |
 | PhysX CUDA illegal memory access | GPU PhysX 接触对 / 碰撞复杂度 / 长时训练不稳定 | 从最近 checkpoint 恢复，减少 env 或接触复杂度 |
