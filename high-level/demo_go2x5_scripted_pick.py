@@ -115,6 +115,8 @@ def parse_args(argv=None):
     parser.add_argument("--video", default="")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--object", default="glue_1")
+    parser.add_argument("--object-x-offset", type=float, default=0.0)
+    parser.add_argument("--object-y-offset", type=float, default=0.0)
     parser.add_argument("--table-height", type=float, default=0.15)
     parser.add_argument("--object-yaw", type=float, default=math.pi / 2.0)
     parser.add_argument("--approach-distance", type=float, default=0.10)
@@ -236,6 +238,16 @@ def run(args):
         raise ValueError(
             f"unknown object '{args.object}'; available: {sorted(objects)}"
         )
+    for axis, value in (
+        ("X", args.object_x_offset),
+        ("Y", args.object_y_offset),
+    ):
+        limits = cfg["env"][f"objectPositionRange{axis}"]
+        if not float(limits[0]) <= value <= float(limits[1]):
+            raise ValueError(
+                f"object {axis.lower()} offset {value} is outside configured "
+                f"range {limits}"
+            )
     cfg["env"]["asset"]["asset_multi"] = {args.object: objects[args.object]}
     cfg["env"]["numEnvs"] = 1
     cfg["env"]["maxEpisodeLength"] = sum(duration for _, duration in PHASE_STEPS) + 20
@@ -282,8 +294,12 @@ def run(args):
 
     # One deterministic initial placement is allowed; the object is never
     # written again after this simulator state update.
-    env._cube_root_states[:, 0] = env._table_root_states[:, 0]
-    env._cube_root_states[:, 1] = env._table_root_states[:, 1]
+    env._cube_root_states[:, 0] = (
+        env._table_root_states[:, 0] + args.object_x_offset
+    )
+    env._cube_root_states[:, 1] = (
+        env._table_root_states[:, 1] + args.object_y_offset
+    )
     env._cube_root_states[:, 2] = env.table_heights + env.init_height
     yaw = torch.full((env.num_envs,), args.object_yaw, device=env.device)
     yaw_quat = quat_from_euler_xyz(0.0 * yaw, 0.0 * yaw, yaw)
@@ -584,6 +600,10 @@ def run(args):
         "checkpoint_sha256": sha256_file(checkpoint),
         "config": str(config),
         "object": args.object,
+        "object_position_offset_xy_m": [
+            args.object_x_offset,
+            args.object_y_offset,
+        ],
         "table_height_m": args.table_height,
         "object_yaw_rad": args.object_yaw,
         "schedule": dict(PHASE_STEPS),

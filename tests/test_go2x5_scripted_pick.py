@@ -1,5 +1,6 @@
 import importlib.util
 import ast
+import tempfile
 from pathlib import Path
 
 
@@ -55,6 +56,27 @@ def test_preclose_is_distance_gated_during_descent():
     assert MODULE.should_close_gripper("close", 1.0, 0.0)
 
 
+def test_object_offset_cli_defaults_to_table_center():
+    with tempfile.TemporaryDirectory() as directory:
+        tmp_path = Path(directory)
+        checkpoint = tmp_path / "checkpoint.pt"
+        config = tmp_path / "config.yaml"
+        checkpoint.touch()
+        config.touch()
+        args = MODULE.parse_args(
+            [
+                "--checkpoint",
+                str(checkpoint),
+                "--config",
+                str(config),
+                "--report",
+                str(tmp_path / "report.json"),
+            ]
+        )
+        assert args.object_x_offset == 0.0
+        assert args.object_y_offset == 0.0
+
+
 def test_fixed_table_height_is_available_before_actor_creation():
     tree = ast.parse(PICKMULTI.read_text(encoding="utf-8"))
     class_node = next(
@@ -94,5 +116,6 @@ if __name__ == "__main__":
     test_phase_schedule_is_contiguous_and_complete()
     test_pick_trace_requires_sustained_lift_and_two_finger_contact()
     test_preclose_is_distance_gated_during_descent()
+    test_object_offset_cli_defaults_to_table_center()
     test_fixed_table_height_is_available_before_actor_creation()
     print("Go2-X5 scripted pick tests passed")
