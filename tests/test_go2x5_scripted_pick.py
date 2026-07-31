@@ -130,6 +130,9 @@ def test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm():
         "FL_foot",
         "base",
     ]
+    assert MODULE.required_foot_body_names(
+        ["base", "RR_foot", "FL_foot", "RL_foot", "FR_foot"]
+    ) == ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
 
 
 def test_scripted_demo_has_a_bounded_forward_pose_hold():

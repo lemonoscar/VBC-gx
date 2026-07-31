@@ -102,6 +102,14 @@ def quadruped_collision_names(
     return sorted(collisions)
 
 
+def required_foot_body_names(body_names):
+    preferred = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
+    missing = [name for name in preferred if name not in body_names]
+    if missing:
+        raise ValueError(f"missing required foot bodies: {missing}")
+    return preferred
+
+
 def evaluate_pick_trace(
     lift_margins,
     ee_distances,
@@ -368,7 +376,7 @@ def run(args):
         [torch.cos(initial_heading), torch.sin(initial_heading)], dim=-1
     )
     robot_body_count = len(env.body_names)
-    foot_body_names = tuple(cfg["env"]["footBodyNames"])
+    foot_body_names = required_foot_body_names(env.body_names)
     target_orientation = torch.tensor(
         [args.target_roll, args.target_pitch, args.target_yaw],
         device=env.device,
