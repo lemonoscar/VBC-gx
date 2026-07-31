@@ -59,7 +59,7 @@ def test_preclose_is_distance_gated_during_descent():
     assert not MODULE.update_gripper_latch(False, "descend", 1.0, 0.13)
 
 
-def test_object_offset_cli_defaults_to_table_center():
+def test_object_offset_cli_defaults_to_near_reachable_table_region():
     with tempfile.TemporaryDirectory() as directory:
         tmp_path = Path(directory)
         checkpoint = tmp_path / "checkpoint.pt"
@@ -76,7 +76,7 @@ def test_object_offset_cli_defaults_to_table_center():
                 str(tmp_path / "report.json"),
             ]
         )
-        assert args.object_x_offset == 0.0
+        assert args.object_x_offset == -0.10
         assert args.object_y_offset == 0.0
         assert args.target_roll == 0.0
         assert args.target_pitch == 1.25
@@ -137,7 +137,7 @@ def test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm():
 
 def test_scripted_demo_has_a_bounded_forward_pose_hold():
     assert MODULE.BASE_HOLD_GAIN > 0.0
-    assert 0.05 < MODULE.BASE_HOLD_MAX_SPEED <= 0.15
+    assert 0.05 < MODULE.BASE_HOLD_MAX_SPEED <= 0.20
     assert 0.0 < MODULE.MAX_BASE_FORWARD_DRIFT < 0.10
 
 
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     test_phase_schedule_is_contiguous_and_complete()
     test_pick_trace_requires_sustained_lift_and_two_finger_contact()
     test_preclose_is_distance_gated_during_descent()
-    test_object_offset_cli_defaults_to_table_center()
+    test_object_offset_cli_defaults_to_near_reachable_table_region()
     test_fixed_table_height_is_available_before_actor_creation()
     test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm()
     test_scripted_demo_has_a_bounded_forward_pose_hold()

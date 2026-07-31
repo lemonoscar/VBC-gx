@@ -29,9 +29,9 @@ PHASE_STEPS = (
     ("lift", 20),
     ("hold", 12),
 )
-BASE_HOLD_GAIN = 2.0
-BASE_HOLD_MAX_SPEED = 0.12
-MAX_BASE_FORWARD_DRIFT = 0.06
+BASE_HOLD_GAIN = 3.0
+BASE_HOLD_MAX_SPEED = 0.18
+MAX_BASE_FORWARD_DRIFT = 0.04
 BODY_CONTACT_FORCE_THRESHOLD = 1.0
 FOOT_GROUND_MAX_HEIGHT = 0.06
 
@@ -161,7 +161,7 @@ def parse_args(argv=None):
     parser.add_argument("--video", default="")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--object", default="glue_1")
-    parser.add_argument("--object-x-offset", type=float, default=0.0)
+    parser.add_argument("--object-x-offset", type=float, default=-0.10)
     parser.add_argument("--object-y-offset", type=float, default=0.0)
     parser.add_argument("--table-height", type=float, default=0.15)
     parser.add_argument("--object-yaw", type=float, default=math.pi / 2.0)

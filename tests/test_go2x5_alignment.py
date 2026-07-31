@@ -224,7 +224,12 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
     robot_x = spec.HIGH_LEVEL_ROBOT_START_POSE[0]
     table_center_x = spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
     table_near_edge_x = table_center_x - spec.HIGH_LEVEL_TABLE_DIMS[0] / 2.0
-    assert round(table_near_edge_x - robot_x, 6) == 0.30
+    robot_front_x = robot_x + spec.HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT
+    assert round(table_near_edge_x - robot_x, 6) == 0.40
+    assert (
+        table_near_edge_x - robot_front_x
+        >= spec.HIGH_LEVEL_TABLE_MIN_FRONT_CLEARANCE
+    )
     object_root_forward_x = [
         spec.HIGH_LEVEL_TABLE_POSITION_XY[0] + bound - robot_x
         for bound in spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X

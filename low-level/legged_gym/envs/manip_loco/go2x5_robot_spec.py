@@ -62,16 +62,19 @@ EE_ORIENTATION_ABSOLUTE_RANGES = [
 # root-forward [0.487, 0.0, 0.306] m at the 0.32 m Go2 stance height.
 ARM_READY_JOINT_ANGLES = [0.0, 2.4, 1.15, 0.0, 0.0, 0.0]
 
-# Go2-X5 tabletop task geometry. The table near edge is 0.30 m ahead of the
-# nominal robot root, while its top height is randomized across the requested
-# 0.10--0.20 m interval.  The collision box is a thin tabletop, not a 0.10 m
-# tall solid platform that visually and physically overlaps the front legs.
+# Go2-X5 tabletop task geometry. Distances must account for the robot's front
+# collision geometry rather than only its root: the head reaches about 0.34 m
+# forward, so a table edge 0.30 m from the root visually overlaps the robot.
+# The edge below is 0.40 m from the nominal root and leaves 0.06 m in front of
+# the head. The collision box is a thin tabletop, not a solid platform.
 HIGH_LEVEL_ROBOT_START_POSE = [-0.45, 0.0, BASE_INIT_HEIGHT]
+HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT = 0.34
+HIGH_LEVEL_TABLE_MIN_FRONT_CLEARANCE = 0.05
 HIGH_LEVEL_TABLE_DIMS = [0.30, 0.60, 0.02]
-HIGH_LEVEL_TABLE_POSITION_XY = [0.0, 0.0]
+HIGH_LEVEL_TABLE_POSITION_XY = [0.10, 0.0]
 HIGH_LEVEL_TABLE_COLOR = [0.36, 0.20, 0.08]
 HIGH_LEVEL_TABLE_HEIGHT_RANGE = [0.10, 0.20]
-HIGH_LEVEL_OBJECT_POSITION_RANGE_X = [-0.10, 0.10]
+HIGH_LEVEL_OBJECT_POSITION_RANGE_X = [-0.10, 0.0]
 HIGH_LEVEL_OBJECT_POSITION_RANGE_Y = [-0.20, 0.20]
 HIGH_LEVEL_MAX_OBJECT_HEIGHT = 0.127
 HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY = [0.03, 0.03]

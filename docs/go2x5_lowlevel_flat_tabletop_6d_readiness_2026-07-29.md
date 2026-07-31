@@ -21,7 +21,8 @@
 
 ## 最终任务与 low-level 职责
 
-最终任务是：Go2-X5 在平地上接近一张近边缘位于机身前方约 0.30 m、
+最终任务是：Go2-X5 在平地上接近一张近边缘位于 root 前方 0.40 m、
+并与最前碰撞体保留约 0.06 m 间隙、
 表面高度在 0.10–0.20 m 之间的平桌，夹取桌面物体。
 
 控制分工如下：
@@ -165,15 +166,18 @@ high-level 最终几何与 low-level workspace 使用同一 robot spec：
 
 ```text
 robot root nominal x       = -0.45 m
-table center x             =  0.00 m
+robot front collision x    = -0.11 m
+table center x             =  0.10 m
 table length along x       =  0.30 m
-table near edge from root  =  0.30 m
+table collision thickness  =  0.02 m
+table near edge from root  =  0.40 m
+table clearance from front =  0.06 m
 table surface height       =  0.10–0.20 m
-object table-local x       = -0.10–0.10 m
+object table-local x       = -0.10–0.00 m
 object table-local y       = -0.20–0.20 m
 ```
 
-物体 x 映射到 root-forward `0.35–0.55 m`，y 映射到
+物体 x 映射到 root-forward `0.45–0.55 m`，y 映射到
 `-0.20–0.20 m`，表面/物体/预抓取高度均包含在 low-level 的
 `x=0.30–0.65, y=±0.225, z=0.05–0.45 m` 范围内。最坏桌面目标的
 arm-base local radius约为 `0.596 m`，小于 `0.64 m` envelope。

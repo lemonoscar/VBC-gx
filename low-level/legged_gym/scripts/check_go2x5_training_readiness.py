@@ -1070,6 +1070,10 @@ def probe_curriculum(env, checks):
     table_near_edge_x = (
         table_center_x - go2x5_robot_spec.HIGH_LEVEL_TABLE_DIMS[0] / 2.0
     )
+    robot_front_x = (
+        robot_x + go2x5_robot_spec.HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT
+    )
+    table_front_clearance = table_near_edge_x - robot_front_x
     object_root_x = [
         table_center_x + value - robot_x
         for value in go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X
@@ -1098,7 +1102,8 @@ def probe_curriculum(env, checks):
     )
     checks.require(
         "task_geometry/tabletop_volume_covered",
-        abs((table_near_edge_x - robot_x) - 0.30) <= 1.0e-9
+        table_front_clearance
+        >= go2x5_robot_spec.HIGH_LEVEL_TABLE_MIN_FRONT_CLEARANCE
         and world_ranges[0][0] <= min(object_root_x)
         and max(object_root_x) <= world_ranges[0][1]
         and world_ranges[1][0]
@@ -1110,6 +1115,10 @@ def probe_curriculum(env, checks):
         and tabletop_max_radius
         <= go2x5_robot_spec.EE_GOAL_MAX_NOMINAL_REACH_RADIUS,
         table_near_edge_distance=table_near_edge_x - robot_x,
+        robot_front_collision_extent=(
+            go2x5_robot_spec.HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT
+        ),
+        table_front_clearance=table_front_clearance,
         object_root_x=object_root_x,
         object_y=go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y,
         grasp_height=grasp_height,
