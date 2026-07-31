@@ -39,11 +39,11 @@ MIN_SUPPORTED_FEET = 2
 MAX_FOOT_HEIGHT = 0.12
 BASE_HEIGHT_RANGE = (0.25, 0.39)
 MAX_ABS_BASE_ROLL_PITCH = 0.25
-# Render from behind and above the robot, looking below the base.  Keeping the
-# table farther from the camera than the robot prevents the tabletop from
-# visually hiding the legs.
-CAMERA_POSITION_LOCAL = (-0.65, 0.75, 0.30)
-CAMERA_TARGET_LOCAL = (0.10, 0.0, -0.14)
+# Render from the true side and look below the base.  A fore/aft camera axis
+# projects the low tabletop over the legs even when the bodies are physically
+# separated; the lateral view keeps robot, feet, ground, and table distinct.
+CAMERA_POSITION_LOCAL = (0.10, 0.90, 0.18)
+CAMERA_TARGET_LOCAL = (0.10, 0.0, -0.16)
 
 
 def phase_at(step, phases=PHASE_STEPS):
