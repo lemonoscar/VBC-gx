@@ -244,7 +244,7 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
     table_center_x = spec.HIGH_LEVEL_TABLE_POSITION_XY[0]
     table_near_edge_x = table_center_x - spec.HIGH_LEVEL_TABLE_DIMS[0] / 2.0
     robot_front_x = robot_x + spec.HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT
-    assert round(table_near_edge_x - robot_x, 6) == 0.40
+    assert round(table_near_edge_x - robot_x, 6) == 0.45
     assert (
         table_near_edge_x - robot_front_x
         >= spec.HIGH_LEVEL_TABLE_MIN_FRONT_CLEARANCE
@@ -265,9 +265,9 @@ def test_go2x5_ee_workspace_and_table_are_in_front_of_robot():
         <= spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y[1]
         <= spec.EE_GOAL_WORLD_RANGES[1][1]
     )
-    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE == [0.10, 0.20]
-    assert spec.HIGH_LEVEL_TABLE_DIMS[2] <= 0.02
-    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0] >= spec.HIGH_LEVEL_TABLE_DIMS[2]
+    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE == [0.15, 0.15]
+    assert spec.HIGH_LEVEL_TABLE_DIMS[2] == spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0]
+    assert spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0] == spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[1]
     assert all(0.0 <= value <= 1.0 for value in spec.HIGH_LEVEL_TABLE_COLOR)
     assert spec.HIGH_LEVEL_ROBOT_RESET_POSITION_RANGE_XY == [0.03, 0.03]
     assert spec.HIGH_LEVEL_ROBOT_RESET_YAW_RANGE == 0.08
