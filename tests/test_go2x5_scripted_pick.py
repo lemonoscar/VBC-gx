@@ -170,10 +170,39 @@ def test_stance_gate_requires_an_upright_supported_quadruped():
     assert "base_tilt" in fallen["failures"]
 
 
-def test_render_camera_is_lateral_and_looks_below_the_base():
-    assert MODULE.CAMERA_POSITION_LOCAL[0] == MODULE.CAMERA_TARGET_LOCAL[0]
+def test_render_camera_is_rear_three_quarter_and_looks_below_the_base():
+    assert MODULE.CAMERA_POSITION_LOCAL[0] < -1.0
     assert MODULE.CAMERA_POSITION_LOCAL[1] >= 0.8
+    assert MODULE.CAMERA_POSITION_LOCAL[2] > 0.4
+    assert MODULE.CAMERA_TARGET_LOCAL[0] > 0.0
     assert MODULE.CAMERA_TARGET_LOCAL[2] < 0.0
+
+    with tempfile.TemporaryDirectory() as directory:
+        tmp_path = Path(directory)
+        checkpoint = tmp_path / "checkpoint.pt"
+        config = tmp_path / "config.yaml"
+        checkpoint.touch()
+        config.touch()
+        args = MODULE.parse_args(
+            [
+                "--checkpoint",
+                str(checkpoint),
+                "--config",
+                str(config),
+                "--report",
+                str(tmp_path / "report.json"),
+                "--camera-position-local",
+                "-1.0",
+                "0.8",
+                "0.5",
+                "--camera-target-local",
+                "0.1",
+                "0.0",
+                "-0.1",
+            ]
+        )
+        assert args.camera_position_local == [-1.0, 0.8, 0.5]
+        assert args.camera_target_local == [0.1, 0.0, -0.1]
 
 
 def test_scripted_demo_has_a_bounded_forward_pose_hold():
@@ -190,6 +219,6 @@ if __name__ == "__main__":
     test_fixed_table_height_is_available_before_actor_creation()
     test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm()
     test_stance_gate_requires_an_upright_supported_quadruped()
-    test_render_camera_is_lateral_and_looks_below_the_base()
+    test_render_camera_is_rear_three_quarter_and_looks_below_the_base()
     test_scripted_demo_has_a_bounded_forward_pose_hold()
     print("Go2-X5 scripted pick tests passed")

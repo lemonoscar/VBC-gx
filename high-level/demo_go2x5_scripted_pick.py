@@ -39,11 +39,11 @@ MIN_SUPPORTED_FEET = 2
 MAX_FOOT_HEIGHT = 0.12
 BASE_HEIGHT_RANGE = (0.25, 0.39)
 MAX_ABS_BASE_ROLL_PITCH = 0.25
-# Render from the true side and look below the base.  A fore/aft camera axis
-# projects the low tabletop over the legs even when the bodies are physically
-# separated; the lateral view keeps robot, feet, ground, and table distinct.
-CAMERA_POSITION_LOCAL = (0.10, 0.90, 0.18)
-CAMERA_TARGET_LOCAL = (0.10, 0.0, -0.16)
+# Keep the table behind the robot in image depth and look below the base.  This
+# rear three-quarter view exposes all four legs instead of projecting the wide
+# tabletop over them.  CLI overrides make camera-only diagnosis reproducible.
+CAMERA_POSITION_LOCAL = (-1.20, 1.00, 0.55)
+CAMERA_TARGET_LOCAL = (0.15, 0.0, -0.12)
 
 
 def phase_at(step, phases=PHASE_STEPS):
@@ -230,6 +230,20 @@ def parse_args(argv=None):
     parser.add_argument("--target-roll", type=float, default=0.0)
     parser.add_argument("--target-pitch", type=float, default=1.25)
     parser.add_argument("--target-yaw", type=float, default=0.0)
+    parser.add_argument(
+        "--camera-position-local",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        default=CAMERA_POSITION_LOCAL,
+    )
+    parser.add_argument(
+        "--camera-target-local",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        default=CAMERA_TARGET_LOCAL,
+    )
     parser.add_argument("--preclose-ee-distance", type=float, default=0.13)
     parser.add_argument("--seed", type=int, default=20260731)
     parser.add_argument("--sim-device", default="cuda:0")
@@ -451,10 +465,10 @@ def run(args):
         dtype=torch.float,
     )
     camera_position_local = torch.tensor(
-        CAMERA_POSITION_LOCAL, device=env.device, dtype=torch.float
+        args.camera_position_local, device=env.device, dtype=torch.float
     ).unsqueeze(0)
     camera_target_local = torch.tensor(
-        CAMERA_TARGET_LOCAL, device=env.device, dtype=torch.float
+        args.camera_target_local, device=env.device, dtype=torch.float
     ).unsqueeze(0)
 
     writer = None
