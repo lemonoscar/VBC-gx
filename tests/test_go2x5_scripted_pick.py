@@ -1,7 +1,6 @@
 import importlib.util
 import ast
 import tempfile
-from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -119,17 +118,17 @@ def test_fixed_table_height_is_available_before_actor_creation():
     assert assignment.lineno < super_call.lineno
 
 
-def test_robot_table_contacts_are_identified_by_body_pair():
-    body_names = ["base", "FR_foot", "arm_link7"]
-    contacts = [
-        {"body0": 3, "body1": 1},
-        {"body0": 2, "body1": 3},
-        {"body0": 3, "body1": 4},
-        SimpleNamespace(body0=0, body1=-1),
-    ]
-    assert MODULE.robot_table_contact_names(contacts, 3, body_names) == [
-        "FR_foot",
-        "arm_link7",
+def test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm():
+    names = ["base", "FR_foot", "FL_foot", "arm_link7"]
+    collisions = MODULE.quadruped_collision_names(
+        names,
+        [2.0, 10.0, 10.0, 100.0],
+        [0.30, 0.02, 0.15, 0.15],
+        ["FR_foot", "FL_foot"],
+    )
+    assert collisions == [
+        "FL_foot",
+        "base",
     ]
 
 
@@ -145,6 +144,6 @@ if __name__ == "__main__":
     test_preclose_is_distance_gated_during_descent()
     test_object_offset_cli_defaults_to_table_center()
     test_fixed_table_height_is_available_before_actor_creation()
-    test_robot_table_contacts_are_identified_by_body_pair()
+    test_gpu_tensor_collision_gate_excludes_only_grounded_feet_and_arm()
     test_scripted_demo_has_a_bounded_forward_pose_hold()
     print("Go2-X5 scripted pick tests passed")

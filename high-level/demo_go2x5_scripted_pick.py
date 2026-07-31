@@ -32,6 +32,8 @@ PHASE_STEPS = (
 BASE_HOLD_GAIN = 2.0
 BASE_HOLD_MAX_SPEED = 0.12
 MAX_BASE_FORWARD_DRIFT = 0.06
+BODY_CONTACT_FORCE_THRESHOLD = 1.0
+FOOT_GROUND_MAX_HEIGHT = 0.06
 
 
 def phase_at(step, phases=PHASE_STEPS):
@@ -74,25 +76,30 @@ def update_gripper_latch(latched, phase, ee_distance, preclose_distance):
     )
 
 
-def contact_body_pair(contact):
-    """Return environment-domain rigid-body indices from an Isaac contact."""
-    try:
-        return int(contact["body0"]), int(contact["body1"])
-    except (IndexError, KeyError, TypeError):
-        return int(contact.body0), int(contact.body1)
-
-
-def robot_table_contact_names(contacts, table_body_index, robot_body_names):
-    """List robot bodies contacting the table without using net-force guesses."""
-    names = set()
-    robot_body_count = len(robot_body_names)
-    for contact in contacts:
-        body0, body1 = contact_body_pair(contact)
-        if body0 == table_body_index and 0 <= body1 < robot_body_count:
-            names.add(robot_body_names[body1])
-        elif body1 == table_body_index and 0 <= body0 < robot_body_count:
-            names.add(robot_body_names[body0])
-    return sorted(names)
+def quadruped_collision_names(
+    body_names,
+    contact_force_norms,
+    body_heights,
+    foot_body_names,
+    *,
+    force_threshold=BODY_CONTACT_FORCE_THRESHOLD,
+    foot_ground_max_height=FOOT_GROUND_MAX_HEIGHT,
+):
+    """Detect non-foot or elevated-foot contacts using GPU tensor data."""
+    if not (
+        len(body_names) == len(contact_force_norms) == len(body_heights)
+    ):
+        raise ValueError("body contact fields must have equal lengths")
+    feet = set(foot_body_names)
+    collisions = []
+    for name, force, height in zip(
+        body_names, contact_force_norms, body_heights
+    ):
+        if name.startswith("arm_") or force <= force_threshold:
+            continue
+        if name not in feet or height > foot_ground_max_height:
+            collisions.append(name)
+    return sorted(collisions)
 
 
 def evaluate_pick_trace(
@@ -360,6 +367,8 @@ def run(args):
     initial_forward = torch.stack(
         [torch.cos(initial_heading), torch.sin(initial_heading)], dim=-1
     )
+    robot_body_count = len(env.body_names)
+    foot_body_names = tuple(cfg["env"]["footBodyNames"])
     target_orientation = torch.tensor(
         [args.target_roll, args.target_pitch, args.target_yaw],
         device=env.device,
@@ -382,8 +391,8 @@ def run(args):
     finger_forces_trace = []
     first_bad = None
     reset_step = None
-    robot_table_contact_steps = []
-    robot_table_contact_bodies = set()
+    quadruped_collision_steps = []
+    quadruped_collision_bodies = set()
     base_forward_drifts = []
     gripper_latched = False
     reference_object_world = None
@@ -396,7 +405,7 @@ def run(args):
         ee_distance,
         finger_forces,
         base_forward_drift,
-        table_contact_bodies,
+        collision_bodies,
     ):
         nonlocal writer
         if video_path is None:
@@ -438,7 +447,7 @@ def run(args):
             frame,
             (
                 f"base drift {100.0 * base_forward_drift:+4.1f} cm  "
-                f"table contact {','.join(table_contact_bodies) or 'none'}"
+                f"body collision {','.join(collision_bodies) or 'none'}"
             ),
             (20, 88),
             cv2.FONT_HERSHEY_SIMPLEX,
@@ -587,14 +596,21 @@ def run(args):
             )
             base_forward_drift = float(base_forward_drift_tensor[0].item())
             base_forward_drifts.append(base_forward_drift)
-            table_contact_bodies = robot_table_contact_names(
-                env.gym.get_env_rigid_contacts(env.envs[0]),
-                int(env.table_idx),
-                env.body_names,
+            contact_force_norms = torch.norm(
+                env._contact_forces[0, :robot_body_count, :], dim=-1
             )
-            if table_contact_bodies:
-                robot_table_contact_steps.append(step)
-                robot_table_contact_bodies.update(table_contact_bodies)
+            robot_body_heights = env._rigid_body_pos[
+                0, :robot_body_count, 2
+            ]
+            collision_bodies = quadruped_collision_names(
+                env.body_names,
+                contact_force_norms.detach().cpu().tolist(),
+                robot_body_heights.detach().cpu().tolist(),
+                foot_body_names,
+            )
+            if collision_bodies:
+                quadruped_collision_steps.append(step)
+                quadruped_collision_bodies.update(collision_bodies)
             if reference_object_z is None:
                 lift_margin_tensor = torch.zeros(env.num_envs, device=env.device)
             else:
@@ -670,7 +686,7 @@ def run(args):
                     .tolist(),
                     "table_top_height_m": float(table_top[0].item()),
                     "base_forward_drift_m": base_forward_drift,
-                    "robot_table_contact_bodies": table_contact_bodies,
+                    "quadruped_collision_bodies": collision_bodies,
                     "ik_height_error_m": float(ik_height_error[0].item()),
                     "termination_predicates": {
                         "roll": bool(torch.abs(base_rpy[0, 0]) > 0.8),
@@ -689,12 +705,12 @@ def run(args):
                 ee_distance,
                 finger_forces,
                 base_forward_drift,
-                table_contact_bodies,
+                collision_bodies,
             )
 
             if first_bad is not None:
                 break
-            if table_contact_bodies:
+            if collision_bodies:
                 break
             if bool(done[0].item()):
                 reset_step = step
@@ -710,7 +726,7 @@ def run(args):
     )
     maximum_base_forward_drift = max(abs(value) for value in base_forward_drifts)
     scene_geometry_passed = (
-        not robot_table_contact_steps
+        not quadruped_collision_steps
         and maximum_base_forward_drift <= MAX_BASE_FORWARD_DRIFT
     )
     report = {
@@ -754,14 +770,16 @@ def run(args):
             "minimum_finger_contact_force_n": 0.5,
             "required_hold_steps": 6,
             "maximum_base_forward_drift_m": MAX_BASE_FORWARD_DRIFT,
+            "body_contact_force_n": BODY_CONTACT_FORCE_THRESHOLD,
+            "foot_ground_max_height_m": FOOT_GROUND_MAX_HEIGHT,
         },
         "maximum_lift_margin_m": max(lift_margins),
         "final_lift_margin_m": lift_margins[-1],
         "minimum_ee_object_distance_m": min(ee_distances),
         "final_ee_object_distance_m": ee_distances[-1],
         "maximum_abs_base_forward_drift_m": maximum_base_forward_drift,
-        "robot_table_contact_steps": robot_table_contact_steps,
-        "robot_table_contact_bodies": sorted(robot_table_contact_bodies),
+        "quadruped_collision_steps": quadruped_collision_steps,
+        "quadruped_collision_bodies": sorted(quadruped_collision_bodies),
         "scene_geometry_passed": scene_geometry_passed,
         **trace_result,
         "reset_step": reset_step,
