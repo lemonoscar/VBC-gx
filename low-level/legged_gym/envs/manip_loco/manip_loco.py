@@ -56,6 +56,9 @@ class ManipLoco(LeggedRobot):
     cfg: B1Z1RoughCfg
 
     def __init__(self, cfg, *args, **kwargs):
+        # None means evaluation/runtime mode, where the full controller is
+        # enabled. The training runner supplies an explicit PPO iteration.
+        self.training_iteration = None
         self._apply_initial_auto_curriculum(cfg)
         base_num_proprio = getattr(cfg.env, "_base_num_proprio", cfg.env.num_proprio)
         cfg.env._base_num_proprio = base_num_proprio
@@ -276,10 +279,28 @@ class ManipLoco(LeggedRobot):
         next_index = self.curriculum_stage_index + 1
         self.set_training_stage(next_index, self.curriculum_stages[next_index], iteration=iteration)
 
+    def set_training_iteration(self, iteration):
+        self.training_iteration = None if iteration is None else int(iteration)
+
+    def _arm_motion_is_enabled(self):
+        start_iteration = int(
+            getattr(self.cfg.arm, "motion_start_iteration", 0)
+        )
+        return (
+            self.training_iteration is None
+            or self.training_iteration >= start_iteration
+        )
+
     def get_curriculum_log_info(self):
-        if not getattr(self, "auto_curriculum_enabled", False):
-            return {}
         info = {
+            "Training/arm_motion_enabled": float(self._arm_motion_is_enabled()),
+            "Training/arm_motion_start_iteration": int(
+                getattr(self.cfg.arm, "motion_start_iteration", 0)
+            ),
+        }
+        if not getattr(self, "auto_curriculum_enabled", False):
+            return info
+        info.update({
             "Curriculum/stage_index": self.curriculum_stage_index,
             "Curriculum/stage_min_iterations": self.curriculum_stage_cfg.get("min_iterations", 0),
             "Curriculum/max_terrain_level": self.curriculum_stage_cfg.get("max_terrain_level", 0),
@@ -292,7 +313,7 @@ class ManipLoco(LeggedRobot):
             "Curriculum/turn_in_place_probability": float(
                 self.cfg.commands.turn_in_place_probability
             ),
-        }
+        })
         terrain_height = self.reward_container._terrain_height()
         base_height = self.root_states[:, 2] - terrain_height
         goal_height = self.curr_ee_goal_cart_world[:, 2] - terrain_height
@@ -519,6 +540,9 @@ class ManipLoco(LeggedRobot):
                     "stage_name": getattr(self, "curriculum_stage_name", ""),
                     "stage_iteration": getattr(self, "curriculum_stage_iteration", None),
                     "max_terrain_level": getattr(self, "max_terrain_level", None),
+                    "arm_motion_start_iteration": int(
+                        getattr(self.cfg.arm, "motion_start_iteration", 0)
+                    ),
                 },
                 "training_state": {
                     "global_steps": int(getattr(self, "global_steps", 0)),
@@ -785,13 +809,21 @@ class ManipLoco(LeggedRobot):
         # ee_goal_cart_yaw_global = quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart)
         # curr_ee_goal_cart_world = self._get_ee_goal_spherical_center() + ee_goal_cart_yaw_global
 
-        dpos = self.curr_ee_goal_cart_world - self.ee_pos
-        ee_orn_norm = torch.norm(self.ee_orn, dim=-1, keepdim=True).clamp(min=1e-6)  # prevent divide-by-zero NaN
-        drot = orientation_error(self.ee_goal_orn_quat, self.ee_orn / ee_orn_norm)
-        if not getattr(self.cfg.arm, "track_ee_orientation", True):
-            drot = torch.zeros_like(drot)
-        dpose = torch.cat([dpos, drot], -1).unsqueeze(-1)
-        arm_pos_targets = self._compute_arm_position_targets(dpose)
+        if self._arm_motion_is_enabled():
+            dpos = self.curr_ee_goal_cart_world - self.ee_pos
+            ee_orn_norm = torch.norm(self.ee_orn, dim=-1, keepdim=True).clamp(min=1e-6)  # prevent divide-by-zero NaN
+            drot = orientation_error(self.ee_goal_orn_quat, self.ee_orn / ee_orn_norm)
+            if not getattr(self.cfg.arm, "track_ee_orientation", True):
+                drot = torch.zeros_like(drot)
+            dpose = torch.cat([dpos, drot], -1).unsqueeze(-1)
+            arm_pos_targets = self._compute_arm_position_targets(dpose)
+        else:
+            arm_pos_targets = self.arm_q_command.clone()
+            self.arm_q_target_unclamped = arm_pos_targets.clone()
+            self.arm_q_target = arm_pos_targets.clone()
+            self.arm_q_target_clamped = torch.zeros_like(
+                arm_pos_targets, dtype=torch.bool
+            )
         all_pos_targets = torch.zeros_like(self.dof_pos)
         all_pos_targets[:, -(6 + self.cfg.env.num_gripper_joints):-self.cfg.env.num_gripper_joints] = arm_pos_targets
         if (
@@ -853,7 +885,8 @@ class ManipLoco(LeggedRobot):
         self._post_physics_step_callback()
 
         # update ee goal
-        self._update_curr_ee_goal()
+        if self._arm_motion_is_enabled():
+            self._update_curr_ee_goal()
 
         # compute observations, rewards, resets, ...
         self.check_termination()

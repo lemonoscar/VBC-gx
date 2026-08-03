@@ -147,7 +147,9 @@ class RolloutStorage:
 
         # Compute and normalize the advantages
         self.advantages = self.returns - self.values
-        self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+        channel_mean = self.advantages.mean(dim=(0, 1), keepdim=True)
+        channel_std = self.advantages.std(dim=(0, 1), keepdim=True)
+        self.advantages = (self.advantages - channel_mean) / (channel_std + 1e-8)
 
     def get_statistics(self):
         done = self.dones

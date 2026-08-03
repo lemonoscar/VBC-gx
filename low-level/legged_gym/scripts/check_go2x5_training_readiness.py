@@ -967,7 +967,7 @@ def probe_training_metadata(env, checks):
         and alignment["control_contract"]["replace_cylinder_with_capsule"] is False
         and alignment["control_contract"]["arm_target_mode"]
         == "persistent_joint_command"
-        and alignment["control_contract"]["arm_target_max_step"] == 0.08
+        and alignment["control_contract"]["arm_target_max_step"] == 0.02
         and alignment["control_contract"]["gripper_hold_mode"]
         == "open_upper_limit"
         and alignment["control_contract"]["track_ee_orientation"] is True
@@ -1040,7 +1040,7 @@ def probe_curriculum(env, checks):
         "curriculum/static_distribution",
         not env.auto_curriculum_enabled
         and len(env.curriculum_stages) == 0
-        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v7"
+        and env.curriculum_profile_name == "go2x5_flat_tabletop_6d_walk_v8"
         and env.command_ranges["lin_vel_x"] == [-0.30, 0.30]
         and env.command_ranges["lin_vel_y"] == [-0.10, 0.10]
         and env.command_ranges["ang_vel_yaw"] == [-0.25, 0.25]
@@ -1074,9 +1074,13 @@ def probe_curriculum(env, checks):
         robot_x + go2x5_robot_spec.HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT
     )
     table_front_clearance = table_near_edge_x - robot_front_x
-    object_root_x = [
+    object_root_x_at_reset = [
         table_center_x + value - robot_x
         for value in go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X
+    ]
+    object_root_x_at_approach = [
+        go2x5_robot_spec.HIGH_LEVEL_COMMAND_STOP_DISTANCE
+        for _ in go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_X
     ]
     grasp_height = [
         go2x5_robot_spec.HIGH_LEVEL_TABLE_HEIGHT_RANGE[0],
@@ -1091,7 +1095,7 @@ def probe_curriculum(env, checks):
                 y,
                 z - go2x5_robot_spec.EE_GOAL_CENTER_OFFSET[2],
             ]
-            for x in object_root_x
+            for x in object_root_x_at_approach
             for y in go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y
             for z in grasp_height
         ],
@@ -1104,8 +1108,8 @@ def probe_curriculum(env, checks):
         "task_geometry/tabletop_volume_covered",
         table_front_clearance
         >= go2x5_robot_spec.HIGH_LEVEL_TABLE_MIN_FRONT_CLEARANCE
-        and world_ranges[0][0] <= min(object_root_x)
-        and max(object_root_x) <= world_ranges[0][1]
+        and world_ranges[0][0] <= min(object_root_x_at_approach)
+        and max(object_root_x_at_approach) <= world_ranges[0][1]
         and world_ranges[1][0]
         <= go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y[0]
         <= go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y[1]
@@ -1119,7 +1123,8 @@ def probe_curriculum(env, checks):
             go2x5_robot_spec.HIGH_LEVEL_ROBOT_FRONT_COLLISION_EXTENT
         ),
         table_front_clearance=table_front_clearance,
-        object_root_x=object_root_x,
+        object_root_x_at_reset=object_root_x_at_reset,
+        object_root_x_at_approach=object_root_x_at_approach,
         object_y=go2x5_robot_spec.HIGH_LEVEL_OBJECT_POSITION_RANGE_Y,
         grasp_height=grasp_height,
         ee_world_ranges=world_ranges,
@@ -1140,6 +1145,43 @@ def probe_curriculum(env, checks):
         nominal=nominal,
         ranges=orientation_ranges,
     )
+
+
+def probe_arm_training_schedule(env, checks):
+    start_iteration = int(env.cfg.arm.motion_start_iteration)
+    checks.require(
+        "arm_schedule/configured_start",
+        start_iteration == 3000,
+        start_iteration=start_iteration,
+    )
+
+    env.set_training_iteration(start_iteration - 1)
+    env.reset()
+    initial_timer = env.goal_timer.clone()
+    initial_command = env.arm_q_command.clone()
+    zero_actions = torch.zeros(env.num_envs, env.num_actions, device=env.device)
+    env.step(zero_actions)
+    checks.require(
+        "arm_schedule/frozen_before_start",
+        not env._arm_motion_is_enabled()
+        and torch.equal(env.goal_timer, initial_timer)
+        and torch.equal(env.arm_q_command, initial_command),
+        goal_timer_max=scalar_max_abs(env.goal_timer),
+        command_delta_max=scalar_max_abs(env.arm_q_command - initial_command),
+    )
+
+    env.set_training_iteration(start_iteration)
+    env.step(zero_actions)
+    checks.require(
+        "arm_schedule/enabled_at_start",
+        env._arm_motion_is_enabled()
+        and bool(torch.all(env.goal_timer > initial_timer)),
+        goal_timer_min=float(env.goal_timer.min().item()),
+    )
+
+    # Standalone evaluation/readiness exercises the complete 6-D controller.
+    env.set_training_iteration(None)
+    env.reset()
 
 
 def runtime_tensors(env):
@@ -1289,12 +1331,14 @@ def run(cli):
         probe_ik(env, checks)
         probe_reset(env, checks)
         probe_training_metadata(env, checks)
-        probe_curriculum(env, checks)
+        probe_arm_training_schedule(env, checks)
         report["max_abs"], report["rollout"] = probe_rollout(
             env,
             checks,
             cli.steps,
         )
+        # High-level approach geometry must not hide low-level dynamic faults.
+        probe_curriculum(env, checks)
         report["passed"] = True
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"

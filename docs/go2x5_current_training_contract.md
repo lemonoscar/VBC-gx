@@ -1,14 +1,14 @@
 # Go2-X5 当前训练合同
 
-更新日期：2026-07-30
+更新日期：2026-08-03
 
 ## 当前结论
 
 - 旧 Go2-X5 low-level 和 high-level checkpoint 均已判定为不可复用并从本地清除。
 - 下一次 low-level 训练必须从随机初始化开始，任务名仅为 `go2x5`。
 - `go2x5_ftlift` 空别名任务已经删除，不再作为训练阶段或恢复入口。
-- 当前 locomotion 修订已经通过 CPU/静态门禁；修订前的 Isaac Gym
-  readiness 已验证 plane、6D IK、40/1 PD、finite 和 reset 基线。
+- v8 locomotion 修订已经通过 CPU/静态门禁；最终 Isaac Gym GPU
+  readiness 与 from-scratch smoke 仍必须在服务器执行。
 - 当前版本仍必须在 `lab-server` 上重新执行最终 GPU readiness、短程
   from-scratch smoke 和固定命令行为门禁；在这些门禁通过前，不允许直接
   启动 45000 iteration 长训。
@@ -65,7 +65,8 @@ EE 姿态是完整 6D 目标：
 - pitch delta：`[-0.25, 0.25]`
 - yaw delta：`[-0.35, 0.35]`，并叠加目标方位角
 - IK：加权 6D damped least squares，orientation weight `0.35`
-- joint command：persistent、每 tick 最大更新 `0.08 rad`、URDF limit clamp
+- joint command：persistent、IK gain `0.10`、每 tick 最大更新 `0.02 rad`、
+  URDF limit clamp
 
 X5 机械臂不再沿用 Z1 的 `roll≈π/2` nominal 姿态。当前 ready pose 的
 URDF FK 给出 local RPY 约 `[0, 1.25, 0]`；训练 observation、reward、IK
@@ -103,8 +104,9 @@ high-level teacher/student。因而该合同与最终抓取任务在“稳定移
   `yaw=[-0.25, 0.25] rad/s`
 - 每个 10 秒 episode 只保持一个命令
 - 互斥命令人口：10% 站立、50% 纯直行、10% 原地转向、30% 一般运动
-- 速度奖励采用 Walk These Ways 的平方误差指数核；针对低速范围将
-  `tracking_sigma` 设为 `0.05`
+- 速度奖励以 Walk These Ways 的平方误差指数核为基础，并针对移动命令
+  扣除零速度基线：静止为 0、精确跟踪为 1、反向运动为负值且整体裁剪在
+  `[-1, 1]`；停止命令仍保留原指数稳定核。`tracking_sigma=0.05`
 - `feet_air_time` 权重为 1，只奖励完成摆动并重新落地的事件；短步不罚、
   永久悬空不得分
 - `feet_drag` 只惩罚接触脚的水平滑动，不惩罚正常落脚的竖直速度
@@ -115,7 +117,10 @@ high-level teacher/student。因而该合同与最终抓取任务在“稳定移
 - 初始探索 std 为每腿 `[0.25, 0.30, 0.30]`，最低 std 为
   `[0.08, 0.12, 0.12]`；`entropy_coef=0.01` 保留 WTW 的持续探索，
   同时按带 X5 负载的远端 roll-reset 实测对裸 Go1 力矩尺度降额
-- iteration 0–3000 只优化 locomotion advantage；3000–6000 再渐入
+- 12D PPO 熵只对唯一 leg policy channel 求均值，不再被空 arm action
+  channel 减半；leg/arm advantage 分别归一化后再混合
+- iteration 0–3000 不仅只优化 locomotion advantage，而且机械臂目标
+  物理冻结；iteration 3000 启动限速 6D arm motion，3000–6000 再渐入
   EE、姿态追踪和机身俯身协同
 
 完整设计、旧模型定量失败证据和固定命令门禁见
@@ -134,7 +139,7 @@ python3 -m py_compile \
 conda run --no-capture-output -n vwc_go2x5 \
   python low-level/legged_gym/scripts/check_go2x5_training_readiness.py \
   --num-envs 16 \
-  --steps 128 \
+  --steps 500 \
   --output /tmp/go2x5_training_readiness.json
 ```
 

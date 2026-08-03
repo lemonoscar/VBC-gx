@@ -43,6 +43,7 @@ class FakeEnv:
                 height_adaptation_goal_z_high=0.35,
                 max_forward_body_pitch=0.12,
                 tracking_sigma=0.05,
+                subtract_tracking_static_baseline=False,
                 tracking_ee_sigma=1.0,
                 gait_force_sigma=0.5,
                 feet_air_time_target=0.10,
@@ -177,6 +178,44 @@ def test_walk_these_ways_xy_tracking_kernel_is_squared_and_dense():
     )
     assert torch.all(tracking > 0.0)
     assert torch.all(tracking < 0.20)
+
+
+def test_moving_commands_receive_zero_reward_at_static_and_one_at_target():
+    env, reward = make_reward()
+    env.cfg.rewards.subtract_tracking_static_baseline = True
+    env.commands[:, 0] = 0.15
+
+    env.base_lin_vel[:, 0] = torch.tensor([0.0, 0.15])
+    tracking, _ = reward._reward_tracking_lin_vel()
+    assert torch.allclose(tracking, torch.tensor([0.0, 1.0]), atol=1e-7)
+
+    env.base_lin_vel[:, 0] = torch.tensor([-0.15, 0.30])
+    wrong_way_or_overspeed, _ = reward._reward_tracking_lin_vel()
+    assert wrong_way_or_overspeed[0] < 0.0
+    assert torch.allclose(wrong_way_or_overspeed[1], torch.tensor(0.0), atol=1e-7)
+
+
+def test_turn_and_stand_tracking_do_not_restore_the_static_local_optimum():
+    env, reward = make_reward()
+    env.cfg.rewards.subtract_tracking_static_baseline = True
+    env.commands[:, 2] = 0.15
+
+    linear_stability, _ = reward._reward_tracking_lin_vel()
+    yaw_static, _ = reward._reward_tracking_ang_vel()
+    assert torch.equal(linear_stability, torch.zeros_like(linear_stability))
+    assert torch.equal(yaw_static, torch.zeros_like(yaw_static))
+
+    env.base_ang_vel[:, 2] = 0.15
+    yaw_target, _ = reward._reward_tracking_ang_vel()
+    assert torch.allclose(yaw_target, torch.ones_like(yaw_target), atol=1e-7)
+
+    env.commands.zero_()
+    env.base_lin_vel.zero_()
+    env.base_ang_vel.zero_()
+    stand_linear, _ = reward._reward_tracking_lin_vel()
+    stand_yaw, _ = reward._reward_tracking_ang_vel()
+    assert torch.equal(stand_linear, torch.ones_like(stand_linear))
+    assert torch.equal(stand_yaw, torch.ones_like(stand_yaw))
 
 
 def test_contact_drag_is_horizontal_squared_slip_only():

@@ -56,7 +56,7 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "feet_contact_standing = -0.5" in config
     assert "leg_action_l2_deadzone = 0.0" in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v7"' in config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v8"' in config
     assert "enabled = False" in config
     assert "stages = []" in config
     assert '"name": "S' not in config
@@ -75,8 +75,10 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "tracking_ang_vel_yaw_exp = 0.0" in config
     assert "tracking_ang_vel = 0.5" in config
     assert "tracking_sigma = 0.05" in config
+    assert "subtract_tracking_static_baseline = True" in config
     assert "only_positive_rewards = True" in config
     assert "mixing_schedule = [1.0, 3000, 3000]" in config
+    assert "motion_start_iteration = 3000" in config
     assert "init_std = [[0.25, 0.30, 0.30] * 4]" in config
     assert "entropy_coef = 0.01" in config
     assert "min_policy_std = [[0.08, 0.12, 0.12] * 4]" in config
@@ -156,6 +158,46 @@ def test_12d_ppo_uses_one_policy_channel_and_fails_on_nonfinite():
     assert 'self._require_finite("sampled actions", self.transition.actions)' in ppo
     assert 'self._require_finite("PPO loss", loss)' in ppo
     assert 'self._require_finite("PPO gradient norm", grad_norm)' in ppo
+    assert "entropy_batch[..., :policy_channels]" in ppo
+
+
+def test_12d_entropy_ignores_the_empty_arm_channel():
+    import torch
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(ROOT / "third_party/rsl_rl"))
+    from rsl_rl.algorithms.ppo import PPO
+
+    algorithm = PPO.__new__(PPO)
+    entropy = torch.tensor([[12.0, 0.0], [6.0, 0.0]])
+    algorithm.actor_critic = SimpleNamespace(num_arm_actions=0)
+    assert torch.equal(algorithm._mean_policy_entropy(entropy), torch.tensor(9.0))
+
+    algorithm.actor_critic = SimpleNamespace(num_arm_actions=6)
+    assert torch.equal(algorithm._mean_policy_entropy(entropy), torch.tensor(4.5))
+
+
+def test_rollout_advantages_are_normalized_per_reward_channel():
+    import torch
+
+    sys.path.insert(0, str(ROOT / "third_party/rsl_rl"))
+    from rsl_rl.storage.rollout_storage import RolloutStorage
+
+    storage = RolloutStorage(2, 3, [1], [None], [1], device="cpu")
+    storage.rewards[..., 0] = torch.tensor(
+        [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
+    )
+    storage.rewards[..., 1] = torch.tensor(
+        [[100.0, 200.0], [300.0, 400.0], [500.0, 600.0]]
+    )
+    storage.compute_returns(torch.zeros(2, 2), gamma=0.0, lam=0.0)
+
+    assert torch.allclose(
+        storage.advantages.mean(dim=(0, 1)), torch.zeros(2), atol=1e-7
+    )
+    assert torch.allclose(
+        storage.advantages.std(dim=(0, 1)), torch.ones(2), atol=1e-7
+    )
 
 
 def test_checkpoint_resume_restores_training_state_and_target_iteration():
@@ -172,6 +214,7 @@ def test_checkpoint_resume_restores_training_state_and_target_iteration():
         assert field in runner
     assert "completed_iterations = it + 1" in runner
     assert "completed_iterations % self.save_interval == 0" in runner
+    assert "self.env.set_training_iteration(it)" in runner
     assert "self.env.load_training_metadata(loaded_dict.get('metadata'))" in runner
     assert '"training_state": {' in env and '"global_steps": int(' in env
     assert 'self.global_steps = int(training_state["global_steps"])' in env
@@ -414,10 +457,15 @@ def test_training_readiness_checks_static_full_task():
     readiness = read(READINESS)
     assert '"curriculum/static_distribution"' in readiness
     assert '"task_geometry/tabletop_volume_covered"' in readiness
+    assert '"arm_schedule/frozen_before_start"' in readiness
+    assert '"arm_schedule/enabled_at_start"' in readiness
+    assert "object_root_x_at_approach" in readiness
     assert '"ik/full_6d_uses_weighted_jacobian"' in readiness
     assert '"observation/orientation_command_is_live"' in readiness
     assert 'reset_causes = {"roll": 0, "pitch": 0, "z": 0, "contact": 0}' in readiness
     assert 'early_resets == 0' in readiness
+    run_body = readiness[readiness.index("def run(cli):"):]
+    assert run_body.index("probe_rollout(") < run_body.index("probe_curriculum(")
 
 
 if __name__ == "__main__":

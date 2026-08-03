@@ -50,12 +50,12 @@ env:
   armBaseOffset: [0.085, 0.0, 0.094]
   eeGoalCenterOffset: [0.085, 0.0, 0.414]
   eeFrame: "TERRAIN_INVARIANT_YAW"
-  armIkGain: 0.20
+  armIkGain: 0.10
   armIkOrientationWeight: 0.35
   trackEeOrientation: True
   lowPolicyOrientationObservation: True
   armTargetMode: "persistent_joint_command"
-  armTargetMaxStep: 0.08
+  armTargetMaxStep: 0.02
   armTargetUpdatePeriod: 4
   baseHeightClip: [0.2, 0.42]
   eeBodyName: "arm_eef_link"
@@ -110,7 +110,7 @@ env:
       ang_vel_yaw: 0.05
     foot_contact_threshold: 1.5
     ee_frame: "TERRAIN_INVARIANT_YAW"
-    ik_gain: 0.20
+    ik_gain: 0.10
     ik_damping: 0.05
     ik_orientation_weight: 0.35
     track_ee_orientation: true
@@ -122,7 +122,7 @@ env:
     ee_orientation_command_frame: "TERRAIN_INVARIANT_YAW_LOCAL_RPY"
     ee_orientation_observation: "local_rpy"
     arm_target_mode: "persistent_joint_command"
-    arm_target_max_step: 0.08
+    arm_target_max_step: 0.02
     gripper_hold_mode: "open_upper_limit"
     arm_target_update_period: 4
     domain_randomization:

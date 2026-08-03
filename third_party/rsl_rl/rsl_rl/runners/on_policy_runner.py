@@ -143,6 +143,8 @@ class OnPolicyRunner:
         tot_iter = self.current_learning_iteration + num_learning_iterations
         for it in range(self.current_learning_iteration, tot_iter):
             # self.env.update_command_curriculum()
+            if hasattr(self.env, "set_training_iteration"):
+                self.env.set_training_iteration(it)
 
             start = time.time()
             hist_encoding = it % self.dagger_update_freq == 0

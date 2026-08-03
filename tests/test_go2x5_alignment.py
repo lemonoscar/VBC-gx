@@ -209,9 +209,9 @@ def test_low_level_observation_dimensions_are_explicit():
     assert spec.BASE_HEIGHT_TARGET == 0.32
     assert spec.BASE_INIT_HEIGHT == 0.32
     assert spec.ARM_TARGET_MODE == "persistent_joint_command"
-    assert spec.ARM_IK_GAIN == 0.20
+    assert spec.ARM_IK_GAIN == 0.10
     assert spec.ARM_IK_ORIENTATION_WEIGHT == 0.35
-    assert spec.ARM_TARGET_MAX_STEP == 0.08
+    assert spec.ARM_TARGET_MAX_STEP == 0.02
     assert spec.LOW_LEVEL_GRIPPER_HOLD_MODE == "open_upper_limit"
     assert spec.DEFAULT_JOINT_ANGLES["arm_joint2"] == spec.ARM_READY_JOINT_ANGLES[1] == 2.4
     assert spec.DEFAULT_JOINT_ANGLES["arm_joint3"] == spec.ARM_READY_JOINT_ANGLES[2] == 1.15
@@ -401,7 +401,7 @@ def test_configs_do_not_fall_back_to_old_go2x5_names():
     assert "pos_p = [0.15, 1.05]" in go2x5_config
     assert "pos_y = [-0.65, 0.65]" in go2x5_config
     assert "enabled = False" in go2x5_config
-    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v7"' in go2x5_config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v8"' in go2x5_config
     assert "class auto_curriculum" in go2x5_config
     assert "stages = []" in go2x5_config
     assert '"name": "S0_' not in go2x5_config

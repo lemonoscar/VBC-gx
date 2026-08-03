@@ -120,6 +120,10 @@ class PPO:
         first = torch.nonzero(~finite, as_tuple=False)[0].tolist()
         raise FloatingPointError(f"Non-finite {name} at index {first}")
 
+    def _mean_policy_entropy(self, entropy_batch):
+        policy_channels = 1 if self.actor_critic.num_arm_actions == 0 else 2
+        return entropy_batch[..., :policy_channels].mean()
+
     def act(self, obs, critic_obs, hist_encoding=False):
         self._require_finite("actor observations", obs)
         self._require_finite("critic observations", critic_obs)
@@ -256,7 +260,7 @@ class PPO:
 
                 loss = surrogate_loss \
                        + self.value_loss_coef * value_loss \
-                       - self.entropy_coef * entropy_batch.mean() \
+                       - self.entropy_coef * self._mean_policy_entropy(entropy_batch) \
                        + priv_reg_coef * priv_reg_loss
 
                 self._require_finite("PPO loss", loss)

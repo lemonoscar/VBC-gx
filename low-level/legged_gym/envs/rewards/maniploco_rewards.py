@@ -165,7 +165,29 @@ class ManipLoco_rewards:
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.env.commands[:, :2] - self.env.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error/self.env.cfg.rewards.tracking_sigma), lin_vel_error
+        reward = torch.exp(-lin_vel_error/self.env.cfg.rewards.tracking_sigma)
+        if getattr(
+            self.env.cfg.rewards, "subtract_tracking_static_baseline", False
+        ):
+            command_error_at_rest = torch.sum(
+                torch.square(self.env.commands[:, :2]), dim=1
+            )
+            static_reward = torch.exp(
+                -command_error_at_rest / self.env.cfg.rewards.tracking_sigma
+            )
+            active = command_error_at_rest > 1e-12
+            walking = self.env._get_walking_cmd_mask()
+            normalized = torch.clamp(
+                (reward - static_reward) / torch.clamp(1.0 - static_reward, min=1e-6),
+                min=-1.0,
+                max=1.0,
+            )
+            reward = torch.where(
+                active,
+                normalized,
+                torch.where(walking, reward - 1.0, reward),
+            )
+        return reward, lin_vel_error
 
     def _reward_tracking_lin_vel_x_l1(self):
         zero_cmd_indices = torch.abs(self.env.commands[:, 0]) < 1e-5
@@ -240,7 +262,27 @@ class ManipLoco_rewards:
 
     def _reward_tracking_ang_vel(self):
         ang_vel_error = torch.square(self.env.commands[:, 2] - self.env.base_ang_vel[:, 2])
-        return torch.exp(-ang_vel_error/self.env.cfg.rewards.tracking_sigma), ang_vel_error
+        reward = torch.exp(-ang_vel_error/self.env.cfg.rewards.tracking_sigma)
+        if getattr(
+            self.env.cfg.rewards, "subtract_tracking_static_baseline", False
+        ):
+            command_error_at_rest = torch.square(self.env.commands[:, 2])
+            static_reward = torch.exp(
+                -command_error_at_rest / self.env.cfg.rewards.tracking_sigma
+            )
+            active = command_error_at_rest > 1e-12
+            walking = self.env._get_walking_cmd_mask()
+            normalized = torch.clamp(
+                (reward - static_reward) / torch.clamp(1.0 - static_reward, min=1e-6),
+                min=-1.0,
+                max=1.0,
+            )
+            reward = torch.where(
+                active,
+                normalized,
+                torch.where(walking, reward - 1.0, reward),
+            )
+        return reward, ang_vel_error
 
     def _reward_work(self):
         work = self.env.torques * self.env.dof_vel

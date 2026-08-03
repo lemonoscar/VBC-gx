@@ -236,6 +236,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         track_ee_orientation = True
         target_mode = robot_spec.ARM_TARGET_MODE
         target_max_step = robot_spec.ARM_TARGET_MAX_STEP
+        # The 12D policy first acquires locomotion under a stationary payload.
+        # Arm motion starts when the whole-body advantage begins to mix in.
+        motion_start_iteration = 3000
         gripper_hold_mode = robot_spec.LOW_LEVEL_GRIPPER_HOLD_MODE
         osc_kp = np.array([100, 100, 100, 30, 30, 30])
         osc_kd = 2 * (osc_kp ** 0.5)
@@ -270,6 +273,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # already receives 96.1% of the maximum reward; 0.05 lowers that to
         # 81.9% and gives the policy a meaningful low-speed tracking signal.
         tracking_sigma = 0.05
+        # A moving command must not pay the policy for staying at zero speed.
+        # The normalized kernel is 0 at rest and 1 at the commanded velocity.
+        subtract_tracking_static_baseline = True
         # Metres in exp(-2 * L1_error / sigma).
         tracking_ee_sigma = 0.15
         # Radians in exp(-quaternion_angle / sigma).
@@ -490,7 +496,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v7"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v8"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
