@@ -496,7 +496,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v9"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v10"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -510,11 +510,10 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         continue_from_last_std = True
-        # The X5 payload makes the bare-Go1 Walk These Ways torque-equivalent
-        # std=0.5 unsafe: the v5 remote smoke still had 100% roll resets at
-        # iteration 39. Start midway between the previously stable v3 noise
-        # and that failed bound; PPO entropy below prevents silent collapse.
-        init_std = [[0.25, 0.30, 0.30] * 4]
+        # Keep the empirically stable loaded-X5 start. The v9 smoke proved
+        # [0.25, 0.30, 0.30] still drove nearly every early episode into a
+        # roll reset even after entropy growth was fixed.
+        init_std = [[0.15, 0.20, 0.20] * 4]
         actor_hidden_dims = [128]
         critic_hidden_dims = [128]
         activation = 'elu'

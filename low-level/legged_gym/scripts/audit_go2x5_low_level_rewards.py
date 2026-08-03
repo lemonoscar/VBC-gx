@@ -974,7 +974,7 @@ def build_report() -> str:
     if (
         auto_curriculum_cfg.get("enabled") is not False
         or auto_curriculum_cfg.get("profile_name")
-        != "go2x5_flat_tabletop_6d_walk_v9"
+        != "go2x5_flat_tabletop_6d_walk_v10"
     ):
         contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
     if (
@@ -1002,7 +1002,7 @@ def build_report() -> str:
         contract_failures.append(
             "negative total rewards must use the Walk These Ways clipping rule"
         )
-    if ppo_policy_cfg.get("init_std") != [[0.25, 0.30, 0.30] * 4]:
+    if ppo_policy_cfg.get("init_std") != [[0.15, 0.20, 0.20] * 4]:
         contract_failures.append(
             "initial exploration std must stay inside the X5-payload stability bound"
         )

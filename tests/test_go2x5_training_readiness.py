@@ -56,7 +56,7 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "feet_contact_standing = -0.5" in config
     assert "leg_action_l2_deadzone = 0.0" in config
     assert "height = [0.00, 0.00]" in config
-    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v9"' in config
+    assert 'profile_name = "go2x5_flat_tabletop_6d_walk_v10"' in config
     assert "enabled = False" in config
     assert "stages = []" in config
     assert '"name": "S' not in config
@@ -79,7 +79,7 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "only_positive_rewards = True" in config
     assert "mixing_schedule = [1.0, 3000, 3000]" in config
     assert "motion_start_iteration = 3000" in config
-    assert "init_std = [[0.25, 0.30, 0.30] * 4]" in config
+    assert "init_std = [[0.15, 0.20, 0.20] * 4]" in config
     assert "entropy_coef = 0.005" in config
     assert "min_policy_std = [[0.08, 0.12, 0.12] * 4]" in config
     assert "resampling_time = 10." in config

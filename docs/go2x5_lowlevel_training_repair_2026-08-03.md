@@ -57,6 +57,9 @@ PPO 修复：
 - Go2-X5 系数显式设为 `0.005`，保持旧两通道错误实现下的实际有效强度；
   服务器失败 smoke 证明直接保留 `0.01` 会令平均 std 从 0.29 升到 0.35、
   episode length 回落并持续 roll reset；
+- 初始 std 回到带 X5 负载已验证过的 `[0.15, 0.20, 0.20]`；v9 即使修复
+  entropy 增长，`[0.25, 0.30, 0.30]` 到 iteration 254 仍有约 99.5%
+  roll reset，不能作为稳定的 from-scratch 起点；
 - advantage 分别沿 time/env 维度归一化，再执行 leg/arm mixing。
 
 ## 主要文件
