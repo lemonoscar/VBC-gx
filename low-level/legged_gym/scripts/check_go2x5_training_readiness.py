@@ -462,21 +462,22 @@ def probe_rewards(env, checks):
     velocity_under, velocity_error = reward._reward_tracking_lin_vel()
     env.base_lin_vel[:, 0] = 0.20
     velocity_over, _ = reward._reward_tracking_lin_vel()
+    env.base_lin_vel[:, 0] = -0.10
+    velocity_reverse, _ = reward._reward_tracking_lin_vel()
     expected_velocity_error = torch.full_like(velocity_error, 0.01)
-    expected_velocity_reward = torch.exp(
-        -expected_velocity_error / float(env.cfg.rewards.tracking_sigma)
-    )
     checks.require(
-        "reward/walk_these_ways_velocity_kernel",
+        "reward/static_baseline_normalized_velocity_kernel",
         bool(
-            torch.all(velocity_best > velocity_under)
-            and torch.allclose(velocity_under, velocity_over)
+            torch.allclose(velocity_best, torch.ones_like(velocity_best))
+            and torch.allclose(velocity_under, torch.zeros_like(velocity_under))
+            and torch.allclose(velocity_over, torch.zeros_like(velocity_over))
+            and torch.all(velocity_reverse < 0.0)
             and torch.allclose(velocity_error, expected_velocity_error)
-            and torch.allclose(velocity_under, expected_velocity_reward)
         ),
         best=float(velocity_best.mean().item()),
         underspeed=float(velocity_under.mean().item()),
         overspeed=float(velocity_over.mean().item()),
+        reverse=float(velocity_reverse.mean().item()),
         squared_error=float(velocity_error.mean().item()),
     )
 
@@ -487,16 +488,21 @@ def probe_rewards(env, checks):
     yaw_under, yaw_error = reward._reward_tracking_ang_vel()
     env.base_ang_vel[:, 2] = 0.20
     yaw_over, _ = reward._reward_tracking_ang_vel()
+    env.base_ang_vel[:, 2] = -0.10
+    yaw_reverse, _ = reward._reward_tracking_ang_vel()
     checks.require(
-        "reward/walk_these_ways_yaw_kernel",
+        "reward/static_baseline_normalized_yaw_kernel",
         bool(
-            torch.all(yaw_best > yaw_under)
-            and torch.allclose(yaw_under, yaw_over)
+            torch.allclose(yaw_best, torch.ones_like(yaw_best))
+            and torch.allclose(yaw_under, torch.zeros_like(yaw_under))
+            and torch.allclose(yaw_over, torch.zeros_like(yaw_over))
+            and torch.all(yaw_reverse < 0.0)
             and torch.allclose(yaw_error, expected_velocity_error)
         ),
         best=float(yaw_best.mean().item()),
         underspeed=float(yaw_under.mean().item()),
         overspeed=float(yaw_over.mean().item()),
+        reverse=float(yaw_reverse.mean().item()),
     )
 
     terrain_height = reward._terrain_height()
