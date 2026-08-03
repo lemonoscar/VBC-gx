@@ -16,8 +16,11 @@
    机械臂运动会在 locomotion 尚未形成时继续扰动机身。
 2. 旧 `ik_gain=0.20`、`target_max_step=0.08 rad/tick` 在 50 Hz 下允许目标命令
    以 4 rad/s 累积。32 环境、500 tick 的零腿动作探针出现 18 次 roll reset，
-   最大 arm joint velocity 为 8.35 rad/s。`0.10/0.02` 的同条件探针为 0 reset，
-   最大 arm joint velocity 为 1.22 rad/s。
+   最大 arm joint velocity 为 8.35 rad/s。`0.10/0.02` 把目标限速降到 1 rad/s；
+   2026-08-03 的隔离测试进一步确认：冻结机械臂或固定 EE 位置、只改变姿态时
+   均为 0 reset，而未训练固定腿姿态面对完整横向位置范围时为 5/16 roll
+   reset；把限速再减半仍为 5/16。剩余倾覆来自横向质心转移，必须由训练后的
+   腿和机身协同解决，不能靠继续降低 IK 速度掩盖。
 3. 原速度核 `exp(-||c-v||²/0.05)` 在低速命令下仍高额奖励静止。例如
    `vx=0.15 m/s` 时，原地不动取得最大线速度奖励的 63.8%；再叠加零 yaw
    误差奖励和更低风险，PPO 容易收敛到静止局部最优。
@@ -86,10 +89,13 @@ pipeline 仍试图分配 CUDA tensors，因此本机动态运行不构成有效�
 
 ## 服务器正式训练前硬门禁
 
-1. 16 environments、500 policy ticks 的 readiness：0 nonfinite、0 early reset；
+1. 16 environments、500 policy ticks 的冻结机械臂初始训练阶段：0 nonfinite、
+   0 early reset；另以完整工作区运行 500 ticks，要求所有张量有限并报告未训练
+   固定腿姿态下的 reset，不能把该诊断误报为已训练策略；
 2. from-scratch smoke 至少生成可评测 checkpoint；
 3. 固定 `stand/forward/backward/turn_left/turn_right` 评测方向正确；
-4. translation/yaw progress ratio 至少 35%，无 early reset、无 nonfinite；
+4. translation/yaw progress ratio 至少 35%，完整机械臂运行下无 early reset、
+   无 nonfinite；
 5. 通过后从随机初始化启动新的 45000 iteration run，不复用旧 checkpoint。
 
 正式长训只能声明“已正常启动”，不能在尚未收敛时声明训练成功。

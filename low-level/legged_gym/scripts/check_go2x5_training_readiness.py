@@ -1212,12 +1212,13 @@ def runtime_tensors(env):
     }
 
 
-def probe_rollout(env, checks, steps):
+def probe_rollout(env, checks, steps, *, phase, require_no_early_reset):
+    prefix = f"runtime/{phase}"
     env.reset()
-    checks.require("runtime/observation_shape", env.obs_buf.shape[1] == 744, shape=list(env.obs_buf.shape))
-    checks.require("runtime/action_shape", env.num_actions == 12, action_dim=int(env.num_actions))
+    checks.require(f"{prefix}/observation_shape", env.obs_buf.shape[1] == 744, shape=list(env.obs_buf.shape))
+    checks.require(f"{prefix}/action_shape", env.num_actions == 12, action_dim=int(env.num_actions))
     checks.require(
-        "runtime/measured_heights_shape",
+        f"{prefix}/measured_heights_shape",
         env.measured_heights.ndim == 2 and env.measured_heights.shape[0] == env.num_envs,
         shape=list(env.measured_heights.shape),
     )
@@ -1274,7 +1275,7 @@ def probe_rollout(env, checks, steps):
             nonfinite[name] += count
             if count:
                 checks.require(
-                    f"finite/rollout/{name}",
+                    f"finite/{phase}/{name}",
                     False,
                     step=step,
                     nonfinite=count,
@@ -1283,26 +1284,28 @@ def probe_rollout(env, checks, steps):
             max_abs[name] = max(max_abs[name], scalar_max_abs(tensor))
         if step in (19, 29):
             checks.require(
-                f"gait/disabled_state_is_constant_step_{step}",
+                f"gait/{phase}/disabled_state_is_constant_step_{step}",
                 bool(torch.all(env.gait_indices == 0.0) and torch.all(env.desired_contact_states == 1.0)),
             )
     for name, count in nonfinite.items():
-        checks.require(f"finite/rollout/{name}", count == 0, nonfinite=count)
+        checks.require(f"finite/{phase}/{name}", count == 0, nonfinite=count)
     checks.require(
-        "runtime/foot_kinematics_refreshed_each_tick",
+        f"{prefix}/foot_kinematics_refreshed_each_tick",
         max_foot_position_cache_error == 0.0 and max_foot_velocity_cache_error == 0.0,
         position_max_error=max_foot_position_cache_error,
         velocity_max_error=max_foot_velocity_cache_error,
     )
-    checks.require(
-        "runtime/no_early_reset",
-        early_resets == 0,
-        count=early_resets,
-        causes=reset_causes,
-        first=first_early_reset,
-    )
+    if require_no_early_reset:
+        checks.require(
+            f"{prefix}/no_early_reset",
+            early_resets == 0,
+            count=early_resets,
+            causes=reset_causes,
+            first=first_early_reset,
+        )
     return max_abs, {
-        "distribution": "static_full_task",
+        "phase": phase,
+        "requires_zero_early_resets": require_no_early_reset,
         "early_resets": early_resets,
         "reset_causes": reset_causes,
         "first_early_reset": first_early_reset,
@@ -1325,7 +1328,7 @@ def run(cli):
         "task": "go2x5_lowlevel_training_readiness",
         "num_envs": cli.num_envs,
         "steps": cli.steps,
-        "distribution": "static_full_task",
+        "distribution": "staged_full_task",
         "seed": cli.seed,
         "checks": checks.items,
         "passed": False,
@@ -1338,11 +1341,35 @@ def run(cli):
         probe_reset(env, checks)
         probe_training_metadata(env, checks)
         probe_arm_training_schedule(env, checks)
-        report["max_abs"], report["rollout"] = probe_rollout(
+        start_iteration = int(env.cfg.arm.motion_start_iteration)
+        env.set_training_iteration(start_iteration - 1)
+        frozen_max_abs, frozen_rollout = probe_rollout(
             env,
             checks,
             cli.steps,
+            phase="frozen_arm_training_stage",
+            require_no_early_reset=True,
         )
+        # An untrained fixed leg posture is not expected to balance every
+        # lateral full-workspace arm target. Exercise the complete controller
+        # for finite tensors here; trained checkpoint gates retain zero-reset
+        # behavior as a hard requirement.
+        env.set_training_iteration(None)
+        full_max_abs, full_rollout = probe_rollout(
+            env,
+            checks,
+            cli.steps,
+            phase="full_arm_untrained_diagnostic",
+            require_no_early_reset=False,
+        )
+        report["max_abs"] = {
+            "frozen_arm_training_stage": frozen_max_abs,
+            "full_arm_untrained_diagnostic": full_max_abs,
+        }
+        report["rollout"] = {
+            "frozen_arm_training_stage": frozen_rollout,
+            "full_arm_untrained_diagnostic": full_rollout,
+        }
         # High-level approach geometry must not hide low-level dynamic faults.
         probe_curriculum(env, checks)
         report["passed"] = True

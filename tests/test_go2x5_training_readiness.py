@@ -464,6 +464,12 @@ def test_training_readiness_checks_static_full_task():
     assert '"observation/orientation_command_is_live"' in readiness
     assert 'reset_causes = {"roll": 0, "pitch": 0, "z": 0, "contact": 0}' in readiness
     assert 'early_resets == 0' in readiness
+    assert 'phase="frozen_arm_training_stage"' in readiness
+    assert 'require_no_early_reset=True' in readiness
+    assert 'phase="full_arm_untrained_diagnostic"' in readiness
+    assert 'require_no_early_reset=False' in readiness
+    assert "env.set_training_iteration(start_iteration - 1)" in readiness
+    assert "env.set_training_iteration(None)" in readiness
     run_body = readiness[readiness.index("def run(cli):"):]
     assert run_body.index("probe_rollout(") < run_body.index("probe_curriculum(")
 
