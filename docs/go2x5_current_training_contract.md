@@ -115,8 +115,8 @@ high-level teacher/student。因而该合同与最终抓取任务在“稳定移
   成为局部最优
 - 不启用 gait clock、固定 trot、四拍 walk 或接触相位目标
 - 初始探索 std 为每腿 `[0.25, 0.30, 0.30]`，最低 std 为
-  `[0.08, 0.12, 0.12]`；`entropy_coef=0.01` 保留 WTW 的持续探索，
-  同时按带 X5 负载的远端 roll-reset 实测对裸 Go1 力矩尺度降额
+  `[0.08, 0.12, 0.12]`；12D 单通道修复后使用 `entropy_coef=0.005`，
+  保持修复前的实际有效强度并防止探索标准差反向增长
 - 12D PPO 熵只对唯一 leg policy channel 求均值，不再被空 arm action
   channel 减半；leg/arm advantage 分别归一化后再混合
 - iteration 0–3000 不仅只优化 locomotion advantage，而且机械臂目标

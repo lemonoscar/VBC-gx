@@ -496,7 +496,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v8"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v9"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -536,9 +536,10 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         value_loss_coef = 1.0
         use_clipped_value_loss = True
         clip_param = 0.2
-        # Walk These Ways uses 0.01. The old zero value let action noise fall
-        # straight to its minimum and the deterministic policy became static.
-        entropy_coef = 0.01
+        # The 12-D policy now averages only its real leg entropy channel. Use
+        # 0.005 to preserve the pre-fix effective strength; 0.01 made the
+        # staged smoke std grow from 0.30 to 0.40 and collapse into roll resets.
+        entropy_coef = 0.005
         num_learning_epochs = 5
         num_mini_batches = 4
         learning_rate = 2e-4

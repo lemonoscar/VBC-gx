@@ -54,6 +54,9 @@ r_move = clip((K(c,v) - K0(c)) / (1 - K0(c)), -1, 1)
 PPO 修复：
 
 - 12D policy entropy 只取 leg channel；18D B1-Z1 仍保留两通道原语义；
+- Go2-X5 系数显式设为 `0.005`，保持旧两通道错误实现下的实际有效强度；
+  服务器失败 smoke 证明直接保留 `0.01` 会令平均 std 从 0.29 升到 0.35、
+  episode length 回落并持续 roll reset；
 - advantage 分别沿 time/env 维度归一化，再执行 leg/arm mixing。
 
 ## 主要文件
