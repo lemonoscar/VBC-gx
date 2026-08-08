@@ -1,17 +1,21 @@
 # Go2-X5 当前训练合同
 
-更新日期：2026-08-03
+更新日期：2026-08-09
 
 ## 当前结论
 
-- 旧 Go2-X5 low-level 和 high-level checkpoint 均已判定为不可复用并从本地清除。
-- 下一次 low-level 训练必须从随机初始化开始，任务名仅为 `go2x5`。
+- v10 的 `model_29000.pt` 与 `model_29200.pt` 已完成确定性固定命令和随机
+  6D 协同评测。两者虽然没有立即 reset、非有限值或明显 EE 跟踪失效，但
+  均未通过 locomotion 行为门禁：左转不足、倒退依赖前脚滑移、四足摆动
+  高度不足，并有约 12%--13% 动作饱和。因此它们不能作为 high-level 的
+  正式底层策略。
+- 下一次 low-level 训练必须使用 v11 从随机初始化开始，任务名仅为 `go2x5`。
 - `go2x5_ftlift` 空别名任务已经删除，不再作为训练阶段或恢复入口。
-- v8 locomotion 修订已经通过 CPU/静态门禁；最终 Isaac Gym GPU
-  readiness 与 from-scratch smoke 仍必须在服务器执行。
-- 当前版本仍必须在 `lab-server` 上重新执行最终 GPU readiness、短程
-  from-scratch smoke 和固定命令行为门禁；在这些门禁通过前，不允许直接
-  启动 45000 iteration 长训。
+- v11 已通过 CPU/静态门禁；启动正式长训前还必须在 `lab-server` 上执行
+  Isaac Gym GPU readiness。readiness 用来拒绝张量、接触、IK、奖励和
+  reset 的运行时错误，不把尚未训练的随机策略误当成行为门禁。
+- v11 采用单次 45000 iteration 正式训练；训练中的 checkpoint 需按固定
+  命令门禁评估，不再用反复短训代替策略收敛。
 - high-level 暂不可训练；必须等新的 low-level 12D schema-v2 checkpoint 通过确定性评测后，再通过 `--low_policy_path` 显式传入。
 
 ## 唯一有效的机器人与地面配置
@@ -103,28 +107,33 @@ high-level teacher/student。因而该合同与最终抓取任务在“稳定移
 - 命令范围：`vx=[-0.30, 0.30] m/s`、`vy=[-0.10, 0.10] m/s`、
   `yaw=[-0.25, 0.25] rad/s`
 - 每个 10 秒 episode 只保持一个命令
-- 互斥命令人口：10% 站立、50% 纯直行、10% 原地转向、30% 一般运动
+- 互斥命令人口：10% 站立、40% 纯直行、20% 原地转向、30% 一般运动。
+  原地转向比例提高，是因为 v10 从 iteration 10000 起长期存在左转/右转
+  不对称，而命令采样本身已经通过正负号平衡检查。
 - 速度奖励以 Walk These Ways 的平方误差指数核为基础，并针对移动命令
   扣除零速度基线：静止为 0、精确跟踪为 1、反向运动为负值且整体裁剪在
   `[-1, 1]`；停止命令仍保留原指数稳定核。`tracking_sigma=0.05`
-- `feet_air_time` 权重为 1，只奖励完成摆动并重新落地的事件；短步不罚、
+- `feet_air_time` 权重为 2，只奖励完成摆动并重新落地的事件；短步不罚、
   永久悬空不得分
+- `feet_height` 权重为 1、足心目标高度为 0.05 m；无 gait clock 时仅对
+  实际离地且高度不足的脚施加短缺惩罚，不规定哪只脚何时摆动
 - `feet_drag` 只惩罚接触脚的水平滑动，不惩罚正常落脚的竖直速度
 - 遵循 WTW 的 `only_positive_rewards=True`；关闭旧 stability-first 的
-  `alive`、额外 `termination` 和 action-magnitude shaping，避免静止保命
-  成为局部最优
+  `alive` 和额外 `termination`，避免静止保命成为局部最优；仅对绝对值
+  超过 0.8 的动作尾部施加二次惩罚，约束饱和而不压制正常步幅
 - 不启用 gait clock、固定 trot、四拍 walk 或接触相位目标
 - 初始探索 std 为每腿 `[0.15, 0.20, 0.20]`，最低 std 为
   `[0.08, 0.12, 0.12]`；12D 单通道修复后使用 `entropy_coef=0.005`，
   保持修复前的实际有效强度并防止探索标准差反向增长
 - 12D PPO 熵只对唯一 leg policy channel 求均值，不再被空 arm action
   channel 减半；leg/arm advantage 分别归一化后再混合
-- iteration 0–3000 不仅只优化 locomotion advantage，而且机械臂目标
-  物理冻结；iteration 3000 启动限速 6D arm motion，3000–6000 再渐入
-  EE、姿态追踪和机身俯身协同
+- iteration 0–8000 只优化 locomotion advantage，机械臂目标也物理冻结；
+  iteration 8000 启动限速 6D arm motion，8000–12000 再渐入 EE、姿态
+  跟踪和机身俯身协同。v10 里机械臂在 3000 轮启动，而 `model_2800` 尚未
+  学会基本行走，因而过早引入了竞争目标。
 
-完整设计、旧模型定量失败证据和固定命令门禁见
-`docs/go2x5_walk_these_ways_locomotion_repair_2026-07-30.md`。
+v10 的定量失败证据、根因和 v11 修复见
+`docs/go2x5_lowlevel_v11_repair_2026-08-09.md`。
 
 ## 训练前门禁
 
@@ -143,12 +152,13 @@ conda run --no-capture-output -n vwc_go2x5 \
   --output /tmp/go2x5_training_readiness.json
 ```
 
-readiness 报告 `"passed": true` 后，还必须运行短程 smoke，并用
-`check_go2x5_fixed_command_gait.py` 验证站立、前进、后退和双向转弯。
-只有各方向正确、每只脚均发生接触切换且无 nonfinite/early reset 时，
-才允许启动长训。
+readiness 报告 `"passed": true` 后可以启动 v11 正式长训。随机初始化策略
+不应被要求通过已训练模型的速度跟踪门禁。训练过程中再使用
+`check_go2x5_fixed_command_gait.py` 验证站立、前进、后退和双向转弯；候选
+checkpoint 只有在各方向正确、每只脚均有有效摆动、摆脚高度与接触滑移达标，
+且无 nonfinite/early reset 时，才允许提供给 high-level。
 
-本轮完整证据与可复制命令见
+完整的桌面/EE 几何门禁仍见
 `docs/go2x5_lowlevel_flat_tabletop_6d_readiness_2026-07-29.md`。
 
 ## 当前有效入口

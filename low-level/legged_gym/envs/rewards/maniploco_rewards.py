@@ -675,15 +675,23 @@ class ManipLoco_rewards:
 
     def _reward_feet_height(self):
         foot_ids = self.env.feet_indices
-        desired_contact = self.env.desired_contact_states
+        if self.env.cfg.env.observe_gait_commands:
+            swing_weight = 1.0 - self.env.desired_contact_states
+        else:
+            # The simple Go2-X5 profile deliberately has no gait clock.  Use
+            # actual airborne feet so low-clearance skating is penalized without
+            # prescribing which foot must swing or when.
+            contacts = getattr(
+                self.env, "contact_filt", self.env.foot_contacts_from_sensor
+            ).float()
+            swing_weight = 1.0 - contacts
         if not self.env.cfg.rewards.feet_height_allfeet:
             foot_ids = foot_ids[:2]
-            desired_contact = desired_contact[:, :2]
+            swing_weight = swing_weight[:, :2]
 
         terrain_height = self._terrain_height().unsqueeze(1)
 
         foot_height = self.env.rigid_body_state[:, foot_ids, 2] - terrain_height
-        swing_weight = 1.0 - desired_contact
         clearance_error = torch.clamp(
             self.env.cfg.rewards.feet_height_target - foot_height,
             min=0.0,

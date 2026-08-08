@@ -105,8 +105,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # sampler devoted only a small fraction of episodes to exact straight
         # walking because almost every non-standing sample also contained yaw.
         standing_probability = 0.10
-        straight_line_probability = 0.50
-        turn_in_place_probability = 0.10
+        straight_line_probability = 0.40
+        turn_in_place_probability = 0.20
         # The v3 remote smoke converged to an all-feet-contact policy because
         # 0.10 m/s commands were still well rewarded at zero velocity.  Keep
         # 0.10 m/s in the general distribution, but make the dedicated
@@ -238,7 +238,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         target_max_step = robot_spec.ARM_TARGET_MAX_STEP
         # The 12D policy first acquires locomotion under a stationary payload.
         # Arm motion starts when the whole-body advantage begins to mix in.
-        motion_start_iteration = 3000
+        # The v10 milestone gate showed that model_2800 still could not walk.
+        # Keep the arm physically frozen until the leg policy has had enough
+        # time to acquire translation and both yaw directions.
+        motion_start_iteration = 8000
         gripper_hold_mode = robot_spec.LOW_LEVEL_GRIPPER_HOLD_MODE
         osc_kp = np.array([100, 100, 100, 30, 30, 30])
         osc_kd = 2 * (osc_kp ** 0.5)
@@ -292,7 +295,9 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         gait_vel_sigma = 0.5
         gait_force_sigma = 0.5
         kappa_gait_probs = 0.07
-        feet_height_target = 0.12
+        # Foot-center clearance.  The collision sphere radius is about 0.022 m;
+        # 0.05 m leaves a useful margin without prescribing a high-stepping gait.
+        feet_height_target = 0.05
 
         feet_air_time_all_feet = True
         feet_height_allfeet = True
@@ -317,7 +322,8 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         safety_base_height_min = 0.26
         safety_base_height_floor = 0.20
         dof_error_deadzone = 0.12
-        leg_action_deadzone = 0.20
+        # Only penalize the saturated tail; normal corrective leg actions stay free.
+        leg_action_deadzone = 0.80
         min_body_height = 0.22        # Still 4 cm above the 0.18 m termination threshold.
         height_adaptation_goal_z_low = 0.05
         height_adaptation_goal_z_high = 0.30
@@ -333,15 +339,15 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             # Phase-free Walk These Ways/legged-gym stepping incentive.  It
             # rewards completed swing-and-land events for all four feet but
             # does not prescribe trot, walk, or a fixed phase relationship.
-            feet_air_time = 1.0
-            feet_height = 0.0
+            feet_air_time = 2.0
+            feet_height = 1.0
 
             # -------Tracking rewards ----------
             tracking_lin_vel_max = 0.0
             tracking_lin_vel_x_l1 = 0.
             tracking_lin_vel_x_exp = 0.0
             tracking_lin_vel = 2.0
-            tracking_ang_vel = 0.5
+            tracking_ang_vel = 1.0
             tracking_ang_vel_yaw_exp = 0.0
 
             torques = -2.5e-5
@@ -397,10 +403,10 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
             base_height = 0.0
             stability_safety = 0.0
             dof_error_deadzone = 0.0
-            # Do not prescribe a gait, but prevent an unbounded actor mean from
-            # buying velocity with saturated PD targets. Actions inside +/-0.2
-            # remain free; the quadratic tail only constrains large offsets.
-            leg_action_l2_deadzone = 0.0
+            # Reuse the existing quadratic tail to prevent velocity tracking
+            # from being bought with saturated PD targets.  Actions inside
+            # +/-0.8 remain completely unpenalized.
+            leg_action_l2_deadzone = -0.5
             torques_walking = 0.0
             torques_standing = 0.0
             energy_square = 0.0
@@ -496,7 +502,7 @@ class Go2X5RoughCfg( LeggedRobotCfg ):
         # reward/range discontinuities. Curriculum machinery remains available
         # for B1-Z1 compatibility but is intentionally inactive for Go2-X5.
         enabled = False
-        profile_name = "go2x5_flat_tabletop_6d_walk_v10"
+        profile_name = "go2x5_flat_tabletop_6d_walk_v11"
         metric_window = 200
         log_stage = True
         save_stage_metadata = True
@@ -549,10 +555,10 @@ class Go2X5RoughCfgPPO(LeggedRobotCfgPPO):
         max_grad_norm = 1.
         min_policy_std = [[0.08, 0.12, 0.12] * 4]
 
-        # Keep the first 3000 PPO updates locomotion-only, then blend the
-        # EE/body-coordination advantage over the next 3000 updates. The final
-        # objective is unchanged after iteration 6000.
-        mixing_schedule = [1.0, 3000, 3000]
+        # Keep the first 8000 PPO updates locomotion-only, then blend the
+        # EE/body-coordination advantage over the next 4000 updates. The final
+        # objective is unchanged after iteration 12000.
+        mixing_schedule = [1.0, 8000, 4000]
         torque_supervision = Go2X5RoughCfg.control.torque_supervision
         torque_supervision_schedule = [0.0, 1000, 1000]
         adaptive_arm_gains = Go2X5RoughCfg.control.adaptive_arm_gains

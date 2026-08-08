@@ -52,6 +52,9 @@ class FakeEnv:
                 feet_clearance_target=0.05,
                 feet_clearance_landing_bonus=0.20,
                 feet_air_time_all_feet=True,
+                feet_height_allfeet=True,
+                feet_height_target=0.05,
+                leg_action_deadzone=0.80,
             ),
             env=SimpleNamespace(observe_gait_commands=False),
             commands=SimpleNamespace(
@@ -80,6 +83,7 @@ class FakeEnv:
         self.rigid_body_state = torch.zeros(self.num_envs, 4, 13)
         self.base_lin_vel = torch.zeros(self.num_envs, 3)
         self.base_ang_vel = torch.zeros(self.num_envs, 3)
+        self.actions = torch.zeros(self.num_envs, 12)
         self.body_orientation = torch.zeros(self.num_envs, 2)
 
     def _get_body_orientation(self):
@@ -274,6 +278,35 @@ def test_air_time_rewards_only_clear_completed_steps_and_resets_buffers():
     env.contact_filt[:, 1] = True
     stopped, _ = reward._reward_feet_air_time()
     assert torch.equal(stopped, torch.zeros_like(stopped))
+
+
+def test_phase_free_clearance_penalizes_only_low_airborne_feet():
+    env, reward = make_reward()
+    env.commands[:, 0] = 0.10
+    env.contact_filt.fill_(True)
+    env.rigid_body_state[:, :, 2] = 0.022
+
+    all_contact, _ = reward._reward_feet_height()
+    assert torch.equal(all_contact, torch.zeros_like(all_contact))
+
+    env.contact_filt[:, 0] = False
+    env.rigid_body_state[:, 0, 2] = 0.03
+    low_airborne, low_metric = reward._reward_feet_height()
+    assert torch.allclose(low_airborne, torch.full((2,), -0.02))
+    assert torch.allclose(low_metric, torch.full((2,), 0.02))
+
+    env.rigid_body_state[:, 0, 2] = 0.05
+    clear_airborne, clear_metric = reward._reward_feet_height()
+    assert torch.equal(clear_airborne, torch.zeros_like(clear_airborne))
+    assert torch.equal(clear_metric, torch.zeros_like(clear_metric))
+
+
+def test_action_tail_penalty_leaves_normal_actions_free():
+    env, reward = make_reward()
+    env.actions[:, 0] = torch.tensor([0.80, 1.00])
+    penalty, metric = reward._reward_leg_action_l2_deadzone()
+    assert torch.allclose(penalty, torch.tensor([0.0, 0.04]))
+    assert torch.equal(metric, penalty)
 
 
 def test_adaptive_height_target_is_safe_monotonic_and_terrain_relative():

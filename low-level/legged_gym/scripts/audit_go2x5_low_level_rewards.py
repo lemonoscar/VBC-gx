@@ -84,9 +84,9 @@ AUDIT: dict[str, RewardAudit] = {
         raw_formula="negative mean per-foot swing-clearance shortfall relative to terrain",
         raw_direction="larger is better",
         expected_scale_sign="+",
-        dependency="feet_indices, desired_contact_states, and measured terrain height",
-        migration_risk="Each desired-swing foot must clear independently; one high foot must not mask another low foot.",
-        verification="Sweep each foot z independently; only the low desired-swing foot should contribute clearance error.",
+        dependency="feet_indices, actual filtered contacts, and measured terrain height",
+        migration_risk="Each airborne foot must clear independently; one high foot must not mask another low foot.",
+        verification="Sweep each airborne foot z independently; only the low airborne foot should contribute clearance error.",
     ),
     "tracking_lin_vel_max": RewardAudit(
         raw_formula="velocity progress ratio for x command; zero command uses exp(-abs(base_vx))",
@@ -974,13 +974,13 @@ def build_report() -> str:
     if (
         auto_curriculum_cfg.get("enabled") is not False
         or auto_curriculum_cfg.get("profile_name")
-        != "go2x5_flat_tabletop_6d_walk_v10"
+        != "go2x5_flat_tabletop_6d_walk_v11"
     ):
         contract_failures.append("Go2-X5 must use the static flat-tabletop task profile")
     if (
         commands_cfg.get("standing_probability") != 0.10
-        or commands_cfg.get("straight_line_probability") != 0.50
-        or commands_cfg.get("turn_in_place_probability") != 0.10
+        or commands_cfg.get("straight_line_probability") != 0.40
+        or commands_cfg.get("turn_in_place_probability") != 0.20
         or commands_cfg.get("straight_line_min_abs_vx") != 0.15
     ):
         contract_failures.append(
@@ -1016,9 +1016,13 @@ def build_report() -> str:
         )
     if scales.get("tracking_contacts_shaped_force") != 0.0 or scales.get("tracking_contacts_shaped_vel") != 0.0:
         contract_failures.append("contact-phase shaping must remain disabled")
-    if scales.get("feet_height") != 0.0 or scales.get("walking_dof") != 0.0:
-        contract_failures.append("named-gait clearance and posture shaping must remain disabled")
-    if scales.get("feet_air_time") != 1.0:
+    if (
+        scales.get("feet_height") != 1.0
+        or reward_cfg.get("feet_height_target") != 0.05
+        or scales.get("walking_dof") != 0.0
+    ):
+        contract_failures.append("phase-free foot clearance must be active without named-gait posture shaping")
+    if scales.get("feet_air_time") != 2.0:
         contract_failures.append(
             "phase-free all-foot air-time shaping must remain enabled"
         )
@@ -1029,10 +1033,11 @@ def build_report() -> str:
     if (
         scales.get("alive") != 0.0
         or scales.get("termination") != 0.0
-        or scales.get("leg_action_l2_deadzone") != 0.0
+        or scales.get("leg_action_l2_deadzone") != -0.5
+        or reward_cfg.get("leg_action_deadzone") != 0.80
     ):
         contract_failures.append(
-            "legacy survival, terminal, and action-magnitude shaping must remain disabled"
+            "survival and terminal shaping must remain disabled while the saturation tail stays active"
         )
     if scales.get("collision") != -1.0 or scales.get("action_rate") != -0.01:
         contract_failures.append(
@@ -1046,7 +1051,7 @@ def build_report() -> str:
         scales.get("tracking_lin_vel_max") != 0.0
         or scales.get("tracking_lin_vel_x_exp") != 0.0
         or scales.get("tracking_lin_vel") != 2.0
-        or scales.get("tracking_ang_vel") != 0.5
+        or scales.get("tracking_ang_vel") != 1.0
         or scales.get("tracking_ang_vel_yaw_exp") != 0.0
         or reward_cfg.get("tracking_sigma") != 0.05
     ):
@@ -1062,13 +1067,13 @@ def build_report() -> str:
         contract_failures.append(
             "completed-step reward must be nonnegative, clearance-aware, and bounded"
         )
-    if ppo_algorithm_cfg.get("mixing_schedule") != [1.0, 3000, 3000]:
+    if ppo_algorithm_cfg.get("mixing_schedule") != [1.0, 8000, 4000]:
         contract_failures.append(
-            "whole-body advantage must start after 3000 locomotion-only updates"
+            "whole-body advantage must start after 8000 locomotion-only updates"
         )
-    if arm_cfg.get("motion_start_iteration") != 3000:
+    if arm_cfg.get("motion_start_iteration") != 8000:
         contract_failures.append(
-            "physical arm motion must stay frozen for the first 3000 locomotion updates"
+            "physical arm motion must stay frozen for the first 8000 locomotion updates"
         )
     if reward_cfg.get("subtract_tracking_static_baseline") is not True:
         contract_failures.append(
@@ -1104,6 +1109,7 @@ def build_report() -> str:
         "tracking_lin_vel",
         "tracking_ang_vel",
         "feet_air_time",
+        "feet_height",
         "feet_contact_standing",
         "torques",
         "lin_vel_z",
@@ -1112,6 +1118,7 @@ def build_report() -> str:
         "action_rate",
         "dof_pos_limits",
         "feet_drag",
+        "leg_action_l2_deadzone",
     }
     expected_arm_active = {
         "tracking_ee_world",
@@ -1120,7 +1127,7 @@ def build_report() -> str:
         "pitch_adaptation",
     }
     if set(leg_active) != expected_leg_active or set(arm_active) != expected_arm_active:
-        contract_failures.append("active rewards must match the audited minimal 11+4 task set")
+        contract_failures.append("active rewards must match the audited minimal 13+4 task set")
     disabled_zero = [
         name
         for name, value in {**scales, **arm_scales}.items()
@@ -1168,7 +1175,7 @@ def build_report() -> str:
     lines.append("- Arm rewards are summed into `arm_rew_buf` and divided by 100.")
     lines.append("- Episode reward summaries remain per-second totals; `Episode_metric/*` summaries are raw per-policy-step means so curriculum thresholds keep their physical units.")
     lines.append("- PPO stores `[rew_buf, arm_rew_buf]` as a two-channel reward/value/advantage signal.")
-    lines.append("- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `mixing_schedule=[1.0, 3000, 3000]` keeps iterations 0--3000 locomotion-only, then ramps the ratio from 0 to 1 during iterations 3000--6000.")
+    lines.append("- In the current low-level config `num_arm_actions=0`, so the arm channel has no independent arm-action log-prob gradient. It affects the 12D leg policy through `mixing_advantages_batch[...,0] = leg_adv + value_mixing_ratio * arm_adv`; `mixing_schedule=[1.0, 8000, 4000]` keeps iterations 0--8000 locomotion-only, then ramps the ratio from 0 to 1 during iterations 8000--12000.")
     lines.append("")
     lines.append("## Go2-X5 Order And Body Resolution")
     lines.append("")
@@ -1203,13 +1210,13 @@ def build_report() -> str:
         lines.append(f"   - `{len(unreviewed)}` active terms still lack reviewed semantics: {terms}.")
     for failure in contract_failures:
         lines.append(f"   - CONTRACT_MISMATCH: {failure}.")
-    lines.append("2. No named gait is prescribed: gait-clock observations, contact-phase shaping, swing-height shaping, and walking-posture shaping are disabled.")
-    lines.append("3. One 10-second command is held for the whole episode: 10% exact standing, 50% exact bidirectional straight walking, 10% non-dead-zone in-place turning, and 30% general x/y/yaw motion.")
+    lines.append("2. No named gait is prescribed: gait-clock observations, contact-phase shaping, and walking-posture shaping are disabled. Clearance shaping uses only actual airborne feet.")
+    lines.append("3. One 10-second command is held for the whole episode: 10% exact standing, 40% exact bidirectional straight walking, 20% non-dead-zone in-place turning, and 30% general x/y/yaw motion.")
     lines.append("4. Locomotion uses a bounded static-baseline-normalized x/y and yaw kernel: moving commands earn 0 at rest and 1 at target. Completed-landings add a phase-free air-time/clearance bonus and contacting horizontal slip is penalized; no gait phase, trot, or four-beat walk is prescribed.")
     lines.append("5. `tracking_ee_world` and quaternion `tracking_ee_orn` use `arm_eef_link` as active raw PPO channels. They are not multiplied by a support gate, so coordinated crouching can improve low terrain-fixed reach targets.")
     lines.append("6. `collision` is fail-visible for base, head, non-foot leg, arm, wrist, and finger contacts; the four feet remain outside this penalty.")
     lines.append("7. `tracking_contacts_shaped_vel` reads the freshly refreshed rigid-body tensor directly; the advanced-indexed foot cache is refreshed each policy tick and checked independently.")
-    lines.append("8. Auto curriculum is disabled. The task distribution stays flat and static, while physical arm motion alone is held until iteration 3000 so locomotion is acquired under a stationary front payload before whole-body reward mixing begins.")
+    lines.append("8. Auto curriculum is disabled. The task distribution stays flat and static, while physical arm motion is held until iteration 8000 so locomotion is acquired under a stationary front payload before whole-body reward mixing begins.")
     lines.append("")
     lines.append("## Active Reward Audit Table")
     lines.append("")
