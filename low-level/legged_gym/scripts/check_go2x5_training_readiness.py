@@ -1227,7 +1227,7 @@ def probe_arm_training_schedule(env, checks):
     start_iteration = int(env.cfg.arm.motion_start_iteration)
     checks.require(
         "arm_schedule/configured_start",
-        start_iteration == 3000,
+        start_iteration == 8000,
         start_iteration=start_iteration,
     )
 

@@ -88,6 +88,7 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
 
     assert '"reward/phase_free_actual_airborne_clearance"' in readiness
     assert '"reward/action_saturation_tail_only"' in readiness
+    assert "start_iteration == 8000" in readiness
     assert "resampling_time = 10." in config
     assert "collision = -1.0" in config
     assert "action_rate = -0.01" in config
