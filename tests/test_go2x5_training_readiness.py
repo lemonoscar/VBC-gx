@@ -40,6 +40,7 @@ def test_reward_audit_is_complete_and_fail_closed():
 
 def test_go2x5_training_contract_defaults_are_unambiguous():
     config = read(CONFIG)
+    readiness = read(READINESS)
     assert "observe_gait_commands = False" in config
     assert "num_observations = robot_spec.observation_dim(False)" in config
     assert "require_training_metadata = True" in config
@@ -84,6 +85,9 @@ def test_go2x5_training_contract_defaults_are_unambiguous():
     assert "init_std = [[0.15, 0.20, 0.20] * 4]" in config
     assert "entropy_coef = 0.005" in config
     assert "min_policy_std = [[0.08, 0.12, 0.12] * 4]" in config
+
+    assert '"reward/phase_free_actual_airborne_clearance"' in readiness
+    assert '"reward/action_saturation_tail_only"' in readiness
     assert "resampling_time = 10." in config
     assert "collision = -1.0" in config
     assert "action_rate = -0.01" in config

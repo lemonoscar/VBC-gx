@@ -359,7 +359,7 @@ def probe_rewards(env, checks):
         and "walking_dof" not in env.reward_scales
         and "tracking_contacts_shaped_force" not in env.reward_scales
         and "tracking_contacts_shaped_vel" not in env.reward_scales
-        and "feet_height" not in env.reward_scales
+        and "feet_height" in env.reward_scales
         and "stability_safety" not in env.reward_scales
         and "stand_still" not in env.reward_scales
         and "base_height" not in env.reward_scales
@@ -368,10 +368,10 @@ def probe_rewards(env, checks):
         and "pitch_adaptation" not in env.reward_scales
         and "alive" not in env.reward_scales
         and "termination" not in env.reward_scales
-        and "leg_action_l2_deadzone" not in env.reward_scales
+        and "leg_action_l2_deadzone" in env.reward_scales
         and bool(env.cfg.rewards.only_positive_rewards)
         and abs(float(env.reward_scales["tracking_lin_vel"]) - 2.0) <= 1e-9
-        and abs(float(env.reward_scales["tracking_ang_vel"]) - 0.5) <= 1e-9
+        and abs(float(env.reward_scales["tracking_ang_vel"]) - 1.0) <= 1e-9
         and abs(float(env.reward_scales["collision"]) + 1.0) <= 1e-9
         and abs(float(env.reward_scales["action_rate"]) + 0.01) <= 1e-9
         and abs(float(env.cfg.rewards.tracking_sigma) - 0.05) <= 1e-9
@@ -379,8 +379,13 @@ def probe_rewards(env, checks):
         and abs(float(env.cfg.rewards.feet_clearance_target) - 0.05) <= 1e-9
         and abs(float(env.cfg.rewards.feet_clearance_landing_bonus) - 0.20)
         <= 1e-9
-        and abs(float(env.reward_scales["feet_air_time"]) - 1.0) <= 1e-9
+        and abs(float(env.reward_scales["feet_air_time"]) - 2.0) <= 1e-9
+        and abs(float(env.reward_scales["feet_height"]) - 1.0) <= 1e-9
+        and abs(float(env.cfg.rewards.feet_height_target) - 0.05) <= 1e-9
         and abs(float(env.reward_scales["feet_contact_standing"]) + 0.5) <= 1e-9
+        and abs(float(env.reward_scales["leg_action_l2_deadzone"]) + 0.5)
+        <= 1e-9
+        and abs(float(env.cfg.rewards.leg_action_deadzone) - 0.80) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_world"]) - 2.0) <= 1e-9
         and abs(float(env.arm_reward_scales["tracking_ee_orn"]) - 0.6) <= 1e-9
         and abs(float(env.arm_reward_scales["height_adaptation"]) + 3.0) <= 1e-9
@@ -397,8 +402,11 @@ def probe_rewards(env, checks):
         action_rate=float(env.reward_scales["action_rate"]),
         tracking_sigma=float(env.cfg.rewards.tracking_sigma),
         feet_air_time=float(env.reward_scales["feet_air_time"]),
+        feet_height=float(env.reward_scales["feet_height"]),
+        feet_height_target=float(env.cfg.rewards.feet_height_target),
         feet_contact_standing=float(env.reward_scales["feet_contact_standing"]),
         action_bound=float(env.cfg.rewards.scales.leg_action_l2_deadzone),
+        action_deadzone=float(env.cfg.rewards.leg_action_deadzone),
         ee_tracking=float(env.arm_reward_scales["tracking_ee_world"]),
         ee_orientation_tracking=float(env.arm_reward_scales["tracking_ee_orn"]),
     )
@@ -406,6 +414,7 @@ def probe_rewards(env, checks):
         "tracking_lin_vel",
         "tracking_ang_vel",
         "feet_air_time",
+        "feet_height",
         "feet_contact_standing",
         "torques",
         "lin_vel_z",
@@ -414,6 +423,7 @@ def probe_rewards(env, checks):
         "action_rate",
         "dof_pos_limits",
         "feet_drag",
+        "leg_action_l2_deadzone",
     }
     checks.require(
         "reward/minimal_active_set",
@@ -617,6 +627,66 @@ def probe_rewards(env, checks):
         ),
         landing=float(air_time_landing.mean().item()),
         continuous=float(air_time_continuous.mean().item()),
+    )
+
+    env.contact_filt.fill_(True)
+    env.rigid_body_state[:, env.feet_indices, 2] = terrain_height.unsqueeze(1) + 0.022
+    clearance_all_contact, _ = reward._reward_feet_height()
+    env.contact_filt[:, 0] = False
+    env.rigid_body_state[:, env.feet_indices[0], 2] = terrain_height + 0.03
+    clearance_low_airborne, clearance_error = reward._reward_feet_height()
+    env.rigid_body_state[:, env.feet_indices[0], 2] = terrain_height + 0.05
+    clearance_high_airborne, _ = reward._reward_feet_height()
+    checks.require(
+        "reward/phase_free_actual_airborne_clearance",
+        bool(
+            torch.allclose(
+                clearance_all_contact,
+                torch.zeros_like(clearance_all_contact),
+                atol=1e-6,
+            )
+            and torch.allclose(
+                clearance_low_airborne,
+                torch.full_like(clearance_low_airborne, -0.02),
+                atol=1e-6,
+            )
+            and torch.allclose(
+                clearance_error,
+                torch.full_like(clearance_error, 0.02),
+                atol=1e-6,
+            )
+            and torch.allclose(
+                clearance_high_airborne,
+                torch.zeros_like(clearance_high_airborne),
+                atol=1e-6,
+            )
+        ),
+        all_contact=float(clearance_all_contact.mean().item()),
+        low_airborne=float(clearance_low_airborne.mean().item()),
+        high_airborne=float(clearance_high_airborne.mean().item()),
+    )
+
+    env.actions.zero_()
+    env.actions[:, 0] = 0.80
+    action_inside, _ = reward._reward_leg_action_l2_deadzone()
+    env.actions[:, 0] = 1.00
+    action_tail, _ = reward._reward_leg_action_l2_deadzone()
+    checks.require(
+        "reward/action_saturation_tail_only",
+        bool(
+            torch.allclose(
+                action_inside,
+                torch.zeros_like(action_inside),
+                atol=1e-6,
+            )
+            and torch.allclose(
+                action_tail,
+                torch.full_like(action_tail, 0.04),
+                atol=1e-6,
+            )
+        ),
+        inside=float(action_inside.mean().item()),
+        tail=float(action_tail.mean().item()),
     )
 
     zero_commands = 0
